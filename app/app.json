@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "Legend Cutter",
+    "slug": "legend-cutter",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "scheme": "legendcutter",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.ryanmio.legendcutter",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocalNetworkUsageDescription": "This app connects to the Legend Cutter ESP32 on your local Wi-Fi network.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoadsInWebContent": true
+        }
+      }
+    },
+    "android": {
+      "usesCleartextTraffic": true,
+      "package": "com.ryanmio.legendcutter",
+      "versionCode": 1
+    },
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    },
+    "owner": "ryanmio"
+  }
+}
