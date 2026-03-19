@@ -1,24 +1,20 @@
 /*
  * test_05_deckgun.ino
- * Bench test for deck gun pan (continuous rotation) and tilt (positional) servos.
+ * Bench test for deck gun pan servo (continuous rotation).
  * Direct GPIO — no PCA9685.
  *
- *   GPIO 25 — Pan  (continuous rotation servo)
- *   GPIO 26 — Tilt (2.1 g micro positional servo)
+ *   GPIO 25 — Pan (continuous rotation servo)
+ *
+ * Tilt was dropped — see NOTES.md.
  *
  * Wiring:
  *   Servo red   → ESP32 5V/VIN pin  (USB 5V rail — do NOT use 3.3V)
  *   Servo brown → ESP32 GND
  *   Pan  signal → GPIO 25
- *   Tilt signal → GPIO 26
  *
- * Continuous servo neutral (stop) = 1500 µs.
- * Pan sequence: slow right → stop → slow left → stop → repeat.
- * Tilt sequence fires once per pan cycle as a sanity check.
- *
- * Tune PAN_SLOW_RIGHT_US / PAN_SLOW_LEFT_US — the closer to 1500,
- * the slower the rotation. Dead-band varies by servo; trim if it
- * still creeps at "stop".
+ * Continuous servo: 1500 µs = stop, <1500 = right, >1500 = left.
+ * Dead-band varies by servo — if it won't move, nudge values away from 1500.
+ * If it creeps at stop, trim PAN_STOP_US ±5 µs until it holds still.
  *
  * Open Serial Monitor at 115200.
  *
@@ -27,62 +23,31 @@
 
 #include <ESP32Servo.h>
 
-// ── Pins ─────────────────────────────────────────────────────────────────────
-#define PIN_GUN_PAN     25
-#define PIN_GUN_TILT    26
+#define PIN_GUN_PAN         25
 
-// ── Continuous pan servo (µs) ────────────────────────────────────────────────
-// 1500 = stop. Adjust the slow values if the servo creeps or won't move.
 #define PAN_STOP_US         1500
-#define PAN_SLOW_RIGHT_US   1470   // right — nudge toward 1440 if too slow, toward 1500 if too fast
-#define PAN_SLOW_LEFT_US    1560   // left  — was labeled right before
+#define PAN_SLOW_RIGHT_US   1470   // nudge toward 1440 if too slow, toward 1500 if too fast
+#define PAN_SLOW_LEFT_US    1560
 
-// How long to rotate each direction before stopping (ms)
-#define PAN_TRAVEL_MS       600
-// How long to pause at stop between directions (ms)
-#define PAN_STOP_MS         2500
-
-// ── Positional tilt servo (µs) ───────────────────────────────────────────────
-#define TILT_CENTER_US  1500
-#define TILT_UP_US      1400
-#define TILT_DOWN_US    1600
-#define TILT_HOLD_MS    600
+#define PAN_TRAVEL_MS       600    // how long to rotate each direction
+#define PAN_STOP_MS         2500   // dwell at stop between directions
 
 Servo panServo;
-Servo tiltServo;
 
-// ── Pan state machine ────────────────────────────────────────────────────────
 enum PanState { PAN_RIGHT, PAN_STOPPING_1, PAN_LEFT, PAN_STOPPING_2 };
-PanState panState    = PAN_STOPPING_2;   // start from stop
-uint32_t panStateMs  = 0;
-
-// ── Tilt fires once per full pan cycle ───────────────────────────────────────
-enum TiltState { TILT_IDLE, TILT_GOING_UP, TILT_GOING_DOWN, TILT_RETURNING };
-TiltState tiltState  = TILT_IDLE;
-uint32_t  tiltStateMs = 0;
-
-void startTiltCycle() {
-  tiltState   = TILT_GOING_UP;
-  tiltStateMs = millis();
-  tiltServo.writeMicroseconds(TILT_UP_US);
-  Serial.println("  tilt UP");
-}
+PanState panState   = PAN_STOPPING_2;
+uint32_t panStateMs = 0;
 
 void setup() {
   Serial.begin(115200);
 
-  panServo.attach(PIN_GUN_PAN,   1000, 2000);
-  tiltServo.attach(PIN_GUN_TILT, 1000, 2000);
-
+  panServo.attach(PIN_GUN_PAN, 1000, 2000);
   panServo.writeMicroseconds(PAN_STOP_US);
-  tiltServo.writeMicroseconds(TILT_CENTER_US);
 
   Serial.println("=== test_05_deckgun ===");
-  Serial.println("pan=continuous  tilt=positional  (no PCA9685)");
-  Serial.printf("Pan: STOP=%d  RIGHT=%d  LEFT=%d µs  travel=%dms\n",
-                PAN_STOP_US, PAN_SLOW_RIGHT_US, PAN_SLOW_LEFT_US, PAN_TRAVEL_MS);
-  Serial.printf("Tilt: UP=%d  CENTER=%d  DOWN=%d µs\n",
-                TILT_UP_US, TILT_CENTER_US, TILT_DOWN_US);
+  Serial.printf("Pan: STOP=%d  RIGHT=%d  LEFT=%d µs  travel=%dms  stop=%dms\n",
+                PAN_STOP_US, PAN_SLOW_RIGHT_US, PAN_SLOW_LEFT_US,
+                PAN_TRAVEL_MS, PAN_STOP_MS);
   Serial.println("-- starting in 1 s --");
 
   delay(1000);
@@ -92,7 +57,6 @@ void setup() {
 void loop() {
   uint32_t now = millis();
 
-  // ── Pan state machine ──────────────────────────────────────────────────────
   switch (panState) {
     case PAN_STOPPING_2:
       if (now - panStateMs >= PAN_STOP_MS) {
@@ -127,35 +91,6 @@ void loop() {
         panStateMs = now;
         panServo.writeMicroseconds(PAN_STOP_US);
         Serial.println("stop");
-      }
-      break;
-  }
-
-  // ── Tilt state machine ─────────────────────────────────────────────────────
-  switch (tiltState) {
-    case TILT_IDLE: break;
-
-    case TILT_GOING_UP:
-      if (now - tiltStateMs >= TILT_HOLD_MS) {
-        tiltState   = TILT_GOING_DOWN;
-        tiltStateMs = now;
-        tiltServo.writeMicroseconds(TILT_DOWN_US);
-        Serial.println("  tilt DOWN");
-      }
-      break;
-
-    case TILT_GOING_DOWN:
-      if (now - tiltStateMs >= TILT_HOLD_MS) {
-        tiltState   = TILT_RETURNING;
-        tiltStateMs = now;
-        tiltServo.writeMicroseconds(TILT_CENTER_US);
-        Serial.println("  tilt CENTER");
-      }
-      break;
-
-    case TILT_RETURNING:
-      if (now - tiltStateMs >= TILT_HOLD_MS) {
-        tiltState = TILT_IDLE;
       }
       break;
   }
