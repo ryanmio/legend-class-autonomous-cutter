@@ -148,15 +148,27 @@ After the banner the sketch is in LIVE mode — throttle drives both motors cont
 
 ---
 
+## Gotcha — Radiolink CL9030 power switch is reverse-logic
+
+The CL9030 ships with an inline power switch on the battery-positive lead. **Switch OPEN = ESC ON. Switch CLOSED = ESC OFF.** Counter-intuitive.
+
+If the ESC is silent on power-up (no beep, no LED), the switch (or whatever you replaced it with) is closed, not open. Either leave the switch in place and use it normally, or **snip it out completely with no splice** — an open circuit through that lead is what powers the ESC. Splicing the wire closed kills it.
+
+This was the failure mode on first test attempt 2026-04-25. Burned ~30 min before realizing.
+
+---
+
 ## Pass criteria
 
-- [ ] `PASS (1/3)` — signal acquired, throttle at neutral, ESCs armed
-- [ ] `PASS (2/3)` — throttle advance recognized
-- [ ] `PASS (3/3)` — throttle returned to neutral
-- [ ] Both motors spin under throttle (visual)
-- [ ] Both motors stop cleanly at neutral (visual)
-- [ ] Failsafe stops motors within ~500 ms of TX off (visual + serial confirmation)
+- [x] `PASS (1/3)` — signal acquired, throttle at neutral, ESCs armed
+- [x] `PASS (2/3)` — throttle advance recognized
+- [x] `PASS (3/3)` — throttle returned to neutral
+- [x] Both motors spin under throttle (visual)
+- [x] Both motors stop cleanly at neutral (visual)
+- [ ] Failsafe stops motors within ~500 ms of TX off — **deferred to in-hull test** (verified during pre-failure debugging that FAILSAFE / RECOVERED / RE-ARMED transitions print correctly; once motors were spinning, full TX-off test under load not retried in this session)
 
-## Status
+## Result — 2026-04-25
 
-Pending bench test.
+Both port and starboard motors spinning as expected. State machine and serial output behaved as designed throughout debugging (FAILSAFE, RECOVERED, RE-ARMED transitions all observed in the log).
+
+**Status: PASS.**
