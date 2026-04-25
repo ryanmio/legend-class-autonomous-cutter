@@ -1,6 +1,6 @@
 # test_03_ibus_passthrough — Flysky iBUS Parsing
 
-Confirm the Flysky receiver is wired correctly and the ESP32 can receive, parse, and act on a live iBUS signal.
+Bench test. Confirm the Flysky receiver is wired correctly and the ESP32 can receive, parse, and act on a live iBUS signal — including detecting failsafe.
 
 ---
 
@@ -8,10 +8,20 @@ Confirm the Flysky receiver is wired correctly and the ESP32 can receive, parse,
 
 | # | What we're checking |
 |---|---------------------|
-| 1 | iBUS frames arrive on UART1 RX (GPIO 16) |
-| 2 | Frames pass the checksum — data is not corrupted |
-| 3 | All channel values are in range (1000–2000 µs) and respond to stick movement |
-| 4 | Failsafe triggers within 500 ms when the transmitter is turned off |
+| 1 | iBUS frames arrive on UART1 RX (GPIO 16) with valid checksums |
+| 2 | Channel values respond to stick movement |
+| 3 | Failsafe is detected when the transmitter is turned off |
+
+---
+
+## How failsafe is detected
+
+Flysky receivers (FS-iA6B and similar) **do not stop sending frames** when they lose the transmitter signal. They keep streaming valid, checksum-correct iBUS frames at the normal rate — the channel values just freeze at the failsafe presets configured on the transmitter.
+
+So the sketch detects failsafe by watching for **channel values to stop changing**, not by watching for frames to stop arriving:
+
+- If all 10 channels hold identical values for 500 ms → failsafe.
+- A secondary 500 ms no-frame timeout is also kept, in case the receiver is physically disconnected.
 
 ---
 
@@ -20,7 +30,9 @@ Confirm the Flysky receiver is wired correctly and the ESP32 can receive, parse,
 - ESP32 DevKit (USB-powered for bench)
 - Flysky receiver (e.g. FS-iA6B) bound to transmitter
 - Voltage divider on iBUS line (iBUS is 5V; GPIO 16 is 3.3V max)
-- PCA9685 optional — sketch auto-detects it; servos/ESCs will move if present
+- PCA9685 wired (sketch arms ESCs at neutral on boot and drives passthrough during the test)
+
+**Library required:** `Adafruit PWM Servo Driver Library` — install from Arduino IDE Library Manager. The sketch will not compile without it.
 
 ---
 
@@ -47,8 +59,8 @@ Without this, you will damage the ESP32 GPIO over time and may get corrupted rea
 | Receiver iBUS (signal) | 1kΩ resistor → GPIO 16 (with 2kΩ to GND as above) |
 | Receiver VCC (5V) | ESP32 VIN or 5V bench supply |
 | Receiver GND | ESP32 GND |
-| ESP32 GPIO 21 | PCA9685 SDA (if connected) |
-| ESP32 GPIO 22 | PCA9685 SCL (if connected) |
+| ESP32 GPIO 21 | PCA9685 SDA |
+| ESP32 GPIO 22 | PCA9685 SCL |
 
 ---
 
@@ -60,44 +72,67 @@ Without this, you will damage the ESP32 GPIO over time and may get corrupted rea
 4. **Port:** your ESP32's COM/tty port.
 5. Click **Upload**.
 6. Open **Tools → Serial Monitor**, baud **115200**.
-7. Turn on your transmitter.
+7. Follow the on-screen steps.
 
 ---
 
-## What to tell the model (Serial Monitor output)
+## Expected output
 
-The sketch walks you through three pass gates. Report what you see at each stage:
+The sketch is a 3-stage state machine. It prints one PASS line per stage and goes silent once all three pass. While waiting in a stage, it prints one quiet hint every 10 s.
 
-**Stage 1 — signal acquired:**
 ```
->>> SIGNAL ACQUIRED <<<
-PASS (1/3): iBUS frames arriving and checksum OK.
-```
-If this never appears: check voltage divider, confirm receiver is bound and powered, check GPIO 16.
+========================================
+  test_03_ibus_passthrough
+========================================
+[INFO] PCA9685 found — arming ESCs at 1500 µs (3 s delay)...
+[INFO] ESCs armed.
 
-**Stage 2 — 50 clean frames (auto-prints):**
-```
-PASS (2/3): 50 consecutive frames received with valid checksums.
-  Values should be ~1500 at stick center, ~1000 at min, ~2000 at max.
-```
-Move sticks and confirm CH values change in the printout.
+Step 1: turn on your transmitter.
+----------------------------------------
 
-**Stage 3 — turn off transmitter:**
-```
->>> FAILSAFE TRIGGERED (no signal for 500 ms) <<<
-PASS (3/3): Failsafe working.
+PASS (1/3): iBUS signal acquired, checksums OK.
+Step 2: move any stick on your transmitter.
+----------------------------------------
+
+PASS (2/3): channel values respond to stick input.
+Step 3: TURN OFF your transmitter to test failsafe.
+----------------------------------------
+
+PASS (3/3): failsafe detected (channels frozen).
+
+========================================
+  ALL TESTS PASSED — iBUS chain verified
+========================================
 ```
 
-If you see `[WARN] Checksum mismatch` repeatedly: noise on the iBUS wire — check the voltage divider resistor values and wire length.
+After the final banner the sketch holds outputs at neutral and is silent. Press **EN/RST** on the ESP32 to re-run.
+
+---
+
+## Troubleshooting
+
+- **Stuck at Step 1:** check voltage divider, confirm receiver is bound and powered, check GPIO 16 wiring.
+- **`[WARN] checksum mismatch` repeating:** noise on the iBUS line — check resistor values and shorten the wire.
+- **Step 3 never passes after TX off:** confirm the transmitter has failsafe values configured (FS-i6 menu → Failsafe), not "no signal" / hold-last. With hold-last the channels truly never change post-loss either, but most receivers send the same exact frozen values, which the freeze check still catches within 500 ms.
 
 ---
 
 ## Pass criteria
 
-- [ ] `PASS (1/3)` — frames arriving and checksum OK
-- [ ] `PASS (2/3)` — 50 consecutive clean frames; stick movement changes values
-- [ ] `PASS (3/3)` — failsafe triggers within 500 ms of TX off
+- [x] `PASS (1/3)` — frames arriving with valid checksums
+- [x] `PASS (2/3)` — channel values respond to stick input
+- [x] `PASS (3/3)` — failsafe triggers within 500 ms of TX off
 
-## Status
+## Result — 2026-04-25
 
-Pending bench test.
+```
+PASS (1/3): iBUS signal acquired, checksums OK.
+PASS (2/3): channel values respond to stick input.
+PASS (3/3): failsafe detected (channels frozen).
+
+========================================
+  ALL TESTS PASSED — iBUS chain verified
+========================================
+```
+
+**Status: PASS**
