@@ -1,26 +1,23 @@
 /*
- * test_10_bn220_gps.ino
+ * test_10b_bn220_gps_boat.ino
  *
- * Bench test. Confirms a BN-220 GPS module is wired correctly, talking
- * NMEA, and (with sky view) acquires a position fix.
+ * Same test as test_10_bn220_gps, but pinned for the BOAT (in-hull) wiring:
+ *   GPS TX (green) → ESP32 GPIO 4   (UART2 RX in this sketch)
+ *   GPS RX (white) → ESP32 GPIO 17  (UART2 TX, optional)
+ *
+ * GPIO 4 is the permanent GPS RX pin per the project pinout. test_10
+ * (bench) uses GPIO 18 because that's what was wired on the breadboard.
  *
  * Three pass gates:
  *   PASS 1/3  Bytes arriving on UART2 RX
  *   PASS 2/3  Valid NMEA sentence parsed (passed checksum)
  *   PASS 3/3  Position fix acquired (gps.location.isValid() == true)
  *
- * After PASS 2/3 the sketch prints a 1 Hz status line so you can watch
- * the fix come in. PASS 3/3 needs sky view — indoors mid-room you may
- * never get it. Take it outside or right next to a window.
- *
- * Wiring (BN-220, BENCH config — see test_10b for boat pins):
- *   BN-220 VCC (red)    → ESP32 3.3V         (5V usually OK but 3.3V is
- *                                              unconditionally safe)
- *   BN-220 GND (black)  → ESP32 GND
- *   BN-220 TX  (green)  → ESP32 GPIO 18  (UART2 RX in this sketch)
- *   BN-220 RX  (white)  → ESP32 GPIO 17  (UART2 TX — optional; leave
- *                                          disconnected unless you plan
- *                                          to send config to the GPS)
+ * If you don't see PASS 1/3 within a few seconds and the BN-220's LED is
+ * also dark, the most likely cause is no power at the BN-220 — multimeter
+ * 3.3V at the BN-220's own VCC pad before chasing pin/baud issues. The
+ * GPS LED has nothing to do with which ESP pin you connected; it just
+ * indicates the GPS is powered and transmitting.
  *
  * Library: install "TinyGPSPlus" by Mikal Hart from Library Manager.
  *
@@ -32,7 +29,7 @@
 TinyGPSPlus     gps;
 HardwareSerial  gpsSerial(2);
 
-const uint8_t  GPS_RX_PIN = 18;   // ESP32 reads from this (← BN-220 TX, green)
+const uint8_t  GPS_RX_PIN = 4;    // ESP32 reads from this (← BN-220 TX, green)
 const uint8_t  GPS_TX_PIN = 17;   // ESP32 writes to this (→ BN-220 RX, white)
 const uint32_t GPS_BAUD   = 9600;
 
@@ -48,9 +45,9 @@ unsigned long lastPrintMs    = 0;
 unsigned long lastHintMs     = 0;
 unsigned long lastByteWarnMs = 0;
 
-const unsigned long PRINT_INTERVAL_MS    = 1000;   // 1 Hz status
-const unsigned long HINT_INTERVAL_MS     = 10000;  // hint every 10 s while waiting
-const unsigned long NO_BYTE_TIMEOUT_MS   = 5000;   // warn if bytes go silent
+const unsigned long PRINT_INTERVAL_MS    = 1000;
+const unsigned long HINT_INTERVAL_MS     = 10000;
+const unsigned long NO_BYTE_TIMEOUT_MS   = 5000;
 
 void printStatus() {
   unsigned long upS = (millis() - bootMs) / 1000;
@@ -80,9 +77,9 @@ void printStatus() {
 void printHint() {
   switch (state) {
     case WAIT_BYTES:
-      Serial.printf("  ...no bytes from GPS yet (RX=GPIO%d). Check: VCC, GND, "
-                    "TX→GPIO%d crossover, baud=%lu.\n",
-                    GPS_RX_PIN, GPS_RX_PIN, GPS_BAUD);
+      Serial.printf("  ...no bytes from GPS yet (RX=GPIO%d). If the GPS LED is also "
+                    "DARK, the module isn't powered — multimeter 3.3V at the BN-220's "
+                    "own VCC pad before suspecting the data line.\n", GPS_RX_PIN);
       break;
     case WAIT_SENTENCES:
       Serial.printf("  ...bytes arriving (%lu chars) but no valid NMEA. "
@@ -90,8 +87,8 @@ void printHint() {
                     gps.charsProcessed());
       break;
     case WAIT_FIX:
-      Serial.println("  ...searching for fix. Move outside or right next to a "
-                     "window. Cold-start TTFF is ~30 s outdoors.");
+      Serial.println("  ...searching for fix. The boat antenna needs sky — open the "
+                     "hatch or hold the boat near a window.");
       break;
     case LIVE:
       break;
@@ -104,15 +101,14 @@ void setup() {
   bootMs = millis();
 
   Serial.println("========================================");
-  Serial.println("  test_10_bn220_gps");
+  Serial.println("  test_10b_bn220_gps_boat");
+  Serial.println("  (boat / in-hull pin config)");
   Serial.println("========================================");
-  Serial.printf("UART2  baud=%lu  RX=GPIO%d (← BN-220 TX)  TX=GPIO%d (→ BN-220 RX)\n",
+  Serial.printf("UART2  baud=%lu  RX=GPIO%d (← BN-220 TX, green)  TX=GPIO%d (→ BN-220 RX, white)\n",
                 GPS_BAUD, GPS_RX_PIN, GPS_TX_PIN);
   Serial.println();
-  Serial.println("Cold-start TTFF (time to first fix):");
-  Serial.println("  outdoors clear sky : ~30 s");
-  Serial.println("  next to a window   : 60-300 s");
-  Serial.println("  indoors mid-room   : probably never (RF blocked)");
+  Serial.println("If the BN-220 LED is dark, suspect power at the module first.");
+  Serial.println("Multimeter VCC at the BN-220's own pad — not upstream.");
   Serial.println();
   Serial.println("Step 1: waiting for any bytes from the GPS module...");
   Serial.println("----------------------------------------");
@@ -124,7 +120,6 @@ void setup() {
 }
 
 void loop() {
-  // ---- Pump bytes from the GPS through TinyGPSPlus ----
   while (gpsSerial.available()) {
     int b = gpsSerial.read();
     if (firstByteMs == 0) firstByteMs = millis();
@@ -134,7 +129,6 @@ void loop() {
     }
   }
 
-  // ---- State transitions / pass gates ----
   switch (state) {
     case WAIT_BYTES:
       if (firstByteMs != 0) {
@@ -168,9 +162,9 @@ void loop() {
                       (firstFixMs - bootMs) / 1000);
         Serial.println();
         Serial.println("========================================");
-        Serial.println("  ALL TESTS PASSED");
+        Serial.println("  ALL TESTS PASSED — BOAT GPS WIRING OK");
         Serial.println("========================================");
-        Serial.println("Streaming 1 Hz fix data. Walk around to verify lat/lon updates.");
+        Serial.println("Streaming 1 Hz fix data. Walk the boat around to verify lat/lon updates.");
         state = LIVE;
         lastHintMs = millis();
       }
@@ -180,19 +174,16 @@ void loop() {
       break;
   }
 
-  // ---- 1 Hz status line (skipped during WAIT_BYTES — nothing to show) ----
   if (state != WAIT_BYTES && millis() - lastPrintMs >= PRINT_INTERVAL_MS) {
     printStatus();
     lastPrintMs = millis();
   }
 
-  // ---- Hint every 10 s while still working through the gates ----
   if (state != LIVE && millis() - lastHintMs >= HINT_INTERVAL_MS) {
     printHint();
     lastHintMs = millis();
   }
 
-  // ---- Watchdog: GPS went silent? ----
   if (firstByteMs != 0 && millis() - lastByteMs > NO_BYTE_TIMEOUT_MS &&
       millis() - lastByteWarnMs > 10000) {
     Serial.printf("[WARN] no GPS bytes for %lu ms — module reset or wire fell off?\n",
