@@ -41,16 +41,16 @@ Install via Arduino IDE → Library Manager:
 
 ## Wiring
 
-| BN-220 pin | Color (typical) | ESP32 pin | Notes |
-|-----------|-----------------|-----------|-------|
-| VCC | red | **3.3V** | 5V is also tolerated by most BN-220 modules but 3.3V is unconditionally safe — use 3.3V on the bench. |
-| GND | black | GND | |
-| TX  | yellow | **GPIO 17** | UART2 RX in this sketch — the cross-over: GPS TX → ESP RX. |
-| RX  | white | **GPIO 18** | UART2 TX. Optional — leave disconnected unless you plan to send config commands to the GPS. |
+| BN-220 pin | Wire color | Bench pin | Boat pin | Notes |
+|-----------|------------|-----------|----------|-------|
+| VCC | red | **3.3V** | 3.3V | 5V tolerated but 3.3V is safe on all batches |
+| GND | black | GND | GND | |
+| TX  | **green** | **GPIO 18** | **GPIO 4** | GPS TX → ESP32 RX (cross-over). Bench uses 18 because 16 is reserved for iBUS; permanent install moves to GPIO 4. |
+| RX  | **white** | **GPIO 17** | **GPIO 17** | ESP32 TX → GPS RX. Same pin both places. |
 
-> Color codes vary by batch. Verify against the silkscreen on the BN-220 PCB if your colors look different.
+> Confirmed wire colors on this module: green = TX, white = RX. Verify against the BN-220 silkscreen if a different batch is used.
 
-GPIO 16 is reserved for iBUS (test_03), so this sketch remaps UART2 to GPIO 17/18 explicitly.
+GPIO 16 is reserved for iBUS (test_03), so the bench sketch maps UART2 RX to GPIO 18. The permanent firmware uses GPIO 4 (CLAUDE.md pinout).
 
 ---
 
@@ -70,7 +70,7 @@ GPIO 16 is reserved for iBUS (test_03), so this sketch remaps UART2 to GPIO 17/1
 ========================================
   test_10_bn220_gps
 ========================================
-UART2  baud=9600  RX=GPIO17 (← BN-220 TX)  TX=GPIO18 (→ BN-220 RX)
+UART2  baud=9600  RX=GPIO18 (← BN-220 TX, green)  TX=GPIO17 (→ BN-220 RX, white)
 
 Cold-start TTFF (time to first fix):
   outdoors clear sky : ~30 s
@@ -107,7 +107,7 @@ Streaming 1 Hz fix data. Walk around to verify lat/lon updates.
 
 | Symptom | Meaning |
 |---------|---------|
-| Stuck on `Step 1`, hint says no bytes | No UART data. Check VCC, GND, and that TX→GPIO 17 (TX/RX cross). |
+| Stuck on `Step 1`, hint says no bytes | No UART data. Check VCC, GND, and that green (GPS TX) → GPIO 18. |
 | Stuck on `Step 2`, hint says wrong baud | Bytes arriving but no valid NMEA. Module is at a non-default baud. Try 4800 or 38400 in `GPS_BAUD`. |
 | Sentences OK, sats stuck at 0 for >5 min | No sky view — move closer to a window, take it outside, or check the antenna isn't covered. |
 | `[WARN] no GPS bytes for X ms` | Module silently reset (brownout? bad VCC?) or the RX wire fell off. |
@@ -117,11 +117,15 @@ Streaming 1 Hz fix data. Walk around to verify lat/lon updates.
 
 ## Pass criteria
 
-- [ ] `PASS (1/3)` — bytes arriving
-- [ ] `PASS (2/3)` — valid NMEA parsed
-- [ ] `PASS (3/3)` — position fix acquired
-- [ ] (visual) lat/lon update sensibly when you walk around
+- [x] `PASS (1/3)` — bytes arriving
+- [x] `PASS (2/3)` — valid NMEA parsed
+- [x] `PASS (3/3)` — position fix acquired
+- [x] (visual) lat/lon update sensibly when you walk around
 
-## Status
+## Result — 2026-04-26
 
-Pending bench test.
+6 satellites acquired. Green (GPS TX) → GPIO 18, white (GPS RX) → GPIO 17.
+
+In the boat, green moves to GPIO 4 (permanent iBUS-clear RX pin per pinout). White stays on GPIO 17.
+
+**Status: PASS**
