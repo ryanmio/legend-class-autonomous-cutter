@@ -120,12 +120,29 @@ Effect: rotating the board *should* sweep the heading number through ~0–360° 
 
 ## Pass criteria
 
-- [ ] `[PASS] ICM-20948 initialized.` printed at boot
-- [ ] PCA9685 and INA219 both reported FOUND in the scan (assuming both are wired)
-- [ ] Accel magnitude reads ~1000 mg at rest
-- [ ] Pitch/Roll respond to tilt
-- [ ] Heading sweeps as the board is rotated
+- [x] `[PASS] ICM-20948 initialized.` printed at boot
+- [x] PCA9685 and INA219 both reported FOUND in the scan
+- [x] Accel magnitude reads ~1000 mg at rest
+- [x] Pitch/Roll respond to tilt
+- [x] Heading sweeps as the board is rotated (uncalibrated, as documented)
 
-## Status
+## Result — 2026-04-26
 
-Pending bench test.
+Heading sweeps as the board rotates. Pitch/roll respond to tilt. Accel magnitude ~1000 mg at rest. Sample stream:
+
+```
+Heading:   67.5°   Pitch:  +27.4°   Roll:   +3.9°   |a|= 993 mg
+Heading:   66.7°   Pitch:  +27.6°   Roll:   +0.4°   |a|=1012 mg
+```
+
+**Debug note — the first attempt failed and the lesson is worth keeping:**
+
+The whole I²C bus appeared dead with the IMU connected (`0 device(s) found`, even PCA9685 and INA219 missing). Root cause was a **Wago lever connector with a bad grip on the IMU's power pigtail** — IMU was completely unpowered. Re-seating the Wago fixed it instantly.
+
+Why this looks like a bus short instead of a power flake: connecting an *unpowered* I²C device's SDA/SCL to a live bus lets the chip's I/O ESD diodes leak current from the bus into the chip's floating VCC rail. The line voltages get dragged around enough to break communication for the other (working) devices, so the symptom presents as "adding the IMU killed the bus", not "the IMU has no power."
+
+**Lesson:** when an I²C device misbehaves on this bench, **multimeter 3.3V at the breakout's own VCC pad first**, before suspecting bus issues, shorts, or chip damage. Re-seat any Wago in the power chain.
+
+A standalone diagnostic sketch was added during this debug session: `firmware/tests/test_09b_imu_isolation/test_09b_imu_isolation.ino`. It runs an I²C scan + WHO_AM_I read with PASS/FAIL outcomes — keep it around for future I²C diagnostics.
+
+**Status: PASS.**
