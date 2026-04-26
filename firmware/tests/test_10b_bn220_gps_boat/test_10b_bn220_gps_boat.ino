@@ -29,8 +29,10 @@
 TinyGPSPlus     gps;
 HardwareSerial  gpsSerial(2);
 
-const uint8_t  GPS_RX_PIN = 4;    // ESP32 reads from this (← BN-220 TX, green)
-const uint8_t  GPS_TX_PIN = 17;   // ESP32 writes to this (→ BN-220 RX, white)
+// Swapped from the original boat config (RX=4 / TX=17) to test whether
+// the GPS green/white wires are physically reversed at the ESP32 end.
+const uint8_t  GPS_RX_PIN = 17;   // ESP32 reads from this (← BN-220 TX)
+const uint8_t  GPS_TX_PIN = 4;    // ESP32 writes to this (→ BN-220 RX)
 const uint32_t GPS_BAUD   = 9600;
 
 enum TestState { WAIT_BYTES, WAIT_SENTENCES, WAIT_FIX, LIVE };
