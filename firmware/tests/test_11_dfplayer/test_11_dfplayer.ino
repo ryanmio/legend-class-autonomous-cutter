@@ -43,7 +43,6 @@
  * DFPlayer Mini default: 9600 baud UART, volume 0–30.
  */
 
-#include <SoftwareSerial.h>
 #include <DFRobotDFPlayerMini.h>
 
 const uint8_t  DFP_RX_PIN = 25;   // ESP32 reads from this (← DFPlayer TX)
@@ -53,7 +52,10 @@ const uint8_t  DFP_VOLUME = 20;   // 0–30; bench test value, dial in for room
 const uint8_t  TEST_TRACK = 1;
 const unsigned long REPLAY_INTERVAL_MS = 20000;
 
-SoftwareSerial         dfSerial(DFP_RX_PIN, DFP_TX_PIN);  // (rxPin, txPin)
+// Bench test uses HardwareSerial(2) on custom pins — all three ESP32 UARTs
+// are free on the bench. Main firmware uses SoftwareSerial because UART1
+// (iBUS) and UART2 (GPS) are both occupied at runtime.
+HardwareSerial         dfSerial(2);
 DFRobotDFPlayerMini    dfPlayer;
 
 unsigned long bootMs        = 0;
@@ -99,7 +101,7 @@ void setup() {
   Serial.println("========================================");
   Serial.println("  test_11_dfplayer");
   Serial.println("========================================");
-  Serial.printf("SoftwareSerial  baud=%lu  RX=GPIO%d (← DFP TX)  TX=GPIO%d (→ DFP RX)\n",
+  Serial.printf("HardwareSerial(2)  baud=%lu  RX=GPIO%d (← DFP TX)  TX=GPIO%d (→ DFP RX)\n",
                 DFP_BAUD, DFP_RX_PIN, DFP_TX_PIN);
   Serial.printf("Volume=%u/30  test track=%u  replay every %lus\n",
                 DFP_VOLUME, TEST_TRACK, REPLAY_INTERVAL_MS / 1000);
@@ -108,7 +110,7 @@ void setup() {
   Serial.println("(begin() can take ~3 s on a cold module while the SD spins up)");
   Serial.println("----------------------------------------");
 
-  dfSerial.begin(DFP_BAUD);
+  dfSerial.begin(DFP_BAUD, SERIAL_8N1, DFP_RX_PIN, DFP_TX_PIN);
   delay(200);
 
   if (dfPlayer.begin(dfSerial)) {

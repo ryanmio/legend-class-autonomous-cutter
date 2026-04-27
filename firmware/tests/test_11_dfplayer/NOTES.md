@@ -38,6 +38,8 @@ Install via Arduino IDE → Library Manager:
 
 (There are several DFPlayer libraries; this is the one the main firmware uses, so match it.)
 
+> The bench test uses ESP32 **HardwareSerial(2)** on custom pins (25/26) — no `SoftwareSerial` library needed. The main firmware (`legend_cutter/audio.cpp`) uses SoftwareSerial because at runtime UART1 is iBUS and UART2 is GPS, leaving no hardware UART free. If you ever build the main firmware and hit `SoftwareSerial.h: No such file`, install **EspSoftwareSerial** by Peter Lerup from Library Manager.
+
 ---
 
 ## Wiring
@@ -84,7 +86,7 @@ If track 1 plays the wrong file, reformat and re-copy in order. There is no othe
 ========================================
   test_11_dfplayer
 ========================================
-SoftwareSerial  baud=9600  RX=GPIO25 (← DFP TX)  TX=GPIO26 (→ DFP RX)
+HardwareSerial(2)  baud=9600  RX=GPIO25 (← DFP TX)  TX=GPIO26 (→ DFP RX)
 Volume=20/30  test track=1  replay every 20s
 
 Step 1: opening UART and calling dfPlayer.begin()...
