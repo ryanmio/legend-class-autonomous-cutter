@@ -1,8 +1,19 @@
-# test_11_dfplayer — DFPlayer Mini Bringup
+# test_11_dfplayer — DF1201S (DFPlayer Pro) Bringup
 
-Bench test. Confirms a DFPlayer Mini MP3 module boots, talks UART at 9600 baud, and plays track 1 on startup and again every 20 seconds.
+Bench test. Confirms a DFRobot **DF1201S** (a.k.a. DFPlayer Pro, SKU DFR0768) MP3 module boots, talks AT-protocol UART at 115200 baud, and plays file 1 on startup and again every 20 seconds.
 
-Audio path on the boat is DFPlayer → mini stereo amp → 2 speakers. The amp and speakers are passive on the data side, so this test only exercises the UART control link and the DFPlayer's own DAC. If track 1 plays cleanly, the digital side is good; tone/volume tuning is a separate exercise.
+Audio path on the boat is DF1201S → mini stereo amp → 2 speakers. The DF1201S also has an on-board 8Ω/3W amp (controlled by `enableAMP()` / `disableAMP()`) — feed line-out to the external amp, or wire a single speaker directly to SPK+/SPK-.
+
+> ⚠ The DF1201S is **not the same module** as the cheap DFPlayer Mini.
+>
+> | | DFPlayer Mini | DF1201S / DFPlayer Pro |
+> |---|---|---|
+> | Baud | 9600 | **115200** |
+> | Protocol | binary frames `0x7E ... 0xEF` | AT command strings |
+> | Library | `DFRobotDFPlayerMini` | **`DFRobot_DF1201S`** |
+> | Internal flash | no, SD only | yes, ships with sample track at index 1 |
+>
+> Pointing the wrong driver at the wrong module produces no audio and a fast garbage stream on the RX line — confirmed the hard way during this bringup.
 
 ---
 
@@ -10,23 +21,22 @@ Audio path on the boat is DFPlayer → mini stereo amp → 2 speakers. The amp a
 
 | # | What we're checking |
 |---|---------------------|
-| 1 | `dfPlayer.begin()` returns true (module ACKs over UART) |
-| 2 | Track 1 plays — auditory verification |
+| 1 | `DF1201S.begin()` returns true (module ACKs over UART) |
+| 2 | File 1 plays — auditory verification |
 
-After PASS 2/2, the sketch replays track 1 every 20 s and prints any DFPlayer events (track-finished, errors) as they arrive on the event stream.
+After PASS 2/2, the sketch replays file 1 every 20 s.
 
 ---
 
 ## Hardware required
 
 - ESP32 (USB-powered for bench)
-- DFPlayer Mini module
-- microSD card, FAT32, with `0001.mp3` placed in root **first** (DFPlayer indexes by file copy order, not filename)
-- Mini stereo amp + 2 speakers, OR a single speaker wired direct to SPK_1/SPK_2 (DFPlayer has a built-in 3W mono amp on those pins)
-- 1kΩ resistor (recommended) in series with ESP32-TX → DFPlayer-RX
-- DFRobotDFPlayerMini library installed
+- DFRobot DF1201S / DFPlayer Pro module
+- Mini stereo amp + 2 speakers, OR a single 8Ω speaker direct to SPK+/SPK-
+- DFRobot_DF1201S library installed
+- (optional) microSD card. The DF1201S has internal flash with a built-in track at index 1, so the bench test works with no card inserted.
 
-> The DFPlayer Mini is a 5V part. **Power VCC from 5V, not 3.3V** — at 3.3V the module either fails to boot or boots in a degraded state where `begin()` randomly fails. The UART logic is 5V-tolerant on its RX, but a 1k series resistor between the ESP32's 3.3V TX and the DFPlayer's RX is cheap insurance.
+> The DF1201S is a 3.3-5V part — either rail works. 5V gives full amp output.
 
 ---
 
@@ -34,39 +44,39 @@ After PASS 2/2, the sketch replays track 1 every 20 s and prints any DFPlayer ev
 
 Install via Arduino IDE → Library Manager:
 
-> **DFRobotDFPlayerMini** by DFRobot
+> **DFRobot_DF1201S** by DFRobot
 
-(There are several DFPlayer libraries; this is the one the main firmware uses, so match it.)
+(Do **not** install or use `DFRobotDFPlayerMini` — that's for the older binary-protocol Mini and will not communicate with this module.)
 
-> The bench test uses ESP32 **HardwareSerial(2)** on custom pins (25/26) — no `SoftwareSerial` library needed. The main firmware (`legend_cutter/audio.cpp`) uses SoftwareSerial because at runtime UART1 is iBUS and UART2 is GPS, leaving no hardware UART free. If you ever build the main firmware and hit `SoftwareSerial.h: No such file`, install **EspSoftwareSerial** by Peter Lerup from Library Manager.
+> The bench test uses ESP32 **HardwareSerial(2)** on custom pins (25/26) — no `SoftwareSerial` library needed. If `legend_cutter/audio.cpp` is later refactored for the DF1201S it will likely also use HardwareSerial, since 115200 baud SoftwareSerial on ESP32 is unreliable.
 
 ---
 
 ## Wiring
 
-| DFPlayer pin | Bench pin | Notes |
-|--------------|-----------|-------|
-| VCC | **5V** | NOT 3.3V — module needs 5V to boot reliably |
-| GND | GND | Tie ESP32 GND, DFPlayer GND, and amp GND together |
-| RX  | **GPIO 25** (ESP32 TX) | Put a 1kΩ series resistor in this line |
+| DF1201S pin | Bench pin | Notes |
+|-------------|-----------|-------|
+| VCC | **5V** | 3.3V also works; 5V gives full amp output |
+| GND | GND | Tie ESP32 GND, DF1201S GND, and amp GND together |
+| RX  | **GPIO 25** (ESP32 TX) | |
 | TX  | **GPIO 26** (ESP32 RX) | |
-| SPK_1 | amp L input | Or direct to one terminal of an 8Ω speaker for mono |
-| SPK_2 | amp R input | Or other terminal of the speaker |
+| SPK+ | amp L+ input | Or direct to one terminal of an 8Ω speaker |
+| SPK- | amp L- input | Or other terminal of the speaker |
 | GND (amp) | shared GND | Floating amp GND = no audio + buzz |
 
-> Pinout matches `legend_cutter/config.h` (`DFPLAYER_TX_PIN=25`, `DFPLAYER_RX_PIN=26` — ESP32-side: RX=26, TX=25), so the boat firmware can reuse this wiring as-is.
+> Pinout matches `legend_cutter/config.h` (`DFPLAYER_TX_PIN=25`, `DFPLAYER_RX_PIN=26`). config.h was written when the project still expected a DFPlayer Mini — the pin numbers carry over but the baud rate (currently `9600` in `audio.cpp`) and the entire driver will need to change to `DFRobot_DF1201S` at 115200 before the boat firmware can drive this module.
 
 ---
 
 ## microSD prep
 
-DFPlayer Mini does NOT play files by their numeric filename — it plays the Nth file in the FAT directory entry order. To make `dfPlayer.play(1)` actually play `0001.mp3`:
+Optional. The DF1201S ships with a working sample at index 1 in internal flash, which is what this test plays. To play files from SD:
 
-1. Format the card FAT32 (clean format, not quick-erase on top of a previous filesystem).
-2. Copy `0001.mp3` to the root **first**, by itself.
-3. Copy any other tracks (`0002.mp3`, `0003.mp3`, …) afterward, in numerical order.
+1. Format the card FAT32.
+2. Copy MP3s to the root or a subfolder.
+3. Use `playFileNum(N)` to play by index, or `playFile("/path/file.mp3")` to play by path.
 
-If track 1 plays the wrong file, reformat and re-copy in order. There is no other fix.
+(The DFPlayer-Mini-era "must copy 0001.mp3 first" rule does **not** apply to the DF1201S — this module indexes by FAT entry but the API also supports filename paths.)
 
 ---
 
@@ -76,7 +86,7 @@ If track 1 plays the wrong file, reformat and re-copy in order. There is no othe
 2. Board: ESP32 Dev Module. Port: your ESP32's port.
 3. Upload.
 4. Open Serial Monitor at **115200**.
-5. Listen for track 1 from the speakers within ~1 s of the `PASS (1/2)` line.
+5. Listen for file 1 from the speakers within ~3 s of `PASS (1/2)` (the 2 s `switchFunction(MUSIC)` settle delay accounts for most of the gap).
 
 ---
 
@@ -84,26 +94,23 @@ If track 1 plays the wrong file, reformat and re-copy in order. There is no othe
 
 ```
 ========================================
-  test_11_dfplayer
+  test_11_dfplayer (DF1201S / DFPlayer Pro)
 ========================================
-HardwareSerial(2)  baud=9600  RX=GPIO26 (← DFP TX)  TX=GPIO25 (→ DFP RX)
+HardwareSerial(2)  baud=115200  RX=GPIO26 (← DF1201S TX)  TX=GPIO25 (→ DF1201S RX)
 Volume=20/30  test track=1  replay every 20s
 
-Step 1: opening UART and calling dfPlayer.begin()...
-(begin() can take ~3 s on a cold module while the SD spins up)
+Step 1: opening UART and calling DF1201S.begin()...
+(begin() can take 1-3 s)
 ----------------------------------------
-PASS (1/2): DFPlayer responded (after 1820 ms).
-Step 2: playing track 1 — listen for audio out of the speakers.
+PASS (1/2): DF1201S responded (after 820 ms).
+Step 2: playing file #1 — listen for audio out of the speakers.
 ----------------------------------------
-[t=    1s]  play #1  track=1
+[t=    3s]  play #1  file=1
 
-PASS (2/2) is auditory: confirm you hear track 1 from the speakers.
-If silent, check: SD inserted, 0001.mp3 in root, amp powered, volume.
-  [DF] SD card online
-  [DF] track 1 finished
-[t=   21s]  play #2  track=1
-  [DF] track 1 finished
-[t=   41s]  play #3  track=1
+PASS (2/2) is auditory: confirm you hear file 1 from the speakers.
+If silent, check: amp powered, volume, on-board AMP enabled (it is).
+[t=   23s]  play #2  file=1
+[t=   43s]  play #3  file=1
 ...
 ```
 
@@ -113,23 +120,30 @@ If silent, check: SD inserted, 0001.mp3 in root, amp powered, volume.
 
 | Symptom | Meaning |
 |---------|---------|
-| `FAIL (1/2): DFPlayer did not respond to begin().` | Module didn't ACK. Most common cause: VCC on 3.3V instead of 5V. Next: TX/RX swapped, or 1k series resistor open-circuit. |
-| `[DF] error code 1 (busy / card not found)` | SD missing, not seated, or formatted exFAT. Reformat FAT32. |
-| `[DF] error code 6 (file index out of range — track missing on SD)` | No track 1 on the card. Either nothing copied, or `0001.mp3` was not the first file copied. |
-| Track plays once but never repeats | Loop logic stuck — check `lastPlayMs` reset path (shouldn't happen unless `millis()` rolls, which takes 49 days). |
-| Wrong file plays on track 1 | SD copy order wrong. Reformat, copy `0001.mp3` first by itself. |
-| Audible buzz but no music | Amp GND not tied to ESP32/DFPlayer GND. Tie all GND to one point. |
-| Audio crackles when motors run | Power rail noise. Run DFPlayer off a separate buck or add a bulk cap. Not relevant on bench. |
+| `FAIL (1/2): DF1201S did not respond to begin() within 5 s.` | Module didn't ACK. Check VCC, GND continuity, TX/RX direction, and that you really are on 115200 baud (not 9600). |
+| `begin()` passes but no audio | Volume too low, on-board AMP disabled, or speakers wired to SPK pins on a module configured for line-out only. Try `DF1201S.enableAMP()` (already in the sketch). |
+| Fast unreadable stream of bytes on the serial monitor | You're using the DFPlayer Mini library/baud against a DF1201S (or vice versa). Re-check the includes and `DFP_BAUD`. |
+| File 1 plays but won't replay | `setPlayMode(SINGLE)` not in effect — module went into "stop after first track" but `playFileNum` should re-trigger anyway. Confirm `playFileNum(1)` is being called every 20 s in the loop. |
+| Audible buzz but no music | Amp GND not tied to ESP32/DF1201S GND. Tie all GND to one point. |
 
 ---
 
 ## Pass criteria
 
 - [ ] `PASS (1/2)` — `begin()` succeeds
-- [ ] `PASS (2/2)` — track 1 audible on the speakers within ~1 s of boot
+- [ ] `PASS (2/2)` — file 1 audible on the speakers within ~3 s of boot
 - [ ] (visual) `play #N` line prints every 20 s and audio replays
-- [ ] (visual) `[DF] track 1 finished` events appear between replays (if track is < 20 s long)
 
 ## Result — pending
 
 (Run the test and fill this in.)
+
+---
+
+## Bringup history
+
+This bringup hit two false starts before the actual fix:
+1. First built against the DFPlayer Mini library at 9600 baud — `begin()` always timed out. Tried both pin orderings, multimeter-confirmed 5V, confirmed audio-via-play-button. Nothing worked.
+2. User shared the [DFRobot_DF1201S repo](https://github.com/DFRobot/DFRobot_DF1201S) — the module is actually a DF1201S (DFPlayer Pro), not a Mini. Different protocol, different baud. Library swap fixed it.
+
+The lesson: when `begin()` fails with confirmed power and confirmed audio, suspect a module identification mismatch before chasing wiring further.

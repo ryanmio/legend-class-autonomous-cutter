@@ -1,97 +1,58 @@
 /*
  * test_11_dfplayer.ino
  *
- * Bench test. Confirms a DFPlayer Mini MP3 module is wired correctly,
- * boots cleanly, and plays track 0001.mp3 from the microSD card —
- * once on startup and again every 20 seconds thereafter.
+ * Bench test. Confirms a DFRobot DF1201S "DFPlayer Pro" (SKU DFR0768)
+ * is wired correctly, talks AT-protocol UART at 115200 baud, and plays
+ * file #1 from internal flash / SD — once on startup and again every
+ * 20 seconds thereafter.
  *
- * Audio path on the boat: DFPlayer Mini → mini stereo amp → 2 speakers.
- * The amp/speakers are passive on the data side, so this test only
- * exercises the UART control link and the DFPlayer's own DAC output.
+ * NOTE: the DF1201S is *not* the same module as the DFPlayer Mini.
+ *   - DFPlayer Mini : 9600 baud, binary frames (0x7E ... 0xEF),
+ *                     library "DFRobotDFPlayerMini"
+ *   - DF1201S       : 115200 baud, AT command protocol,
+ *                     library "DFRobot_DF1201S"
+ * If you point the wrong driver at the wrong module nothing works and
+ * the diagnostics are nonsense — confirmed the hard way.
+ *
+ * Audio path on the boat: DF1201S → mini stereo amp → 2 speakers.
+ * The DF1201S has an on-board 8Ω/3W amp too (controlled by enableAMP /
+ * disableAMP); whether you use it or feed line-out to the external amp
+ * is up to your wiring.
  *
  * Two pass gates:
- *   PASS 1/2  dfPlayer.begin() returns true (module ACKs over UART)
- *   PASS 2/2  Track 1 plays — auditory verification (you hear it)
+ *   PASS 1/2  DF1201S.begin() returns true (module ACKs over UART)
+ *   PASS 2/2  File 1 plays — auditory verification (you hear it)
  *
- * After PASS 2/2, the sketch replays track 1 every 20 s and prints
- * any DFPlayer events (track-finished, errors) as they arrive.
+ * Wiring (DF1201S, BENCH config):
+ *   DF1201S VCC  → ESP32 5V (3.3-5V acceptable; 5V gives full amp output)
+ *   DF1201S GND  → ESP32 GND  (and tie amp GND to the same point)
+ *   DF1201S RX   → ESP32 GPIO 25 (ESP32 TX)
+ *   DF1201S TX   → ESP32 GPIO 26 (ESP32 RX)
+ *   DF1201S SPK+ → external amp L+, OR direct to one speaker terminal
+ *   DF1201S SPK- → external amp L-, OR direct to other speaker terminal
  *
- * Wiring (DFPlayer Mini, BENCH config):
- *   DFPlayer VCC   → ESP32 5V (DFPlayer needs 5V; 3.3V will not boot it)
- *   DFPlayer GND   → ESP32 GND  (and tie amp GND to the same point)
- *   DFPlayer RX    → ESP32 GPIO 25 (ESP32 TX)  ← 1k series resistor
- *                                                 recommended (5V part,
- *                                                 3.3V driver)
- *   DFPlayer TX    → ESP32 GPIO 26 (ESP32 RX)
- *   DFPlayer SPK_1 → amp L input
- *   DFPlayer SPK_2 → amp R input  (or use DAC_R/DAC_L for line-level)
- *   DFPlayer GND   → amp GND (common ground is mandatory)
+ * Library: install "DFRobot_DF1201S" by DFRobot from Library Manager.
  *
- * NOTE: ESP32-side pins are RX=26, TX=25 — matches legend_cutter/config.h
- *       (DFPLAYER_RX_PIN=26, DFPLAYER_TX_PIN=25), so the boat firmware
- *       can reuse this wiring as-is.
- *
- * microSD prep:
- *   - Format FAT32.
- *   - Place file named exactly "0001.mp3" in the SD root (or in /mp3/).
- *   - DFPlayer indexes by physical file order, not by filename number,
- *     so put 0001.mp3 on the card FIRST (before copying anything else).
- *
- * Library: install "DFRobotDFPlayerMini" by DFRobot from Library Manager.
- *
- * DFPlayer Mini default: 9600 baud UART, volume 0–30.
+ * The on-board flash ships with a sample track at index 1, so this test
+ * works even with no SD card inserted.
  */
 
-#include <DFRobotDFPlayerMini.h>
+#include <DFRobot_DF1201S.h>
 
-const uint8_t  DFP_RX_PIN = 26;   // ESP32 reads from this (← DFPlayer TX)
-const uint8_t  DFP_TX_PIN = 25;   // ESP32 writes to this (→ DFPlayer RX)
-const uint32_t DFP_BAUD   = 9600;
-const uint8_t  DFP_VOLUME = 20;   // 0–30; bench test value, dial in for room
-const uint8_t  TEST_TRACK = 1;
+const uint8_t  DFP_RX_PIN = 26;   // ESP32 reads from this (← DF1201S TX)
+const uint8_t  DFP_TX_PIN = 25;   // ESP32 writes to this (→ DF1201S RX)
+const uint32_t DFP_BAUD   = 115200;
+const uint8_t  DFP_VOLUME = 20;   // 0–30
+const int16_t  TEST_TRACK = 1;
 const unsigned long REPLAY_INTERVAL_MS = 20000;
 
-// Bench test uses HardwareSerial(2) on custom pins — all three ESP32 UARTs
-// are free on the bench. Main firmware uses SoftwareSerial because UART1
-// (iBUS) and UART2 (GPS) are both occupied at runtime.
-HardwareSerial         dfSerial(2);
-DFRobotDFPlayerMini    dfPlayer;
+HardwareSerial      dfSerial(2);
+DFRobot_DF1201S     DF1201S;
 
-unsigned long bootMs        = 0;
-unsigned long lastPlayMs    = 0;
-unsigned long playCount     = 0;
-bool          beginOk       = false;
-bool          blindMode     = false;   // true = strict begin() failed; sending commands without ACK
-
-void printDFEvent(uint8_t type, int value) {
-  switch (type) {
-    case TimeOut:        Serial.println("  [DF] timeout (no reply)"); break;
-    case WrongStack:     Serial.println("  [DF] wrong stack"); break;
-    case DFPlayerCardInserted: Serial.println("  [DF] SD card inserted"); break;
-    case DFPlayerCardRemoved:  Serial.println("  [DF] SD card removed"); break;
-    case DFPlayerCardOnline:   Serial.println("  [DF] SD card online"); break;
-    case DFPlayerUSBInserted:  Serial.println("  [DF] USB inserted"); break;
-    case DFPlayerUSBRemoved:   Serial.println("  [DF] USB removed"); break;
-    case DFPlayerPlayFinished:
-      Serial.printf("  [DF] track %d finished\n", value); break;
-    case DFPlayerError:
-      Serial.printf("  [DF] error code %d ", value);
-      switch (value) {
-        case Busy:           Serial.println("(busy / card not found)"); break;
-        case Sleeping:       Serial.println("(sleeping)"); break;
-        case SerialWrongStack: Serial.println("(serial wrong stack)"); break;
-        case CheckSumNotMatch: Serial.println("(checksum mismatch)"); break;
-        case FileIndexOut:   Serial.println("(file index out of range — track missing on SD)"); break;
-        case FileMismatch:   Serial.println("(file mismatch)"); break;
-        case Advertise:      Serial.println("(in advertise)"); break;
-        default:             Serial.println("(unknown)"); break;
-      }
-      break;
-    default:
-      Serial.printf("  [DF] type=%u value=%d\n", type, value);
-      break;
-  }
-}
+unsigned long bootMs     = 0;
+unsigned long lastPlayMs = 0;
+unsigned long playCount  = 0;
+bool          beginOk    = false;
 
 void setup() {
   Serial.begin(115200);
@@ -99,66 +60,61 @@ void setup() {
   bootMs = millis();
 
   Serial.println("========================================");
-  Serial.println("  test_11_dfplayer");
+  Serial.println("  test_11_dfplayer (DF1201S / DFPlayer Pro)");
   Serial.println("========================================");
-  Serial.printf("HardwareSerial(2)  baud=%lu  RX=GPIO%d (← DFP TX)  TX=GPIO%d (→ DFP RX)\n",
+  Serial.printf("HardwareSerial(2)  baud=%lu  RX=GPIO%d (← DF1201S TX)  TX=GPIO%d (→ DF1201S RX)\n",
                 DFP_BAUD, DFP_RX_PIN, DFP_TX_PIN);
-  Serial.printf("Volume=%u/30  test track=%u  replay every %lus\n",
+  Serial.printf("Volume=%u/30  test track=%d  replay every %lus\n",
                 DFP_VOLUME, TEST_TRACK, REPLAY_INTERVAL_MS / 1000);
   Serial.println();
-  Serial.println("Step 1: opening UART and calling dfPlayer.begin()...");
-  Serial.println("(begin() can take ~3 s on a cold module while the SD spins up)");
+  Serial.println("Step 1: opening UART and calling DF1201S.begin()...");
+  Serial.println("(begin() can take 1-3 s)");
   Serial.println("----------------------------------------");
 
   dfSerial.begin(DFP_BAUD, SERIAL_8N1, DFP_RX_PIN, DFP_TX_PIN);
   delay(200);
 
-  if (dfPlayer.begin(dfSerial)) {
-    beginOk = true;
-    Serial.printf("PASS (1/2): DFPlayer responded (after %lu ms).\n",
-                  millis() - bootMs);
-  } else {
-    // Strict begin() (which expects an ACK frame back from the DFPlayer)
-    // failed. Fall back to BLIND mode: skip the ACK handshake entirely
-    // and just send commands. This isolates the failure:
-    //   - If audio plays in blind mode → forward path (ESP32→DFPlayer)
-    //     works; the return path (DFPlayer→ESP32) is what's broken
-    //     (bad RX wire, GND issue, or DFPlayer firmware quirk).
-    //   - If still silent in blind mode → forward path is also broken
-    //     (TX wire, GND, power), and no library setting will help.
-    Serial.println("WARN: strict begin() failed — DFPlayer did not ACK.");
-    Serial.println("  Falling back to BLIND MODE: sending commands without waiting for ACK.");
-    Serial.println("  Watch for raw bytes printed below — those are what (if anything) the");
-    Serial.println("  DFPlayer is sending back. If audio plays anyway, the return path is");
-    Serial.println("  the only broken link. If audio is still silent, check GND continuity");
-    Serial.printf( "  and TX wiring (GPIO%d → DFPlayer RX) before anything else.\n",
-                   DFP_TX_PIN);
-    Serial.println("----------------------------------------");
-    dfPlayer.begin(dfSerial, /*isACK=*/false, /*doReset=*/false);
-    blindMode = true;
-    beginOk   = true;
+  // begin() returns false until the module ACKs an AT query.
+  unsigned long beginStart = millis();
+  while (!DF1201S.begin(dfSerial)) {
+    if (millis() - beginStart > 5000) {
+      Serial.println("FAIL (1/2): DF1201S did not respond to begin() within 5 s.");
+      Serial.println("  Check, in this order:");
+      Serial.println("    1. VCC = 3.3-5V at the DF1201S VCC pad (multimeter)");
+      Serial.println("    2. GND tied between ESP32, DF1201S, and amp");
+      Serial.printf( "    3. ESP32 TX (GPIO%d) → DF1201S RX\n", DFP_TX_PIN);
+      Serial.printf( "    4. ESP32 RX (GPIO%d) ← DF1201S TX\n", DFP_RX_PIN);
+      Serial.println("    5. Library is DFRobot_DF1201S (NOT DFRobotDFPlayerMini)");
+      Serial.println("    6. Baud is 115200 (DF1201S default — NOT 9600 like the Mini)");
+      Serial.println("  The sketch will sit here. Fix wiring/library and reset.");
+      return;
+    }
+    Serial.print(".");
+    delay(500);
   }
+  Serial.println();
+  Serial.printf("PASS (1/2): DF1201S responded (after %lu ms).\n",
+                millis() - bootMs);
 
-  dfPlayer.volume(DFP_VOLUME);
-  delay(100);
-  Serial.printf("Step 2: playing track %u — listen for audio out of the speakers.\n",
+  // Configure: music mode, single-shot playback, set volume.
+  DF1201S.setVol(DFP_VOLUME);
+  DF1201S.switchFunction(DF1201S.MUSIC);
+  delay(2000);                          // SD/flash scan after switchFunction
+  DF1201S.setPlayMode(DF1201S.SINGLE);  // play once and stop, so we control replay timing
+  DF1201S.enableAMP();                  // safe even if you're feeding the external amp from line-out
+
+  Serial.printf("Step 2: playing file #%d — listen for audio out of the speakers.\n",
                 TEST_TRACK);
   Serial.println("----------------------------------------");
-  dfPlayer.play(TEST_TRACK);
+  DF1201S.playFileNum(TEST_TRACK);
   lastPlayMs = millis();
   playCount  = 1;
-  Serial.printf("[t=%5lus]  play #%lu  track=%u%s\n",
-                (millis() - bootMs) / 1000, playCount, TEST_TRACK,
-                blindMode ? "  (blind mode)" : "");
+  beginOk    = true;
+  Serial.printf("[t=%5lus]  play #%lu  file=%d\n",
+                (millis() - bootMs) / 1000, playCount, TEST_TRACK);
   Serial.println();
-  if (blindMode) {
-    Serial.println("Listening for raw bytes from the DFPlayer's TX line. Each line below");
-    Serial.println("starting with [raw] is one byte the ESP32 RX pin received. Expected on");
-    Serial.println("a healthy module: a 10-byte frame starting 0x7E ... 0xEF.");
-  } else {
-    Serial.println("PASS (2/2) is auditory: confirm you hear track 1 from the speakers.");
-    Serial.println("If silent, check: SD inserted, 0001.mp3 in root, amp powered, volume.");
-  }
+  Serial.println("PASS (2/2) is auditory: confirm you hear file 1 from the speakers.");
+  Serial.println("If silent, check: amp powered, volume, on-board AMP enabled (it is).");
 }
 
 void loop() {
@@ -167,28 +123,11 @@ void loop() {
     return;
   }
 
-  if (blindMode) {
-    // ---- Blind mode: dump raw bytes coming back on dfSerial ----
-    // The library is configured with isACK=false, so it will not consume
-    // these bytes. We see whatever the DFPlayer is actually transmitting.
-    while (dfSerial.available()) {
-      uint8_t b = dfSerial.read();
-      Serial.printf("  [raw] 0x%02X\n", b);
-    }
-  } else {
-    // ---- Strict mode: drain library event queue ----
-    if (dfPlayer.available()) {
-      printDFEvent(dfPlayer.readType(), dfPlayer.read());
-    }
-  }
-
-  // ---- Replay track 1 every 20 s ----
   if (millis() - lastPlayMs >= REPLAY_INTERVAL_MS) {
     playCount++;
-    Serial.printf("[t=%5lus]  play #%lu  track=%u%s\n",
-                  (millis() - bootMs) / 1000, playCount, TEST_TRACK,
-                  blindMode ? "  (blind mode)" : "");
-    dfPlayer.play(TEST_TRACK);
+    Serial.printf("[t=%5lus]  play #%lu  file=%d\n",
+                  (millis() - bootMs) / 1000, playCount, TEST_TRACK);
+    DF1201S.playFileNum(TEST_TRACK);
     lastPlayMs = millis();
   }
 }
