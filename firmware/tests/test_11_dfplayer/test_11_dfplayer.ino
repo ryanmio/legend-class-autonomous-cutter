@@ -61,6 +61,7 @@ unsigned long bootMs        = 0;
 unsigned long lastPlayMs    = 0;
 unsigned long playCount     = 0;
 bool          beginOk       = false;
+bool          blindMode     = false;   // true = strict begin() failed; sending commands without ACK
 
 void printDFEvent(uint8_t type, int value) {
   switch (type) {
@@ -116,29 +117,47 @@ void setup() {
     beginOk = true;
     Serial.printf("PASS (1/2): DFPlayer responded (after %lu ms).\n",
                   millis() - bootMs);
-    dfPlayer.volume(DFP_VOLUME);
-    delay(100);
-    Serial.printf("Step 2: playing track %u — listen for audio out of the speakers.\n",
-                  TEST_TRACK);
+  } else {
+    // Strict begin() (which expects an ACK frame back from the DFPlayer)
+    // failed. Fall back to BLIND mode: skip the ACK handshake entirely
+    // and just send commands. This isolates the failure:
+    //   - If audio plays in blind mode → forward path (ESP32→DFPlayer)
+    //     works; the return path (DFPlayer→ESP32) is what's broken
+    //     (bad RX wire, GND issue, or DFPlayer firmware quirk).
+    //   - If still silent in blind mode → forward path is also broken
+    //     (TX wire, GND, power), and no library setting will help.
+    Serial.println("WARN: strict begin() failed — DFPlayer did not ACK.");
+    Serial.println("  Falling back to BLIND MODE: sending commands without waiting for ACK.");
+    Serial.println("  Watch for raw bytes printed below — those are what (if anything) the");
+    Serial.println("  DFPlayer is sending back. If audio plays anyway, the return path is");
+    Serial.println("  the only broken link. If audio is still silent, check GND continuity");
+    Serial.printf( "  and TX wiring (GPIO%d → DFPlayer RX) before anything else.\n",
+                   DFP_TX_PIN);
     Serial.println("----------------------------------------");
-    dfPlayer.play(TEST_TRACK);
-    lastPlayMs = millis();
-    playCount  = 1;
-    Serial.printf("[t=%5lus]  play #%lu  track=%u\n",
-                  (millis() - bootMs) / 1000, playCount, TEST_TRACK);
-    Serial.println();
+    dfPlayer.begin(dfSerial, /*isACK=*/false, /*doReset=*/false);
+    blindMode = true;
+    beginOk   = true;
+  }
+
+  dfPlayer.volume(DFP_VOLUME);
+  delay(100);
+  Serial.printf("Step 2: playing track %u — listen for audio out of the speakers.\n",
+                TEST_TRACK);
+  Serial.println("----------------------------------------");
+  dfPlayer.play(TEST_TRACK);
+  lastPlayMs = millis();
+  playCount  = 1;
+  Serial.printf("[t=%5lus]  play #%lu  track=%u%s\n",
+                (millis() - bootMs) / 1000, playCount, TEST_TRACK,
+                blindMode ? "  (blind mode)" : "");
+  Serial.println();
+  if (blindMode) {
+    Serial.println("Listening for raw bytes from the DFPlayer's TX line. Each line below");
+    Serial.println("starting with [raw] is one byte the ESP32 RX pin received. Expected on");
+    Serial.println("a healthy module: a 10-byte frame starting 0x7E ... 0xEF.");
+  } else {
     Serial.println("PASS (2/2) is auditory: confirm you hear track 1 from the speakers.");
     Serial.println("If silent, check: SD inserted, 0001.mp3 in root, amp powered, volume.");
-  } else {
-    Serial.println("FAIL (1/2): DFPlayer did not respond to begin().");
-    Serial.println("  Check, in this order:");
-    Serial.println("    1. VCC = 5V (NOT 3.3V — DFPlayer needs 5V to boot)");
-    Serial.println("    2. GND tied between ESP32, DFPlayer, and amp");
-    Serial.printf( "    3. ESP32 TX (GPIO%d) → DFPlayer RX (1k series ok/preferred)\n",
-                   DFP_TX_PIN);
-    Serial.printf( "    4. ESP32 RX (GPIO%d) ← DFPlayer TX\n", DFP_RX_PIN);
-    Serial.println("    5. SD card present, FAT32, has 0001.mp3");
-    Serial.println("  The sketch will sit here. Fix wiring and reset.");
   }
 }
 
@@ -148,16 +167,27 @@ void loop() {
     return;
   }
 
-  // ---- Drain DFPlayer event queue (track-finished, errors, SD events) ----
-  if (dfPlayer.available()) {
-    printDFEvent(dfPlayer.readType(), dfPlayer.read());
+  if (blindMode) {
+    // ---- Blind mode: dump raw bytes coming back on dfSerial ----
+    // The library is configured with isACK=false, so it will not consume
+    // these bytes. We see whatever the DFPlayer is actually transmitting.
+    while (dfSerial.available()) {
+      uint8_t b = dfSerial.read();
+      Serial.printf("  [raw] 0x%02X\n", b);
+    }
+  } else {
+    // ---- Strict mode: drain library event queue ----
+    if (dfPlayer.available()) {
+      printDFEvent(dfPlayer.readType(), dfPlayer.read());
+    }
   }
 
   // ---- Replay track 1 every 20 s ----
   if (millis() - lastPlayMs >= REPLAY_INTERVAL_MS) {
     playCount++;
-    Serial.printf("[t=%5lus]  play #%lu  track=%u\n",
-                  (millis() - bootMs) / 1000, playCount, TEST_TRACK);
+    Serial.printf("[t=%5lus]  play #%lu  track=%u%s\n",
+                  (millis() - bootMs) / 1000, playCount, TEST_TRACK,
+                  blindMode ? "  (blind mode)" : "");
     dfPlayer.play(TEST_TRACK);
     lastPlayMs = millis();
   }
