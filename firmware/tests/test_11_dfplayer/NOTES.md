@@ -58,13 +58,13 @@ Install via Arduino IDE → Library Manager:
 |-------------|-----------|-------|
 | VIN | **3.3V** | 5V works only with a level shifter on TX. 3.3V is the safe default and matches the Fitz reference. |
 | GND | GND | Tie ESP32 GND, DF1201S GND, and amp GND together |
-| RX  | **GPIO 26** (ESP32 TX) | |
-| TX  | **GPIO 27** (ESP32 RX) | |
+| RX  | **GPIO 26** (ESP32's TX line) | |
+| TX  | **GPIO 25** (ESP32's RX line) | |
 | SPK+ | amp L+ input | Or direct to one terminal of an 8Ω speaker |
 | SPK- | amp L- input | Or other terminal of the speaker |
 | GND (amp) | shared GND | Floating amp GND = no audio + buzz |
 
-> **Pinout differs from `legend_cutter/config.h` and from the original test_11 plan.** config.h was written when the project still expected a DFPlayer Mini and used GPIO 25/26. Bench bringup against the Fitz reference (the working sister project) revealed that 25/26 with 5V VIN does not work — the proven combination is **GPIO 26/27 with 3.3V VIN**. config.h needs to be updated to match before the boat firmware can drive this module.
+> Pinout matches `legend_cutter/config.h` (`DFPLAYER_TX_PIN=25`, `DFPLAYER_RX_PIN=26`). Cross-cutting note: the working Fitz sister-project sketch (`EdmundFitzgeraldController/firmware/dfplayer_diagnostic`) uses **GPIO 26/27** instead — either pin pair works on ESP32, but if you ever copy logic between projects, double-check the pins.
 
 ---
 
@@ -96,7 +96,7 @@ Optional. The DF1201S ships with a working sample at index 1 in internal flash, 
 ========================================
   test_11_dfplayer (DF1201S / DFPlayer Pro)
 ========================================
-HardwareSerial(2)  baud=115200  RX=GPIO27 (← DF1201S TX)  TX=GPIO26 (→ DF1201S RX)
+HardwareSerial(2)  baud=115200  RX=GPIO25 (← DF1201S TX)  TX=GPIO26 (→ DF1201S RX)
 Volume=20/30  test track=1  replay every 20s
 
 Step 1: opening UART and calling DF1201S.begin()...
@@ -145,12 +145,10 @@ If silent, check: amp powered, volume, on-board AMP enabled (it is).
 This bringup took three false starts before working:
 1. First built against the **DFPlayer Mini library at 9600 baud** — `begin()` always timed out. Tried both pin orderings, multimeter-confirmed power, confirmed audio-via-play-button. Nothing worked.
 2. User pointed at the [DFRobot_DF1201S repo](https://github.com/DFRobot/DFRobot_DF1201S) — the module is actually a **DF1201S (DFPlayer Pro)**, not a Mini. Library swapped to `DFRobot_DF1201S` at 115200 baud. `begin()` *still* failed.
-3. User pointed at working code at `EdmundFitzgeraldController/firmware/dfplayer_diagnostic` (the "Fitz" reference). Three differences from our setup explained it:
-   - **Pins**: Fitz uses GPIO **26/27** (TX/RX). Our wires were on 25/26.
+3. User pointed at working code at `EdmundFitzgeraldController/firmware/dfplayer_diagnostic` (the "Fitz" reference). Two differences from our setup mattered:
    - **VIN**: Fitz uses **3.3V**. We had 5V — which needs a level shifter on the ESP32-3.3V TX → DF1201S RX line, or `begin()` times out.
    - **Settle delay**: Fitz waits **1000 ms** after `Serial2.begin` before `DF1201S.begin()`. We had 200 ms.
-
-   Aligning to all three made it work.
+   - (Pins: Fitz happens to use GPIO 26/27. Either pair works on ESP32 — we kept 25/26 to match `config.h`.)
 
 The lessons:
 - When `begin()` fails with confirmed power and confirmed audio, suspect a module identification mismatch before chasing wiring further — but

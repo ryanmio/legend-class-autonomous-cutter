@@ -23,15 +23,23 @@
  *   PASS 1/2  DF1201S.begin() returns true (module ACKs over UART)
  *   PASS 2/2  File 1 plays — auditory verification (you hear it)
  *
- * Wiring (DF1201S, BENCH config — matches working Fitz reference):
+ * Wiring (DF1201S, BENCH config):
  *   DF1201S VIN  → ESP32 3.3V  (5V works only with a level shifter on the
  *                                ESP32-TX → DF1201S-RX line; without one,
- *                                begin() times out. 3.3V is the safe default.)
+ *                                begin() times out. 3.3V is the safe default
+ *                                used by the working Fitz reference.)
  *   DF1201S GND  → ESP32 GND   (and tie amp GND to the same point)
- *   DF1201S RX   → ESP32 GPIO 26 (ESP32 TX)
- *   DF1201S TX   → ESP32 GPIO 27 (ESP32 RX)
+ *   DF1201S RX   → ESP32 GPIO 26 (this is ESP32's TX line)
+ *   DF1201S TX   → ESP32 GPIO 25 (this is ESP32's RX line)
  *   DF1201S SPK+ → external amp L+, OR direct to one speaker terminal
  *   DF1201S SPK- → external amp L-, OR direct to other speaker terminal
+ *
+ * Sanity-check the data lines:
+ *   - The pin labeled RX on the DF1201S board is an INPUT. It must
+ *     connect to ESP32 GPIO 26 (the OUTPUT in this sketch).
+ *   - The pin labeled TX on the DF1201S board is an OUTPUT. It must
+ *     connect to ESP32 GPIO 25 (the INPUT in this sketch).
+ *   - If you wire RX→RX or TX→TX, begin() will fail forever.
  *
  * Library: install "DFRobot_DF1201S" by DFRobot from Library Manager.
  *
@@ -41,7 +49,7 @@
 
 #include <DFRobot_DF1201S.h>
 
-const uint8_t  DFP_RX_PIN = 27;   // ESP32 reads from this (← DF1201S TX)
+const uint8_t  DFP_RX_PIN = 25;   // ESP32 reads from this (← DF1201S TX)
 const uint8_t  DFP_TX_PIN = 26;   // ESP32 writes to this (→ DF1201S RX)
 const uint32_t DFP_BAUD   = 115200;
 const uint8_t  DFP_VOLUME = 20;   // 0–30
