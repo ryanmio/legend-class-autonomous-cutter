@@ -19,18 +19,17 @@
  * Wiring (DFPlayer Mini, BENCH config):
  *   DFPlayer VCC   → ESP32 5V (DFPlayer needs 5V; 3.3V will not boot it)
  *   DFPlayer GND   → ESP32 GND  (and tie amp GND to the same point)
- *   DFPlayer RX    → ESP32 GPIO 26 (ESP32 TX)  ← 1k series resistor
+ *   DFPlayer RX    → ESP32 GPIO 25 (ESP32 TX)  ← 1k series resistor
  *                                                 recommended (5V part,
  *                                                 3.3V driver)
- *   DFPlayer TX    → ESP32 GPIO 25 (ESP32 RX)
+ *   DFPlayer TX    → ESP32 GPIO 26 (ESP32 RX)
  *   DFPlayer SPK_1 → amp L input
  *   DFPlayer SPK_2 → amp R input  (or use DAC_R/DAC_L for line-level)
  *   DFPlayer GND   → amp GND (common ground is mandatory)
  *
- * NOTE: This pinout (ESP32 RX=25, TX=26) is the OPPOSITE of the
- *       legend_cutter/config.h current values (RX=26, TX=25). If this
- *       test passes as wired, update config.h to match before flashing
- *       the main firmware.
+ * NOTE: ESP32-side pins are RX=26, TX=25 — matches legend_cutter/config.h
+ *       (DFPLAYER_RX_PIN=26, DFPLAYER_TX_PIN=25), so the boat firmware
+ *       can reuse this wiring as-is.
  *
  * microSD prep:
  *   - Format FAT32.
@@ -45,8 +44,8 @@
 
 #include <DFRobotDFPlayerMini.h>
 
-const uint8_t  DFP_RX_PIN = 25;   // ESP32 reads from this (← DFPlayer TX)
-const uint8_t  DFP_TX_PIN = 26;   // ESP32 writes to this (→ DFPlayer RX)
+const uint8_t  DFP_RX_PIN = 26;   // ESP32 reads from this (← DFPlayer TX)
+const uint8_t  DFP_TX_PIN = 25;   // ESP32 writes to this (→ DFPlayer RX)
 const uint32_t DFP_BAUD   = 9600;
 const uint8_t  DFP_VOLUME = 20;   // 0–30; bench test value, dial in for room
 const uint8_t  TEST_TRACK = 1;

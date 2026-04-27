@@ -48,13 +48,13 @@ Install via Arduino IDE → Library Manager:
 |--------------|-----------|-------|
 | VCC | **5V** | NOT 3.3V — module needs 5V to boot reliably |
 | GND | GND | Tie ESP32 GND, DFPlayer GND, and amp GND together |
-| RX  | **GPIO 26** (ESP32 TX) | Put a 1kΩ series resistor in this line |
-| TX  | **GPIO 25** (ESP32 RX) | |
+| RX  | **GPIO 25** (ESP32 TX) | Put a 1kΩ series resistor in this line |
+| TX  | **GPIO 26** (ESP32 RX) | |
 | SPK_1 | amp L input | Or direct to one terminal of an 8Ω speaker for mono |
 | SPK_2 | amp R input | Or other terminal of the speaker |
 | GND (amp) | shared GND | Floating amp GND = no audio + buzz |
 
-> **Pinout differs from `legend_cutter/config.h`.** As of 2026-04-27, config.h declares `DFPLAYER_TX_PIN=25` and `DFPLAYER_RX_PIN=26` (i.e. ESP32 RX=26, TX=25). This test uses ESP32 RX=25, TX=26 per the user's bench wiring. If this test passes as wired, swap the two `#define`s in config.h before flashing the main firmware.
+> Pinout matches `legend_cutter/config.h` (`DFPLAYER_TX_PIN=25`, `DFPLAYER_RX_PIN=26` — ESP32-side: RX=26, TX=25), so the boat firmware can reuse this wiring as-is.
 
 ---
 
@@ -86,7 +86,7 @@ If track 1 plays the wrong file, reformat and re-copy in order. There is no othe
 ========================================
   test_11_dfplayer
 ========================================
-HardwareSerial(2)  baud=9600  RX=GPIO25 (← DFP TX)  TX=GPIO26 (→ DFP RX)
+HardwareSerial(2)  baud=9600  RX=GPIO26 (← DFP TX)  TX=GPIO25 (→ DFP RX)
 Volume=20/30  test track=1  replay every 20s
 
 Step 1: opening UART and calling dfPlayer.begin()...
