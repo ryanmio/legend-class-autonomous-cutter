@@ -23,11 +23,13 @@
  *   PASS 1/2  DF1201S.begin() returns true (module ACKs over UART)
  *   PASS 2/2  File 1 plays — auditory verification (you hear it)
  *
- * Wiring (DF1201S, BENCH config):
- *   DF1201S VCC  → ESP32 5V (3.3-5V acceptable; 5V gives full amp output)
- *   DF1201S GND  → ESP32 GND  (and tie amp GND to the same point)
- *   DF1201S RX   → ESP32 GPIO 25 (ESP32 TX)
- *   DF1201S TX   → ESP32 GPIO 26 (ESP32 RX)
+ * Wiring (DF1201S, BENCH config — matches working Fitz reference):
+ *   DF1201S VIN  → ESP32 3.3V  (5V works only with a level shifter on the
+ *                                ESP32-TX → DF1201S-RX line; without one,
+ *                                begin() times out. 3.3V is the safe default.)
+ *   DF1201S GND  → ESP32 GND   (and tie amp GND to the same point)
+ *   DF1201S RX   → ESP32 GPIO 26 (ESP32 TX)
+ *   DF1201S TX   → ESP32 GPIO 27 (ESP32 RX)
  *   DF1201S SPK+ → external amp L+, OR direct to one speaker terminal
  *   DF1201S SPK- → external amp L-, OR direct to other speaker terminal
  *
@@ -39,8 +41,8 @@
 
 #include <DFRobot_DF1201S.h>
 
-const uint8_t  DFP_RX_PIN = 26;   // ESP32 reads from this (← DF1201S TX)
-const uint8_t  DFP_TX_PIN = 25;   // ESP32 writes to this (→ DF1201S RX)
+const uint8_t  DFP_RX_PIN = 27;   // ESP32 reads from this (← DF1201S TX)
+const uint8_t  DFP_TX_PIN = 26;   // ESP32 writes to this (→ DF1201S RX)
 const uint32_t DFP_BAUD   = 115200;
 const uint8_t  DFP_VOLUME = 20;   // 0–30
 const int16_t  TEST_TRACK = 1;
@@ -72,7 +74,7 @@ void setup() {
   Serial.println("----------------------------------------");
 
   dfSerial.begin(DFP_BAUD, SERIAL_8N1, DFP_RX_PIN, DFP_TX_PIN);
-  delay(200);
+  delay(1000);   // Fitz reference uses 1 s here; shorter values fail begin() intermittently.
 
   // begin() returns false until the module ACKs an AT query.
   unsigned long beginStart = millis();
