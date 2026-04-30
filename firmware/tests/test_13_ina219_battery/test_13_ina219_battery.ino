@@ -26,12 +26,17 @@
  * Library: install "Adafruit INA219" by Adafruit from Library Manager.
  *
  * Calibration: setCalibration_32V_2A() — 32 V bus range, ±3.2 A current
- * range with the breakout's stock 0.1 Ω shunt. This covers the 4S LiPo
- * voltage (max 16.8 V) and idle/no-load current. For motor draw above
- * ~3 A you'll see the current reading saturate; that's OK for a battery
- * monitor test (the voltage reading is what we care about) but the full
- * boat firmware needs a heftier shunt or an INA226/228 for runtime
- * current logging.
+ * range with the breakout's stock 0.1 Ω shunt. Covers full 4S LiPo
+ * voltage (max 16.8 V) at any current, since voltage measurement is
+ * independent of the shunt.
+ *
+ * For SoC% / remaining-battery-percent monitoring this is sufficient:
+ * the algorithm is voltage-based (V_pack → V/cell → lookup curve), and
+ * voltage stays accurate at any current. Current readings saturate
+ * above ~3 A under motor load — fine for verifying idle draw, and
+ * irrelevant to battery-percent estimation. A swap to a lower-value
+ * shunt or an INA226/228 would only matter if you wanted real-time
+ * motor-current telemetry, which this project doesn't.
  */
 
 #include <Wire.h>

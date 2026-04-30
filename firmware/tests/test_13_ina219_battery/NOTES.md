@@ -60,11 +60,17 @@ The sketch calls `setCalibration_32V_2A()`:
 - Current range: ±3.2 A with the breakout's stock 0.1 Ω shunt
 - LSB: ~100 µA on current, 4 mV on bus voltage
 
-This is fine for a bench bringup of the sensor. Under motor load the boat will pull well above 3 A and the current reading will saturate. That's a known limitation and out of scope for this test — for runtime current logging the boat firmware needs either:
-- a lower-value shunt (e.g., 0.01 Ω) plus manual `setCalibration_*` recalculation, or
-- a higher-range chip like the **INA226** (36 V, programmable shunt) or **INA228** (85 V, 20-bit).
+**For measuring remaining battery percent (this project's actual use case): the INA219 with default calibration is sufficient.** Voltage measurement is independent of the shunt and stays accurate at any current — 0-32 V clean across the full 4S range. State-of-charge estimation is voltage-based (4.20 → 3.30 V/cell lookup), which is the standard approach for RC/small-craft battery monitors.
 
-Voltage measurement remains accurate at any current — pack voltage is what this test gates on.
+What the default calibration *can't* do:
+- Read instantaneous current above ~3.2 A (clips at the rail).
+- Coulomb-count under motor load (current integrand is wrong when the reading saturates).
+
+If you ever want true motor-current telemetry or Ah accounting (you don't, for SoC%), you'd need a lower-value shunt (e.g., 0.01 Ω with manual `setCalibration_*`) or a higher-range chip like the **INA226** / **INA228**. That's a future-feature decision, not a blocker for the battery monitor.
+
+Caveats of voltage-based SoC to keep in mind:
+- Voltage sags under load — a momentary 30 A pull briefly reads low. Average over a second or only trigger RTH at idle.
+- LiPo discharge curve is flat between ~50-30% SoC, so percentage gets fuzzy in that band. The RTH/ALARM voltage thresholds in `config.h` are still meaningful — they sit on the steep part of the curve.
 
 ---
 
