@@ -143,13 +143,19 @@ State labels (from pack voltage):
 
 - [x] `PASS (1/3)` — INA219 detected
 - [x] `PASS (2/3)` — pack voltage in 10.0-17.5 V band
-- [x] `PASS (3/3)` — current reading finite (saturated, see notes below)
-- [x] (visual) Pack voltage matches a real 4S LiPo reading (~13.96 V observed)
+- [x] `PASS (3/3)` — current reading finite (reads 0.00 A — shunt jumpered)
+- [x] (visual) Pack voltage matches multimeter at battery terminals (15.00 V on chip vs 15.12 V on multimeter — within 0.12 V)
 - [ ] (visual) Voltage sags under load and recovers when load drops — not exercised; not required for SoC%
 
 ## Result — 2026-04-29
 
-**Status: PASS (voltage-only configuration).**
+**Status: PASS (voltage-only configuration with shunt jumpered).**
+
+Stable readings on a 4S LiPo at ~50% SoC:
+```
+V_bus=15.00V  V_shunt= +0.05mV  V_pack=15.00V  V/cell=3.75V  I=-0.00A  P=-0.00W  SoC=50%  [good]
+V_bus=15.04V  V_shunt= +0.02mV  V_pack=15.04V  V/cell=3.76V  I=-0.00A  P=-0.00W  SoC=52%  [good]
+```
 
 ### Final wiring on the boat
 
@@ -157,23 +163,28 @@ State labels (from pack voltage):
 - INA219 GND → boat negative
 - INA219 SDA / SCL → ESP32 GPIO 21 / 22
 - INA219 VIN+ → battery (+) (high side)
-- **INA219 VIN-** → **disconnected / capped** (Option A — see "Bringup notes" below)
+- **INA219 VIN- → jumpered directly to VIN+ on the breakout** (shorts the on-board shunt; tying VIN- to battery voltage is what makes `getBusVoltage_V()` read accurately)
+- INA219 VIN- screw terminal → nothing connected externally
 
-### Bringup notes — what went wrong and why VIN- is disconnected
+### Bringup notes — what went wrong and how we ended up here
 
-First attempt wired VIN- back to the negative wago that returns to battery (-). That created a direct short across the 0.1 Ω shunt: battery+ → VIN+ → shunt → VIN- → battery-. The boat was briefly powered on in this state. Afterwards V_pack reads correctly (13.96 V on a healthy 4S) but current is pinned at the +3.20 A saturation rail (V_shunt = +320 mV at the cal limit), strongly suggesting the surface-mount shunt resistor on the breakout burned open during the short. The chip's I2C and voltage measurement still work — only the current path is dead.
+1. **First attempt** wired VIN- back to the negative wago that returns to battery (-). That created a direct short across the 0.1 Ω shunt: battery+ → VIN+ → shunt → VIN- → battery-. The boat was briefly powered on in this state. The on-board surface-mount shunt resistor very likely burned open during this short — current readings have been pinned at the +3.20 A saturation rail ever since.
 
-For this project's actual use case — **remaining battery percent** — voltage is what matters, and voltage measurement is independent of the shunt. So the breakout is left in place with VIN- disconnected, and the firmware reads pack voltage cleanly. SoC% works.
+2. **Second attempt (intermediate, wrong)** disconnected VIN- entirely, leaving the screw terminal floating. V_bus *appeared* to read a believable low-4S number (~13.6 V), so the test was initially marked PASS. **It was wrong.** The INA219 measures bus voltage at the VIN- pin (per the TI datasheet), so a floating VIN- gives a meaningless reading that just happened to look plausible. Multimeter at the battery showed 15.12 V at the same time the chip reported 13.6 V — a ~1.5 V discrepancy proved the floating reading was junk.
+
+3. **Final fix** jumpered VIN+ directly to VIN- on the breakout itself. This ties VIN- to battery voltage, so `getBusVoltage_V()` now reads the actual battery (15.00 V on the chip vs 15.12 V on the multimeter — within 0.12 V, the expected accuracy of an INA219 doing low-current bus voltage). V_shunt drops to noise (+0.05 mV) and current reports 0.00 A, which is honest because there's no path for current to flow.
+
+The lesson for future-anyone: with the on-board shunt damaged, "leave VIN- disconnected" is **not** equivalent to "jumper VIN+ to VIN-". The first floats the bus measurement; the second forces it to battery voltage. Always do the jumper.
 
 ### What this means for the runtime firmware
 
 `legend_cutter/battery.cpp`:
-- `voltageV` computation (`getBusVoltage_V() + getShuntVoltage_mV()/1000`): works correctly. Voltage drives `lowVoltage` and `criticalVoltage` flags via `BATTERY_ALARM_VOLTAGE` / `BATTERY_RTH_VOLTAGE`. ✓
-- `currentA` and `powerW`: report bogus saturated values. Not consumed by the runtime alarm/RTH logic, so harmless — but anything that *does* read them downstream (telemetry, logging, future features) will see noise instead of real current.
+- `voltageV = getBusVoltage_V() + getShuntVoltage_mV()/1000`: works correctly. With the jumper, V_bus is battery voltage and V_shunt is ~0, so voltageV ≈ battery voltage. Voltage drives `lowVoltage` and `criticalVoltage` flags via `BATTERY_ALARM_VOLTAGE` / `BATTERY_RTH_VOLTAGE`. ✓
+- `currentA` and `powerW`: report 0.00 A / 0.00 W (no current can flow through a jumper-shorted shunt). Not consumed by the runtime alarm/RTH logic, so harmless — but anything that *does* read them downstream (telemetry, logging, future features) will see zeros instead of real values.
 
 ### Followups (if anyone ever wants real current measurement)
 
-- Replace the breakout (the on-board shunt is likely toast).
+- Replace the breakout (the on-board shunt is toast and now bypassed by the jumper).
 - Wire VIN+ ← battery (+) main switch output, VIN- → 14 V positive distribution to ESC + BEC inputs (i.e. cut the 14 V positive bus and put the INA219 in series with it). NOT to the 5 V wago — that's downstream of a BEC and won't see real battery current.
 - Default `setCalibration_32V_2A()` will still saturate above ~3 A. For real motor-current logging, swap to a lower-value shunt (e.g., 0.01 Ω with manual `setCalibration_*` numbers) or upgrade to an INA226 / INA228.
 - None of that is needed for battery percent.
