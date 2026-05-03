@@ -2,11 +2,17 @@
  * test_10b_bn220_gps_boat.ino
  *
  * Same test as test_10_bn220_gps, but pinned for the BOAT (in-hull) wiring:
- *   GPS TX (green) → ESP32 GPIO 4   (UART2 RX in this sketch)
- *   GPS RX (white) → ESP32 GPIO 17  (UART2 TX, optional)
+ *   GPS TX (white) → ESP32 GPIO 17  (UART2 RX in this sketch)
+ *   GPS RX (green) → ESP32 GPIO 4   (UART2 TX, optional)
  *
- * GPIO 4 is the permanent GPS RX pin per the project pinout. test_10
- * (bench) uses GPIO 18 because that's what was wired on the breadboard.
+ * The boat's permanent harness has white going to GPIO 17 and green to
+ * GPIO 4. test_10 (bench) uses GPIO 18 / GPIO 17 because that's what
+ * was wired on the breadboard.
+ *
+ * Wire-color note: this batch of BN-220s has white=TX, green=RX —
+ * REVERSED from typical convention. Confirmed empirically 2026-05-03
+ * after this test failed for weeks under the wrong assumption. ESP32
+ * RX pin (GPS_RX_PIN) MUST connect to the white wire to get NMEA.
  *
  * Three pass gates:
  *   PASS 1/3  Bytes arriving on UART2 RX
@@ -29,8 +35,8 @@
 TinyGPSPlus     gps;
 HardwareSerial  gpsSerial(2);
 
-const uint8_t  GPS_RX_PIN = 4;    // ESP32 reads from this (← BN-220 TX, green)
-const uint8_t  GPS_TX_PIN = 17;   // ESP32 writes to this (→ BN-220 RX, white)
+const uint8_t  GPS_RX_PIN = 17;   // ESP32 reads from this (← BN-220 TX, white)
+const uint8_t  GPS_TX_PIN = 4;    // ESP32 writes to this (→ BN-220 RX, green)
 const uint32_t GPS_BAUD   = 9600;
 
 enum TestState { WAIT_BYTES, WAIT_SENTENCES, WAIT_FIX, LIVE };
@@ -104,7 +110,7 @@ void setup() {
   Serial.println("  test_10b_bn220_gps_boat");
   Serial.println("  (boat / in-hull pin config)");
   Serial.println("========================================");
-  Serial.printf("UART2  baud=%lu  RX=GPIO%d (← BN-220 TX, green)  TX=GPIO%d (→ BN-220 RX, white)\n",
+  Serial.printf("UART2  baud=%lu  RX=GPIO%d (← BN-220 TX, white)  TX=GPIO%d (→ BN-220 RX, green)\n",
                 GPS_BAUD, GPS_RX_PIN, GPS_TX_PIN);
   Serial.println();
   Serial.println("If the BN-220 LED is dark, suspect power at the module first.");

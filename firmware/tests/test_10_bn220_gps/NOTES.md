@@ -45,12 +45,10 @@ Install via Arduino IDE → Library Manager:
 |-----------|------------|-----------|----------|-------|
 | VCC | red | **3.3V** | 3.3V | 5V tolerated but 3.3V is safe on all batches |
 | GND | black | GND | GND | |
-| TX  | **green** | **GPIO 18** | **GPIO 4** | GPS TX → ESP32 RX (cross-over). Bench uses 18 because 16 is reserved for iBUS; permanent install moves to GPIO 4. |
-| RX  | **white** | **GPIO 17** | **GPIO 17** | ESP32 TX → GPS RX. Same pin both places. |
+| TX  | **white** | **GPIO 18** | **GPIO 17** | GPS TX → ESP32 RX (cross-over). Bench uses 18 because GPIO 17 was already taken by the GPS-RX line on the breadboard. |
+| RX  | **green** | **GPIO 17** | **GPIO 4**  | ESP32 TX → GPS RX. Optional — leave disconnected if you don't plan to send config to the GPS. |
 
-> Confirmed wire colors on this module: green = TX, white = RX. Verify against the BN-220 silkscreen if a different batch is used.
-
-GPIO 16 is reserved for iBUS (test_03), so the bench sketch maps UART2 RX to GPIO 18. The permanent firmware uses GPIO 4 (CLAUDE.md pinout).
+> **Wire colors on this batch are REVERSED from typical convention.** White = TX, green = RX, confirmed empirically 2026-05-03 after weeks of "1 byte then silence" failures under the wrong assumption. Don't trust BN-220 silkscreen or third-party docs — go by what the bench passed with. If you swap to a different batch, re-verify by checking which pin the blue LED's transitions correlate with.
 
 ---
 
@@ -70,7 +68,7 @@ GPIO 16 is reserved for iBUS (test_03), so the bench sketch maps UART2 RX to GPI
 ========================================
   test_10_bn220_gps
 ========================================
-UART2  baud=9600  RX=GPIO18 (← BN-220 TX, green)  TX=GPIO17 (→ BN-220 RX, white)
+UART2  baud=9600  RX=GPIO18 (← BN-220 TX)  TX=GPIO17 (→ BN-220 RX)
 
 Cold-start TTFF (time to first fix):
   outdoors clear sky : ~30 s
@@ -124,8 +122,8 @@ Streaming 1 Hz fix data. Walk around to verify lat/lon updates.
 
 ## Result — 2026-04-26
 
-6 satellites acquired. Green (GPS TX) → GPIO 18, white (GPS RX) → GPIO 17.
+6 satellites acquired. **Original wiring report was wrong about colors.** Re-verified 2026-05-03: this batch has white=TX, green=RX, so the working bench wiring is **white → GPIO 18** (ESP32 RX) and **green → GPIO 17** (ESP32 TX). The 2026-04-26 PASS would have been with the wires in those physical positions but mislabeled in the notes.
 
-In the boat, green moves to GPIO 4 (permanent iBUS-clear RX pin per pinout). White stays on GPIO 17.
+In the boat, white goes to GPIO 17, green to GPIO 4 — see `test_10b` NOTES for the in-hull pass.
 
 **Status: PASS**

@@ -17,10 +17,16 @@
  *   BN-220 VCC (red)    → ESP32 3.3V         (5V usually OK but 3.3V is
  *                                              unconditionally safe)
  *   BN-220 GND (black)  → ESP32 GND
- *   BN-220 TX  (green)  → ESP32 GPIO 18  (UART2 RX in this sketch)
- *   BN-220 RX  (white)  → ESP32 GPIO 17  (UART2 TX — optional; leave
+ *   BN-220 TX  (white)  → ESP32 GPIO 18  (UART2 RX in this sketch)
+ *   BN-220 RX  (green)  → ESP32 GPIO 17  (UART2 TX — optional; leave
  *                                          disconnected unless you plan
  *                                          to send config to the GPS)
+ *
+ * Wire-color note: this batch of BN-220s has white=TX, green=RX —
+ * REVERSED from the typical convention (and from what these comments
+ * said before 2026-05-03). Confirmed empirically: green→17 / white→18
+ * is the only configuration that produces NMEA. Don't trust silkscreen
+ * or third-party docs — go by what the bench passed with.
  *
  * Library: install "TinyGPSPlus" by Mikal Hart from Library Manager.
  *
@@ -32,8 +38,8 @@
 TinyGPSPlus     gps;
 HardwareSerial  gpsSerial(2);
 
-const uint8_t  GPS_RX_PIN = 18;   // ESP32 reads from this (← BN-220 TX, green)
-const uint8_t  GPS_TX_PIN = 17;   // ESP32 writes to this (→ BN-220 RX, white)
+const uint8_t  GPS_RX_PIN = 18;   // ESP32 reads from this (← BN-220 TX, white)
+const uint8_t  GPS_TX_PIN = 17;   // ESP32 writes to this (→ BN-220 RX, green)
 const uint32_t GPS_BAUD   = 9600;
 
 enum TestState { WAIT_BYTES, WAIT_SENTENCES, WAIT_FIX, LIVE };

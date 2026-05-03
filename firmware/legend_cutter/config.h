@@ -16,8 +16,12 @@
 #define IBUS_RX_PIN       16   // UART1 RX — 5V signal, use 1K+2K voltage divider
 
 // GPS (BN-220 u-blox NEO-M8N)
-#define GPS_RX_PIN         4   // UART2 RX — NMEA from GPS
-#define GPS_TX_PIN        17   // UART2 TX — config commands to GPS (if needed)
+// Wire colors on the boat harness: white=BN-220 TX, green=BN-220 RX.
+// (This batch is REVERSED from typical convention — confirmed 2026-05-03.)
+//   white → GPIO 17 (ESP32 reads NMEA here)
+//   green → GPIO 4  (ESP32 writes here, optional)
+#define GPS_RX_PIN        17   // UART2 RX — NMEA from GPS (← white)
+#define GPS_TX_PIN         4   // UART2 TX — config commands to GPS (→ green, optional)
 #define GPS_BAUD        9600   // Default BN-220 baud rate
 
 // I2C bus — shared by PCA9685, INA219, ICM-20948

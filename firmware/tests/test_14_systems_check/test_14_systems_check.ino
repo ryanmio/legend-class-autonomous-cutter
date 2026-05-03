@@ -27,10 +27,13 @@
  * Wiring (boat config — see legend_cutter/config.h):
  *   I2C SDA           → GPIO 21          (PCA9685, INA219, ICM-20948 share)
  *   I2C SCL           → GPIO 22
- *   GPS  TX  (green)  → GPIO 4           (UART2 RX)
- *   GPS  RX  (white)  → GPIO 17          (UART2 TX, optional)
+ *   GPS  TX  (white)  → GPIO 17          (UART2 RX)   *
+ *   GPS  RX  (green)  → GPIO 4           (UART2 TX, optional)   *
  *   DF1201S TX        → GPIO 25          (UART1 RX in this sketch)
  *   DF1201S RX        → GPIO 26          (UART1 TX in this sketch)
+ *
+ *   * This batch of BN-220s has white=TX / green=RX, REVERSED from the
+ *     typical convention. Confirmed 2026-05-03 — see test_10/10b NOTES.
  *
  * Libraries:
  *   Adafruit PWM Servo Driver Library     (PCA9685)
@@ -66,8 +69,8 @@ const uint8_t  INA_ADDR     = 0x41;
 const uint8_t  IMU_ADDR     = 0x68;
 const uint8_t  PCA_ALLCALL  = 0x70;
 
-const uint8_t  GPS_RX_PIN   = 4;
-const uint8_t  GPS_TX_PIN   = 17;
+const uint8_t  GPS_RX_PIN   = 17;   // ESP32 reads (← BN-220 TX, white)
+const uint8_t  GPS_TX_PIN   = 4;    // ESP32 writes (→ BN-220 RX, green)
 const uint32_t GPS_BAUD     = 9600;
 
 const uint8_t  DFP_RX_PIN   = 25;   // ESP32 reads (← DF1201S TX)
