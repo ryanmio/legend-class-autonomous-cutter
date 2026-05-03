@@ -80,12 +80,7 @@ const float    LIPO_V_MAX   = 17.5f;
 const float    ACCEL_MIN_MG = 700.0f;   // generous: ~0.7 g
 const float    ACCEL_MAX_MG = 1300.0f;  // generous: ~1.3 g
 
-const unsigned long GPS_NMEA_TIMEOUT_MS = 8000;
-// If we're going to give up on the GPS, retry on these alternate bauds before
-// declaring failure. BN-220 default is 9600, but a previous sketch may have
-// reconfigured the module — see test_10b NOTES.
-const uint32_t GPS_BAUD_FALLBACKS[] = { 38400, 4800 };
-const unsigned long GPS_FALLBACK_PROBE_MS = 1500;
+const unsigned long GPS_NMEA_TIMEOUT_MS = 5000;
 const unsigned long DFP_BEGIN_TIMEOUT_MS = 5000;
 const unsigned long PRINT_INTERVAL_MS = 1000;
 
@@ -252,6 +247,9 @@ void setup() {
   Serial.println();
 
   // ---------------- 5/6: GPS NMEA ----------------
+  // Mirrors test_10b_bn220_gps_boat exactly: same UART2, same pins, same baud,
+  // same TinyGPSPlus pump. If test_10b passed before and this fails now, the
+  // delta is hardware, not software.
   Serial.println("Step 5/6: GPS NMEA parse (no fix required)");
   Serial.printf("  UART2  RX=GPIO%u  TX=GPIO%u  baud=%lu\n",
                 GPS_RX_PIN, GPS_TX_PIN, GPS_BAUD);
@@ -274,62 +272,13 @@ void setup() {
     Serial.printf("  Bytes received: %lu  Sentences OK: %lu  Failed: %lu\n",
                   gps.charsProcessed(), gps.passedChecksum(), gps.failedChecksum());
     Serial.println("  PASS 5/6: GPS streaming valid NMEA. (No fix expected indoors.)");
+  } else if (firstByteMs == 0) {
+    Serial.println("  FAIL 5/6: no bytes from GPS at all.");
+    Serial.println("    Check VCC at the BN-220 pad, GND, and TX→GPIO4 crossover.");
   } else {
-    // Capture diagnostics from the 9600 attempt before we possibly retune the UART.
-    unsigned long bytesAt9600 = gps.charsProcessed();
-    Serial.printf("  At 9600 baud: bytes=%lu  validNMEA=%lu  badChecksum=%lu\n",
-                  bytesAt9600, gps.passedChecksum(), gps.failedChecksum());
-
-    // If we got bytes but no valid NMEA, the most likely cause is wrong baud.
-    // Probe the alternate rates before giving up. (If we got ZERO bytes the
-    // problem is wiring/power, not baud — skip the probe.)
-    bool fallbackHit = false;
-    if (firstByteMs != 0) {
-      for (uint8_t i = 0; i < sizeof(GPS_BAUD_FALLBACKS)/sizeof(GPS_BAUD_FALLBACKS[0]); i++) {
-        uint32_t baud = GPS_BAUD_FALLBACKS[i];
-        Serial.printf("  Probing %lu baud for %lu ms...\n", baud, GPS_FALLBACK_PROBE_MS);
-        gpsSerial.end();
-        gpsSerial.begin(baud, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-        TinyGPSPlus probe;
-        unsigned long t0 = millis();
-        while (millis() - t0 < GPS_FALLBACK_PROBE_MS) {
-          while (gpsSerial.available()) probe.encode(gpsSerial.read());
-          if (probe.passedChecksum() > 0) break;
-          delay(10);
-        }
-        if (probe.passedChecksum() > 0) {
-          Serial.printf("  ** GPS responding at %lu baud, NOT 9600. **\n", baud);
-          Serial.println("     A previous sketch reconfigured the module. Either change");
-          Serial.println("     GPS_BAUD here and in legend_cutter/config.h, or factory-reset");
-          Serial.println("     the BN-220 with u-center.");
-          fallbackHit = true;
-          break;
-        }
-      }
-      // Restore the configured baud so the live loop keeps trying at 9600.
-      gpsSerial.end();
-      gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-    }
-
-    Serial.println("  FAIL 5/6: no valid NMEA in setup window.");
-    if (firstByteMs == 0) {
-      Serial.println("    No bytes at all — check (in this order):");
-      Serial.println("      1. BN-220 LED: dark = no power. Multimeter 3.3V at the BN-220 pad.");
-      Serial.println("      2. GPS TX (green) wire continuity end-to-end to GPIO 4.");
-      Serial.println("      3. Nothing else on the boat is driving GPIO 4.");
-    } else if (bytesAt9600 < 50 && !fallbackHit) {
-      Serial.printf("    Only %lu bytes in %lu ms — line is mostly silent with sporadic edges.\n",
-                    bytesAt9600, GPS_NMEA_TIMEOUT_MS);
-      Serial.println("    Most likely a marginal/loose connection on the green TX wire");
-      Serial.println("    (common after waterproofing reassembly — Wagos flake on small wires).");
-      Serial.println("    Reseat the BN-220 TX → GPIO 4 connection and re-run.");
-    } else if (!fallbackHit) {
-      Serial.printf("    %lu bytes arriving but checksums fail at 9600 and at "
-                    "fallback bauds.\n", bytesAt9600);
-      Serial.println("    Noisy line, or the module is at a non-standard baud.");
-    }
-    Serial.println("    Live loop will keep pumping bytes — watch the i2c/GPS line below");
-    Serial.println("    while you wiggle the wire to see if it recovers.");
+    Serial.printf("  FAIL 5/6: bytes arriving (%lu) but no valid NMEA parsed.\n",
+                  gps.charsProcessed());
+    Serial.println("    Live loop keeps pumping — watch for RECOVERED line as you reseat wires.");
   }
   Serial.println();
 
