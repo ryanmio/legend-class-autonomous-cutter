@@ -76,6 +76,13 @@
 #define PWM_MAX           2000
 #define PCA9685_FREQ        50  // Hz — standard 50 Hz for servos
 
+// Rudder-specific limits (tighter than PWM_MIN/MAX). Past these the twin-tiller
+// linkage over-rotates and the dogbone flips center, jamming. Found via
+// tests/test_15_rudder_max_deflection on 2026-05-03 (observed safe extremes
+// 1334/1683 µs; ±170 chosen for symmetric travel with right-side margin).
+#define RUDDER_MIN_US     1330
+#define RUDDER_MAX_US     1670
+
 // ==================== iBUS PROTOCOL ====================
 #define IBUS_BAUD        115200
 #define IBUS_CHANNELS        10

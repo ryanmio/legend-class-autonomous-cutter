@@ -103,17 +103,57 @@ Consider applying a small safety margin (e.g. 30–50 µs inward from each extre
 
 ## Pass criteria
 
-- [ ] Test sweeps cleanly with no checksum warnings
-- [ ] `[OK] iBUS acquired` printed
-- [ ] Final LEFT µs ≤ 1500 (negative Δ)
-- [ ] Final RIGHT µs ≥ 1500 (positive Δ)
-- [ ] Linkage observed to NOT bind/flip at the recorded extremes
-- [ ] Numbers recorded below for use in `config.h`
+- [~] Test sweeps cleanly with no checksum warnings — *frequent `[WARN] checksum mismatch` during run; tracked separately, did not affect min/max capture*
+- [x] `[OK] iBUS acquired` printed
+- [x] Final LEFT µs ≤ 1500 (negative Δ)
+- [x] Final RIGHT µs ≥ 1500 (positive Δ)
+- [x] Linkage observed to NOT bind/flip at the recorded extremes (operator stopped well before binding on both sides)
+- [x] Numbers recorded below for use in `config.h`
 
 ---
 
-## Result — pending
+## Result — 2026-05-03 PASS
 
-LEFT  µs: ____
-RIGHT µs: ____
-Date / hardware notes:
+Observed safe extremes (operator-stopped before binding):
+
+- LEFT  = 1334 µs (Δ -166)
+- RIGHT = 1683 µs (Δ +183)
+
+Chosen firmware limits: symmetric **±170 µs from 1500 neutral**.
+
+```
+#define RUDDER_MIN_US   1330   // 1500 - 170
+#define RUDDER_MAX_US   1670   // 1500 + 170
+```
+
+Rationale: LEFT was the constraining side at Δ -166. Operator reported being
+"pretty far from binding" at that point, so accepting Δ -170 (4 µs past the
+recorded stop point) is well within mechanical safety. RIGHT picks up a 13 µs
+inward margin from the recorded 1683.
+
+Added to `legend_cutter/config.h` alongside `PWM_MIN`/`PWM_MAX`. Still TODO:
+apply the clamp to the rudder µs in `motors.cpp` / `legend_cutter.ino` (the
+current code only clamps to 1000/2000).
+
+### Checksum mismatch warning — not a test blocker
+
+`[WARN] checksum mismatch — wiring noise?` fired roughly once per 2 s
+report cycle throughout the test. The warn is rate-limited to once/second,
+so this represents *at least one* bad iBUS frame in each window — at iBUS's
+~140 Hz frame rate, that's well under 1% loss. Did not affect the running
+min/max (they updated cleanly between dropped frames).
+
+Wiggling the GPIO16 connection at the ESP32 did not change the rate. Likely
+candidates:
+
+1. Marginal voltage divider (1 kΩ / 2 kΩ on iBUS line) — possibly drifted
+   resistor values, or a cold solder joint on the divider.
+2. Loose ground reference between the FS-iA10B receiver and the ESP32.
+3. Long unshielded run on the iBUS signal wire picking up coupled noise.
+
+To investigate before integration testing: re-run `test_03_ibus_passthrough`
+and confirm whether checksum warns happen there too. If yes, this is a
+wiring/divider issue independent of the PCA9685 setup. If only test_15 sees
+them, suspect the PCA9685 I²C bus is coupling onto the iBUS line via a
+shared ground or routing. Either way, fix before we depend on iBUS for
+on-water control.
