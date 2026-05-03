@@ -2,13 +2,26 @@
  * test_18_deck_gun_pan.ino
  *
  * Phase 2 (active): CH5 knob → PCA9685 ch8 deck gun pan servo.
+ *
+ * IMPORTANT: the deck gun pan servo is a CONTINUOUS-ROTATION servo, not
+ * positional. The µs value commands ROTATION SPEED, not angle:
+ *   1500 µs        → stop
+ *   1500 + N µs    → rotate one way at speed ∝ N
+ *   1500 - N µs    → rotate the other way at speed ∝ N
+ * So the knob becomes a slew-rate joystick: knob centered = gun stopped,
+ * knob off-center = gun rotates at proportional speed. There is NO
+ * position feedback — operator must center the knob to hold a heading.
+ *
  *   * Pass-through: knob µs → servo µs, clamped to [PAN_MIN_US..PAN_MAX_US].
- *   * Default clamp 1200..1800 µs (±300 from 1500 neutral) — conservative;
- *     widen via the constants below once you've watched the linkage sweep.
+ *   * Center deadband (±PAN_DEADBAND_US around 1500) forces output to exactly
+ *     1500 when the knob is roughly centered — defeats factory trim drift
+ *     that makes continuous servos creep at the nominal "stop" pulse.
+ *   * Default clamp 1300..1700 µs (±200 from 1500) — conservative slew speed
+ *     so the gun slewing is controllable. Widen the constants below if it
+ *     feels too slow.
  *   * No-frame and channel-freeze failsafes hold pan at 1500 µs on iBUS loss.
- *   * Running min/max of commanded pan µs printed every 2 s — same idea as
- *     test_15, so you can dial in tighter mechanical limits after observing
- *     a full sweep.
+ *   * Running min/max of commanded pan µs printed every 2 s — useful for
+ *     verifying the deadband is actually pinning the output to 1500 at rest.
  *
  * Phase 1 (channel discovery, completed 2026-05-03 → CH5 / idx 4):
  *   The discovery sketch is preserved in the #if 0 block at the bottom of
@@ -37,9 +50,12 @@ HardwareSerial ibusSerial(1);
 // ---- Tunables ----
 const uint8_t  KNOB_CHANNEL_INDEX   = 4;     // CH5, found in phase 1
 const uint8_t  GUN_PAN_PCA_CHANNEL  = 8;     // PCA9685 ch8 (real wiring)
-const uint16_t PAN_MIN_US           = 1200;  // start conservative; tighten if binding
-const uint16_t PAN_MAX_US           = 1800;
-const bool     PAN_REVERSE          = false; // flip if knob CW = pan left
+// CONTINUOUS servo: these are SPEED limits, not position limits.
+// 1500 = stop; 1300 = full speed CCW (or CW, depending on PAN_REVERSE).
+const uint16_t PAN_MIN_US           = 1300;  // max speed one direction
+const uint16_t PAN_MAX_US           = 1700;  // max speed the other direction
+const uint16_t PAN_DEADBAND_US      = 30;    // |knob - 1500| ≤ this → force output 1500 (no creep)
+const bool     PAN_REVERSE          = false; // flip if knob CW spins gun CCW
 
 const uint16_t REPORT_INTERVAL_MS   = 2000;
 
@@ -72,6 +88,13 @@ uint16_t clampPan(uint16_t rawUs) {
   if (rawUs < 1000) rawUs = 1000;
   if (rawUs > 2000) rawUs = 2000;
   if (PAN_REVERSE) rawUs = 3000 - rawUs;
+  // Center deadband: knob within ±PAN_DEADBAND_US of 1500 → exact stop.
+  // Continuous servos creep at the nominal 1500 µs "stop" pulse due to
+  // factory trim. Snapping to 1500 only when actually centered eliminates
+  // the creep without sacrificing fine speed control elsewhere.
+  int d = (int)rawUs - 1500;
+  if (d < 0) d = -d;
+  if (d <= (int)PAN_DEADBAND_US) return 1500;
   if (rawUs < PAN_MIN_US) rawUs = PAN_MIN_US;
   if (rawUs > PAN_MAX_US) rawUs = PAN_MAX_US;
   return rawUs;
@@ -161,11 +184,13 @@ void setup() {
   Serial.println("========================================");
   Serial.println("  test_18_deck_gun_pan — phase 2: knob → ch8 servo");
   Serial.println("========================================");
-  Serial.printf("Knob:    CH%d (idx %d)\n",
+  Serial.printf("Knob:      CH%d (idx %d)\n",
                 KNOB_CHANNEL_INDEX + 1, KNOB_CHANNEL_INDEX);
-  Serial.printf("Pan servo: PCA9685 ch%d\n", GUN_PAN_PCA_CHANNEL);
-  Serial.printf("Clamp:   %u..%u µs   reverse=%s\n",
-                PAN_MIN_US, PAN_MAX_US, PAN_REVERSE ? "true" : "false");
+  Serial.printf("Pan servo: PCA9685 ch%d  (CONTINUOUS rotation — µs = SPEED, not angle)\n",
+                GUN_PAN_PCA_CHANNEL);
+  Serial.printf("Speed:     %u..%u µs   deadband ±%u µs   reverse=%s\n",
+                PAN_MIN_US, PAN_MAX_US, PAN_DEADBAND_US,
+                PAN_REVERSE ? "true" : "false");
   Serial.println();
 
   Wire.begin(21, 22);

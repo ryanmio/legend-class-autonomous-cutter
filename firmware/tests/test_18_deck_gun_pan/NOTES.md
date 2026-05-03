@@ -57,16 +57,40 @@ You bumped a stick. Stop, hold sticks still, turn only the knob. If a channel ke
 
 ---
 
-## Phase 2 — drive the deck gun pan servo (TODO)
+## Phase 2 — drive the deck gun pan servo
 
-After phase 1 yields a channel number:
+> **The pan servo is CONTINUOUS rotation, not positional.** µs commands rotation
+> *speed*, not angle. 1500 = stop, 1500+N = rotate one way at speed ∝ N,
+> 1500−N = rotate the other way. The knob therefore behaves like a slew-rate
+> joystick: knob centered = gun stopped, knob off-center = gun rotates at
+> proportional speed. There is **no position feedback** — operator must center
+> the knob to hold a heading, and a knob left off-center will keep slewing
+> until something mechanical stops it.
 
-1. Edit `test_18_deck_gun_pan.ino`:
-   - Comment out the discovery block in `handleFrame()`.
-   - Add: read knob channel µs → clamp to safe pan range → write to PCA9685 ch8.
-   - Add: PCA9685 init in `setup()` (mirror test_07 / test_15).
-   - Add: no-frame failsafe — hold pan at `PWM_NEUTRAL` (1500 µs) when iBUS drops.
-2. Add a sweep-limit calibration step similar to test_15 — find the safe mechanical extremes of the deck gun pan and clamp inside them, so the servo can't grind against the turret stops.
+### Tweaks vs. the naive pass-through
+
+- `PAN_DEADBAND_US ±30` µs around 1500 forces an exact `1500 µs` output when
+  the knob is at rest. Continuous servos almost always creep at the nominal
+  1500 µs "stop" pulse due to factory trim drift. Snapping to 1500 only when
+  actually centered kills the creep without coarsening speed control elsewhere.
+- Speed cap tightened to `1300..1700` µs (±200 from neutral) so the gun slews
+  at a controllable rate. Widen via the constants if it feels too slow.
+
+### Future work — closing the position loop
+
+Without feedback, the gun is open-loop. Practical paths if/when we want
+"gun points where I aim":
+
+- **Live with it.** Operator discipline — slew, then center the knob, trust
+  your eyes. Fine for the bench test.
+- **Potentiometer on the turret shaft** → ESP32 ADC. Closed-loop: knob =
+  desired angle, error drives speed. ~$1, one wire, soft-coded limits.
+- **Limit switches** at the mechanical extremes — stops slewing past them,
+  no angle awareness in between.
+- **Swap to a positional servo** (what `config.h`'s scaffold comment
+  originally assumed). Most invasive.
+
+Out of scope for this test.
 
 ### Hardware delta in phase 2
 
@@ -120,13 +144,17 @@ The phase 1 discovery sketch is preserved at the bottom of the `.ino` inside an
 
 ### Phase 2 — pending
 
-Default clamp is `PAN_MIN_US..PAN_MAX_US = 1200..1800` µs. After running the
-test, watch the running min/max line and adjust those constants down to the
-*actual* mechanical safe extremes of the turret linkage. Same flow as test_15
-for the rudder.
+Continuous-rotation servo. Default speed cap `PAN_MIN_US..PAN_MAX_US = 1300..1700` µs
+(±200 from 1500), center deadband ±30 µs to defeat creep.
+
+When running, verify:
+- Knob centered → gun stationary (no creep). The 2-second `Pan range so far`
+  line should pin to `1500..1500` while you hold the knob still.
+- Knob off-center → gun rotates at proportional speed.
+- Knob fully one way → gun rotates fast in that direction; capped at `PAN_MIN`/`MAX_US`.
+- Failsafe (TX off) → gun stops within ~500 ms.
 
 When phase 2 passes:
 - update `firmware/legend_cutter/config.h:63` from `CH_GUN_PAN 3` → `8`
-- add `IBUS_CH_GUN_PAN` define alongside the other iBUS channel constants
-  (idx 4)
-- record final clamp limits here in this section
+- add `IBUS_CH_GUN_PAN` define alongside the other iBUS channel constants (idx 4)
+- record final speed-cap and deadband values here
