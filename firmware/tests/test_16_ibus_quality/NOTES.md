@@ -103,11 +103,22 @@ After each step, reset counters (`r`+ENTER) and re-measure for ≥ 30 s. Stop wh
 
 ## Runs
 
-Format:
 ```
-YYYY-MM-DD  config              loss%   resync  notes
-----------  ------              -----   ------  -----
-2026-05-03  baseline (no PCA)   ?.??%        ?  initial measurement
+YYYY-MM-DD  config                          loss%   resync  bad_hdr  notes
+----------  ------                          -----   ------  -------  -----
+2026-05-03  PCA still connected, no motors  1.12%     5576*       1  baseline. resync frozen
+                                                                     after acquisition (startup
+                                                                     hunt, not growing). Single-
+                                                                     frame errors only, no bursts
+                                                                     observed. Decision: continue
+                                                                     build, retest under motor
+                                                                     load at integration.
 ```
 
-(fill in as we go)
+\* `resync_bytes` accrued during initial frame hunt before first valid header — frozen post-acquisition, so not a live failure mode.
+
+### Pending
+
+- [ ] Multimeter continuity RX-GND ↔ ESP32-GND (want ~0 Ω)
+- [ ] Optional: 100 nF cap GPIO 16 → ESP32 GND if convenient
+- [ ] **At integration**: re-run with ESCs at 30% throttle. If loss > 1% or bursts appear, address before on-water.
