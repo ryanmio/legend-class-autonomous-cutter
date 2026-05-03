@@ -1,8 +1,12 @@
-# test_16_ibus_quality — iBUS Link Quality Meter
+# test_16_ibus_quality — iBUS Link Quality Meter (Under Load)
 
 A measurement tool, not a pass/fail bringup test. Run it before and after each mitigation (twist wires, add filter cap, reroute, fix grounding) and compare the loss percentages directly.
 
-Triggered by test_15's persistent ~1 checksum-warn-per-second observation. test_03 just *prints* warns; this test *counts* them and produces a number you can compare.
+Drives both ESCs from the throttle stick (CH3) and the rudder from CH1 (clamped to `RUDDER_MIN_US`/`RUDDER_MAX_US`) while counting iBUS frame quality. Throttle is bucketed into 5 bands (0-20%, 20-40%, 40-60%, 60-80%, 80-100%) so you can see at a glance whether loss correlates with motor current.
+
+Originally written quiescent-only after test_15 surfaced a persistent ~1 checksum-warn-per-second. Extended to run under load because the real question — does motor EMI degrade the link enough to matter — only gets answered with motors actually spinning.
+
+**SAFETY:** props off, boat cradled, throttle stick at zero before powering on. ESCs will spin both motors throughout.
 
 ---
 
@@ -34,26 +38,27 @@ iBUS sends ~140 frames/sec, so a 5-second window gives ~700 frame samples — en
 
 ## Hardware required
 
-Same as test_03:
-
 - ESP32, iBUS divider on GPIO 16 (1 kΩ to GPIO, 2 kΩ to GND)
 - FS-iA10B receiver bound and powered, GND tied to ESP32 GND
-- Transmitter on
-
-PCA9685 / servos / ESCs **disconnected** (or unpowered) — we want to characterize the iBUS path in isolation. If you want to characterize *with* the I²C bus active, run after the iBUS-only baseline so you have a comparison.
+- PCA9685 powered (logic 3.3 V, **V+ at 6 V** for the rudder)
+- Both ESCs wired to PCA9685 ch0 (port) / ch1 (stbd), powered from main pack
+- Rudder servo on PCA9685 ch2 with linkage installed
+- **Props OFF, boat in a cradle.** Both motors will spin.
 
 ---
 
 ## Procedure
 
-1. Flash, open Serial @ 115200, transmitter on.
-2. Wait for `[OK] iBUS acquired`.
-3. Let it run **at least 30 s** before trusting the cumulative number — windows shorter than that are noisy.
-4. Make a change (twist iBUS pair, add 100 nF cap GPIO16→GND at the ESP32, fix a ground, etc.).
-5. Type `r` + ENTER to reset counters.
-6. Let run another 30 s. Compare.
+1. Confirm props are off and the boat is restrained.
+2. Throttle stick to **zero** before applying power.
+3. Flash, open Serial @ 115200, transmitter on.
+4. Wait for `[INFO] ESCs armed.` then `[OK] iBUS acquired. Outputs live.`
+5. Let it sit at idle for ~10 s — that's your idle-band baseline.
+6. Slowly ramp throttle through each band (20%, 40%, 60%, 80%) and **hold ~15 s in each** so the band counters get ≥ 2000 samples each.
+7. Watch the per-window line. The `bands(loss%):` summary updates live.
+8. After the ramp, type `d` + ENTER to print the full histogram. Type `r` + ENTER to reset between configurations / mitigations.
 
-Record the before/after numbers in this NOTES file under "Runs" so we have a paper trail.
+Record results in the "Runs" log below.
 
 ---
 
@@ -61,64 +66,76 @@ Record the before/after numbers in this NOTES file under "Runs" so we have a pap
 
 ```
 ========================================
-  test_16_ibus_quality
+  test_16_ibus_quality (under load)
 ========================================
-Counts iBUS frame quality over rolling windows.
-No PCA9685 / servos. iBUS path only.
-Window: 5000 ms.  Type 'r'+ENTER to reset counters.
+Counts iBUS frames while driving ESCs + rudder live.
+Window: 5000 ms.  Commands: 'r'=reset, 'd'=dump bands.
 
-Healthy: total loss <0.05%, resync_bytes flat after startup.
-Marginal: 0.05–0.5%. Bad: >0.5% or resync_bytes growing.
+** SAFETY: PROPS OFF.  Boat secured.  Throttle at zero. **
+
+[INFO] PCA9685 found. Arming ESCs at 1500 µs (3 s)...
+[INFO] ESCs armed. Outputs live once iBUS acquires.
 
 Waiting for iBUS frames... turn on the transmitter.
 ----------------------------------------
-[OK] iBUS acquired. Counting...
+[OK] iBUS acquired. Outputs live. Counting...
 ----------------------------------------
-[t=  5s]  win:  698 good /   4 bad (0.57%) | total:   698/   4 (0.57%)
-          resync_bytes=2  bad_header=0
-[t= 10s]  win:  696 good /   3 bad (0.43%) | total:  1394/   7 (0.50%)
-          resync_bytes=2  bad_header=0
-[t= 30s]  win:  697 good /   2 bad (0.29%) | total:  4178/  21 (0.50%)
-          resync_bytes=2  bad_header=0
+[t=  5s] thr=  0%  win:  698 good /   4 bad (0.57%) | total:   698/   4 (0.57%)
+         bands(loss%): 0-20:0.57 | 20-40: -- | 40-60: -- | 60-80: -- | 80+: --
+[t= 20s] thr= 45%  win:  690 good /  10 bad (1.43%) | total:  2700/  21 (0.77%)
+         bands(loss%): 0-20:0.43 | 20-40:0.85 | 40-60:1.43 | 60-80: -- | 80+: --
+[t= 60s] thr= 90%  win:  650 good /  50 bad (7.14%) | total:  7800/ 350 (4.29%)
+         bands(loss%): 0-20:0.43 | 20-40:0.85 | 40-60:1.43 | 60-80:5.20 | 80+:7.14
 ```
 
-A small one-time bump in `resync_bytes` at startup (a few bytes before the first valid header) is normal. Continued growth is not.
+Numbers are illustrative. The shape that matters: do the band loss percentages stay flat, or do they climb with throttle?
+
+- **Flat across bands** → motor EMI isn't the dominant noise source. Whatever's causing the ~1% baseline is something else (divider, grounding, I²C coupling), addressable later.
+- **Rises with throttle** → ESC switching is coupling onto the iBUS line. Mitigations: shorter parallel run, twisted pair, ferrite bead on the iBUS wire, decoupling cap at ESP32.
+
+A small one-time bump in `resync_bytes` at startup (a few bytes before first valid header) is normal. Continued growth during the run is not.
 
 ---
 
 ## Diagnostic decision tree
 
-1. **Baseline run** (this test, no PCA, no ESCs): note loss %.
-2. If **loss < 0.05 %** at baseline → iBUS path is fine. The warns under test_15 came from coupling once the PCA was added. Fix at integration (shorter iBUS run away from I²C, decoupling cap on PCA power, etc.).
-3. If **loss ≥ 0.05 %** at baseline → fix at the iBUS path itself. In rough order of likelihood / cost:
-   1. Multimeter continuity RX-GND ↔ ESP32-GND. Want ~0 Ω.
-   2. Twist the iBUS signal wire with its ground return for the full length of the run.
-   3. 100 nF ceramic cap from GPIO 16 to ESP32 GND, soldered as close to the ESP32 pin as possible.
-   4. Re-solder / replace the divider resistors.
-   5. Replace the iBUS wire with a shielded run (last resort given hull constraints).
+Look at the band histogram after a full throttle ramp.
 
-After each step, reset counters (`r`+ENTER) and re-measure for ≥ 30 s. Stop when loss is < 0.05 %.
+1. **All bands < 1% AND flat (no monotonic climb)** → link is fine for on-water. Move on.
+2. **Bands < 1% but climbing with throttle** → motor EMI is starting to show but headroom is OK. Note for re-measurement after on-water runs; defer mitigation.
+3. **Any band ≥ 5%** → fix before on-water. Risk of failsafe-trip during a turn. Try in this order:
+   1. Multimeter continuity RX-GND ↔ ESP32-GND. Want ~0 Ω.
+   2. 100 nF ceramic cap from GPIO 16 to ESP32 GND, soldered as close to the ESP32 pin as possible.
+   3. Twist the iBUS signal wire with a dedicated ground return for the full length of the run.
+   4. Snap-on ferrite bead around the iBUS wire near the ESP32 (cheap; helps with high-frequency ESC switching noise specifically).
+   5. Re-solder / replace the divider resistors.
+4. **`bad_header` or `resync_bytes` growing during the run** → losing framing, not just bit errors. Same fixes as above but more urgent — start with #1.
+
+After each fix, `r`+ENTER and re-ramp.
 
 ---
 
 ## Runs
 
+### Quiescent baseline (pre-load-driving sketch)
+
 ```
 YYYY-MM-DD  config                          loss%   resync  bad_hdr  notes
 ----------  ------                          -----   ------  -------  -----
-2026-05-03  PCA still connected, no motors  1.12%     5576*       1  baseline. resync frozen
+2026-05-03  PCA connected, no motors        1.12%     5576*       1  baseline. resync frozen
                                                                      after acquisition (startup
                                                                      hunt, not growing). Single-
-                                                                     frame errors only, no bursts
-                                                                     observed. Decision: continue
-                                                                     build, retest under motor
-                                                                     load at integration.
+                                                                     frame errors only, no bursts.
 ```
 
 \* `resync_bytes` accrued during initial frame hunt before first valid header — frozen post-acquisition, so not a live failure mode.
 
-### Pending
+### Under-load runs
 
-- [ ] Multimeter continuity RX-GND ↔ ESP32-GND (want ~0 Ω)
-- [ ] Optional: 100 nF cap GPIO 16 → ESP32 GND if convenient
-- [ ] **At integration**: re-run with ESCs at 30% throttle. If loss > 1% or bursts appear, address before on-water.
+Record per-band loss % across the throttle ramp. Format below; fill the band columns with the values from the `d` (dump) command.
+
+```
+YYYY-MM-DD  config                  0-20    20-40   40-60   60-80   80+    notes
+----------  ------                  ----    -----   -----   -----   ---    -----
+                                    ?.??%   ?.??%   ?.??%   ?.??%   ?.??%
+```
