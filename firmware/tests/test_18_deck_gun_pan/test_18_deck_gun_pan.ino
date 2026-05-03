@@ -1,46 +1,50 @@
 /*
  * test_18_deck_gun_pan.ino
  *
- * Phase 2 (active): CH5 knob → PCA9685 ch8 deck gun pan servo.
+ * Multi-phase test. Set ACTIVE_PHASE below to swap between modes.
  *
- * IMPORTANT: the deck gun pan servo is a CONTINUOUS-ROTATION servo, not
- * positional. The µs value commands ROTATION SPEED, not angle:
+ *   Phase 1: iBUS channel discovery — print which channels move
+ *            frame-to-frame. Used to identify the knob (→ CH5) and any
+ *            toggle-switch channels we want to use as a weapon-arm gate.
+ *
+ *   Phase 2: Knob → PCA9685 ch8 pan servo (CONTINUOUS rotation; µs = SPEED).
+ *            Naïve passthrough — abandoned because the knob is never centered
+ *            at TX power-on so the gun spins immediately. Kept for reference.
+ *
+ *   Phase 3 (TODO once phase 1 finds a switch channel): toggle switch arms
+ *            the pan motor. Switch off → gun forced to 1500 (stopped) regardless
+ *            of knob position. Switch on → knob controls pan with a wide
+ *            deadband (~±100 µs) so only deliberate pushes slew the gun.
+ *            Operator workflow: power on, center knob deliberately, then arm.
+ *
+ * The deck gun pan servo is a CONTINUOUS-ROTATION servo:
  *   1500 µs        → stop
  *   1500 + N µs    → rotate one way at speed ∝ N
  *   1500 - N µs    → rotate the other way at speed ∝ N
- * So the knob becomes a slew-rate joystick: knob centered = gun stopped,
- * knob off-center = gun rotates at proportional speed. There is NO
- * position feedback — operator must center the knob to hold a heading.
+ * No position feedback — knob commands SLEW SPEED, not angle.
  *
- *   * Pass-through: knob µs → servo µs, clamped to [PAN_MIN_US..PAN_MAX_US].
- *   * Center deadband (±PAN_DEADBAND_US around 1500) forces output to exactly
- *     1500 when the knob is roughly centered — defeats factory trim drift
- *     that makes continuous servos creep at the nominal "stop" pulse.
- *   * Default clamp 1300..1700 µs (±200 from 1500) — conservative slew speed
- *     so the gun slewing is controllable. Widen the constants below if it
- *     feels too slow.
- *   * No-frame and channel-freeze failsafes hold pan at 1500 µs on iBUS loss.
- *   * Running min/max of commanded pan µs printed every 2 s — useful for
- *     verifying the deadband is actually pinning the output to 1500 at rest.
+ * NOTE: config.h:63 says CH_GUN_PAN 3 — pre-hardware scaffold value. Real
+ * wiring is PCA9685 ch8. Update config.h once a working phase passes.
  *
- * Phase 1 (channel discovery, completed 2026-05-03 → CH5 / idx 4):
- *   The discovery sketch is preserved in the #if 0 block at the bottom of
- *   this file. Re-enable it (set to #if 1) if you ever need to rediscover
- *   a knob's channel on a different transmitter mapping.
- *
- * NOTE: config.h:63 says CH_GUN_PAN 3 — that's the pre-hardware scaffold
- * value. Real wiring is PCA9685 ch8 (this test). Update config.h once
- * phase 2 passes.
- *
- * Wiring (phase 2):
+ * Wiring:
  *   Receiver iBUS    → 1 kΩ → GPIO 16 (with 2 kΩ to GND)
- *   Pan servo signal → PCA9685 ch8
- *   Pan servo V+/GND → PCA9685 V+ rail / GND  (servo voltage to V+)
- *   PCA9685 SDA/SCL  → GPIO 21 / 22
+ *   Pan servo signal → PCA9685 ch8       (phase 2 / 3 only)
+ *   PCA9685 SDA/SCL  → GPIO 21 / 22      (phase 2 / 3 only)
  */
+
+// =============================================================================
+// PHASE SELECTOR — set to 1 for discovery, 2 for naive knob → pan, 3 for
+// toggle-armed knob → pan. Recompile after changing.
+// =============================================================================
+#define ACTIVE_PHASE 1
 
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
+
+#if ACTIVE_PHASE == 2
+// =============================================================================
+// PHASE 2 — naive knob → pan (DEPRECATED: gun spins on TX power-on)
+// =============================================================================
 
 Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
 bool pcaPresent = false;
@@ -242,12 +246,13 @@ void loop() {
 }
 
 
+#endif  // ACTIVE_PHASE == 2
+
+
 // ============================================================================
-// PHASE 1 — channel discovery sketch, kept for reference.
-// Re-enable by changing #if 0 to #if 1 (and disabling phase 2 above) if you
-// need to rediscover a knob's channel for a different TX mapping.
+// PHASE 1 — iBUS channel discovery (sticks, knobs, switches).
 // ============================================================================
-#if 0
+#if ACTIVE_PHASE == 1
 
 HardwareSerial ibusSerial(1);
 
@@ -308,8 +313,29 @@ void handleFrame() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("test_18_deck_gun_pan — phase 1 discovery");
+  Serial.println("========================================");
+  Serial.println("  test_18 — phase 1: iBUS channel discovery");
+  Serial.println("========================================");
+  Serial.println("Goal: identify which channels are mapped to the toggle");
+  Serial.println("switches (and any other unused control on the TX).");
+  Serial.println();
+  Serial.println("Procedure:");
+  Serial.println("  1. Turn on transmitter, hands off the sticks.");
+  Serial.println("  2. Wait for [OK] iBUS frames arriving.");
+  Serial.println("  3. Flip ONE switch at a time. Watch for 'CHn is changing'.");
+  Serial.println("  4. Note which channel each switch maps to (and observed values).");
+  Serial.println("     A two-position switch typically jumps 1000 ↔ 2000 µs.");
+  Serial.println("     A three-position switch shows 1000 / 1500 / 2000.");
+  Serial.println("  5. Also confirm CH5 still moves with the right knob.");
+  Serial.println();
+  Serial.println("If a switch produces NO output, it isn't mapped to a channel");
+  Serial.println("on the TX. Map it through the FS-i6X menu (Aux. channels) first.");
+  Serial.println();
+  Serial.printf("Move threshold: %u µs.\n", MOVE_THRESHOLD_US);
+  Serial.println();
   ibusSerial.begin(115200, SERIAL_8N1, 16, -1);
+  Serial.println("Waiting for iBUS frames...");
+  Serial.println("----------------------------------------");
   lastHint = millis();
 }
 
@@ -325,4 +351,4 @@ void loop() {
   }
 }
 
-#endif  // PHASE 1
+#endif  // ACTIVE_PHASE == 1
