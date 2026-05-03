@@ -102,9 +102,31 @@ That's a pre-hardware scaffold value. Real wiring puts the deck gun pan on **PCA
 
 ## Result
 
-### Phase 1 — pending
+### Phase 1 — 2026-05-03 PASS
 
-Channel detected: `CH__` (iBUS index `__`)
-Range observed: `____ .. ____ µs`
+Channel detected: **CH5 (iBUS index 4)**.
+Range observed during sweep: at least 1363..1588 µs (only partial sweep recorded;
+likely fuller range available — verify in phase 2 with the running min/max display).
+
+Sample output during discovery:
+```
+CH5 (idx 4) is changing:  1588 → 1566  (Δ -22)
+CH5 (idx 4) is changing:  1484 → 1461  (Δ -23)
+CH5 (idx 4) is changing:  1388 → 1363  (Δ -25)
+```
+
+The phase 1 discovery sketch is preserved at the bottom of the `.ino` inside an
+`#if 0` block — re-enable if you ever need to re-map a knob.
 
 ### Phase 2 — pending
+
+Default clamp is `PAN_MIN_US..PAN_MAX_US = 1200..1800` µs. After running the
+test, watch the running min/max line and adjust those constants down to the
+*actual* mechanical safe extremes of the turret linkage. Same flow as test_15
+for the rudder.
+
+When phase 2 passes:
+- update `firmware/legend_cutter/config.h:63` from `CH_GUN_PAN 3` → `8`
+- add `IBUS_CH_GUN_PAN` define alongside the other iBUS channel constants
+  (idx 4)
+- record final clamp limits here in this section
