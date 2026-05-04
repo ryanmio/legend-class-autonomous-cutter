@@ -111,10 +111,11 @@ That's a pre-hardware scaffold value. Real wiring puts the deck gun pan on **PCA
 - [ ] Knob movement triggers `CHn is changing` lines
 - [ ] Channel identified and µs range recorded below
 
-### Phase 2 (once written)
-- [ ] Phase 1 channel cleanly drives ch8 servo with no jitter at rest
-- [ ] Servo holds at 1500 µs on iBUS loss
-- [ ] Sweep limits clamp the servo before it binds against turret stops
+### Phase 2 — PASS 2026-05-04
+- [x] CH5 cleanly drives ch8 positional servo with no jitter at rest
+- [x] Servo tracks knob across full ±500 µs range without binding
+- [x] Direction corrected via `PAN_REVERSE = true`
+- [x] Servo holds 1500 µs on iBUS loss (channel-freeze + no-frame failsafes)
 
 ---
 
@@ -136,17 +137,32 @@ CH5 (idx 4) is changing:  1388 → 1363  (Δ -25)
 The phase 1 discovery sketch is preserved at the bottom of the `.ino` inside an
 `#if 0` block — re-enable if you ever need to re-map a knob.
 
-### Phase 2 — pending (positional servo, 2026-05-04 attempt)
+### Phase 2 — 2026-05-04 PASS (positional servo)
 
-Default angle clamp `PAN_MIN_US..PAN_MAX_US = 1300..1700` µs (~±30°),
-center deadband ±15 µs.
+Final tunables:
 
-When running, verify:
-- TX power-on with knob anywhere → servo holds the angle the knob commands. No spinning, no runaway.
-- Knob turn → gun pans to the corresponding angle, holds there.
-- Knob centered → gun returns to 1500 µs angle. The 2-second `Pan range so far` line should pin to `1500..1500` at rest.
-- Sweep limits — turn the knob fully both ways, watch for the linkage binding before the knob hits its mechanical end. Tighten `PAN_MIN_US`/`MAX_US` based on what you see.
-- Failsafe (TX off) → gun returns to 1500 µs within ~500 ms.
+```c
+const uint16_t PAN_MIN_US      = 1000;
+const uint16_t PAN_MAX_US      = 2000;
+const uint16_t PAN_DEADBAND_US = 15;
+const bool     PAN_REVERSE     = true;
+```
+
+Full ±500 µs range exposed — the operator confirmed the linkage sweeps
+cleanly across the entire knob travel without binding, so no tighter
+software clamp is needed. Direction flipped via `PAN_REVERSE = true`
+because the knob's natural CW direction was driving the gun CCW.
+
+### Followups (not blocking PASS)
+
+- Update `firmware/legend_cutter/config.h:63` from `CH_GUN_PAN 3` → `8`
+  to match real wiring.
+- Add an `IBUS_CH_GUN_PAN` define alongside the other iBUS channel
+  constants in `config.h` (idx 4 = CH5).
+- Fix the `config.h:62` comment — it was right that the pan servo is a
+  positional 9g micro, but only after the 2026-05-04 swap. The
+  scaffold accidentally lined up with reality after the FS90R came
+  out and the MG90S/SG90 went in.
 
 When phase 2 passes:
 - update `firmware/legend_cutter/config.h:63` from `CH_GUN_PAN 3` → `8`

@@ -55,13 +55,12 @@ HardwareSerial ibusSerial(1);
 const uint8_t  KNOB_CHANNEL_INDEX   = 4;     // CH5, found in phase 1
 const uint8_t  GUN_PAN_PCA_CHANNEL  = 8;     // PCA9685 ch8 (real wiring)
 // POSITIONAL servo: these are ANGLE limits.
-// 1500 = centered; 1300 ≈ ~30° one way; 1700 ≈ ~30° the other way.
-// Conservative starting point — widen toward 1000/2000 once you see
-// where the linkage actually binds (test_15 pattern).
-const uint16_t PAN_MIN_US           = 1300;
-const uint16_t PAN_MAX_US           = 1700;
+// 1500 = centered. Full ±500 µs range exposed for now; tighten if the
+// linkage binds before reaching the extremes (test_15 pattern).
+const uint16_t PAN_MIN_US           = 1000;
+const uint16_t PAN_MAX_US           = 2000;
 const uint16_t PAN_DEADBAND_US      = 15;    // |knob - 1500| ≤ this → snap to 1500 (filters TX jitter)
-const bool     PAN_REVERSE          = false; // flip if knob CW pans gun CCW
+const bool     PAN_REVERSE          = true;  // knob CW pans gun CCW on this build, so reverse
 
 const uint16_t REPORT_INTERVAL_MS   = 2000;
 
