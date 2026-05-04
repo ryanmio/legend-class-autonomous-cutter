@@ -59,12 +59,12 @@
 #define CH_ESC_PORT        0   // Port (left) motor ESC
 #define CH_ESC_STBD        1   // Starboard (right) motor ESC — counter-rotating prop
 #define CH_RUDDER          2   // 20 kg waterproof rudder servo (twin rudders via tiller linkage)
-#define CH_GUN_PAN         3   // Deck gun pan (MG90S, below-deck, drives turret via hollow shaft)
+#define CH_BAY_DOOR_PORT   3   // Port bay door winch (FS90R continuous rotation) — UNVERIFIED, scaffold value
 #define CH_GUN_TILT        4   // Deck gun tilt (2.1 g micro servo, pushrod through central tube)
 #define CH_CIWS_PAN        5   // Phalanx CIWS pan servo
 #define CH_CIWS_SPIN       6   // Phalanx barrel spin (6 mm coreless via L9110S — use full-on PWM)
 #define CH_RADAR           7   // Top radar rotation motor
-#define CH_BAY_DOOR_PORT   8   // Port bay door winch (FS90R continuous rotation)
+#define CH_GUN_PAN         8   // Deck gun pan — positional 9g micro (MG90S/SG90 class). Verified test_18 PASS 2026-05-04.
 #define CH_BAY_DOOR_STBD   9   // Starboard bay door winch (FS90R continuous rotation)
 #define CH_ANCHOR_FWD     10   // Forward anchor winch (continuous rotation)
 #define CH_ANCHOR_AFT     11   // Aft anchor winch (continuous rotation)
@@ -87,9 +87,10 @@
 #define IBUS_BAUD        115200
 #define IBUS_CHANNELS        10
 // Channel indices (0-based) from Flysky FS-i6X transmitter
-#define IBUS_CH_THROTTLE      2   // Right stick vertical
-#define IBUS_CH_RUDDER        3   // Right stick horizontal (or left stick)
-#define IBUS_CH_MODE          4   // SWA/SWB switch — MANUAL vs AUTONOMOUS
+#define IBUS_CH_THROTTLE      2   // CH3 left-stick vertical — verified test_17
+#define IBUS_CH_RUDDER        3   // CH4 (scaffold value); test_17 actually used idx 0 (CH1, right-stick H). UNVERIFIED — reconcile.
+#define IBUS_CH_GUN_PAN       4   // CH5 right-knob — verified test_18 PASS 2026-05-04
+#define IBUS_CH_MODE          4   // SWA/SWB switch — CONFLICT with IBUS_CH_GUN_PAN, no switches mapped on this TX. Reassign when a physical control is chosen.
 // iBUS raw value range: 1000–2000
 
 // ==================== CONTROL MIXING ====================
