@@ -4,27 +4,27 @@
  * Multi-phase test. Set ACTIVE_PHASE below to swap between modes.
  *
  *   Phase 1: iBUS channel discovery — print which channels move
- *            frame-to-frame. Used to identify the knob (→ CH5) and any
- *            toggle-switch channels we want to use as a weapon-arm gate.
+ *            frame-to-frame. Used to identify the knob (→ CH5).
  *
- *   Phase 2: Knob → PCA9685 ch8 pan servo (CONTINUOUS rotation; µs = SPEED).
- *            Naïve passthrough — abandoned because the knob is never centered
- *            at TX power-on so the gun spins immediately. Kept for reference.
+ *   Phase 2 (active): Knob CH5 → PCA9685 ch8 pan servo. The pan servo
+ *            was swapped from a continuous-rotation FS90R to a POSITIONAL
+ *            9g micro (MG90S / SG90 class) on 2026-05-04, which means
+ *            µs = angle, not speed. Knob position straightforwardly maps
+ *            to gun angle. Same passthrough-with-clamp pattern as test_07
+ *            (rudder) and test_15 (rudder limits).
  *
- *   Phase 3 (TODO once phase 1 finds a switch channel): toggle switch arms
- *            the pan motor. Switch off → gun forced to 1500 (stopped) regardless
- *            of knob position. Switch on → knob controls pan with a wide
- *            deadband (~±100 µs) so only deliberate pushes slew the gun.
- *            Operator workflow: power on, center knob deliberately, then arm.
+ *   Phase 3 (obsolete): toggle-armed knob with wide deadband — was the
+ *            workaround for the continuous servo's no-feedback problem.
+ *            Not needed now that the servo is positional. Phase 3 code was
+ *            never written; placeholder removed.
  *
- * The deck gun pan servo is a CONTINUOUS-ROTATION servo:
- *   1500 µs        → stop
- *   1500 + N µs    → rotate one way at speed ∝ N
- *   1500 - N µs    → rotate the other way at speed ∝ N
- * No position feedback — knob commands SLEW SPEED, not angle.
+ * Pan servo µs mapping (positional):
+ *   1500 µs       → centered
+ *   < 1500 µs     → angled one direction (proportional)
+ *   > 1500 µs     → angled the other direction (proportional)
  *
  * NOTE: config.h:63 says CH_GUN_PAN 3 — pre-hardware scaffold value. Real
- * wiring is PCA9685 ch8. Update config.h once a working phase passes.
+ * wiring is PCA9685 ch8. Update config.h once phase 2 passes.
  *
  * Wiring:
  *   Receiver iBUS    → 1 kΩ → GPIO 16 (with 2 kΩ to GND)
@@ -33,17 +33,17 @@
  */
 
 // =============================================================================
-// PHASE SELECTOR — set to 1 for discovery, 2 for naive knob → pan, 3 for
-// toggle-armed knob → pan. Recompile after changing.
+// PHASE SELECTOR — set to 1 for discovery, 2 for live knob → pan control.
+// Recompile after changing.
 // =============================================================================
-#define ACTIVE_PHASE 1
+#define ACTIVE_PHASE 2
 
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
 
 #if ACTIVE_PHASE == 2
 // =============================================================================
-// PHASE 2 — naive knob → pan (DEPRECATED: gun spins on TX power-on)
+// PHASE 2 — knob CH5 → ch8 positional pan servo
 // =============================================================================
 
 Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
@@ -54,12 +54,14 @@ HardwareSerial ibusSerial(1);
 // ---- Tunables ----
 const uint8_t  KNOB_CHANNEL_INDEX   = 4;     // CH5, found in phase 1
 const uint8_t  GUN_PAN_PCA_CHANNEL  = 8;     // PCA9685 ch8 (real wiring)
-// CONTINUOUS servo: these are SPEED limits, not position limits.
-// 1500 = stop; 1300 = full speed CCW (or CW, depending on PAN_REVERSE).
-const uint16_t PAN_MIN_US           = 1300;  // max speed one direction
-const uint16_t PAN_MAX_US           = 1700;  // max speed the other direction
-const uint16_t PAN_DEADBAND_US      = 30;    // |knob - 1500| ≤ this → force output 1500 (no creep)
-const bool     PAN_REVERSE          = false; // flip if knob CW spins gun CCW
+// POSITIONAL servo: these are ANGLE limits.
+// 1500 = centered; 1300 ≈ ~30° one way; 1700 ≈ ~30° the other way.
+// Conservative starting point — widen toward 1000/2000 once you see
+// where the linkage actually binds (test_15 pattern).
+const uint16_t PAN_MIN_US           = 1300;
+const uint16_t PAN_MAX_US           = 1700;
+const uint16_t PAN_DEADBAND_US      = 15;    // |knob - 1500| ≤ this → snap to 1500 (filters TX jitter)
+const bool     PAN_REVERSE          = false; // flip if knob CW pans gun CCW
 
 const uint16_t REPORT_INTERVAL_MS   = 2000;
 
@@ -92,10 +94,8 @@ uint16_t clampPan(uint16_t rawUs) {
   if (rawUs < 1000) rawUs = 1000;
   if (rawUs > 2000) rawUs = 2000;
   if (PAN_REVERSE) rawUs = 3000 - rawUs;
-  // Center deadband: knob within ±PAN_DEADBAND_US of 1500 → exact stop.
-  // Continuous servos creep at the nominal 1500 µs "stop" pulse due to
-  // factory trim. Snapping to 1500 only when actually centered eliminates
-  // the creep without sacrificing fine speed control elsewhere.
+  // Center deadband: knob within ±PAN_DEADBAND_US of 1500 → snap to 1500.
+  // Filters knob-axis TX jitter so the servo doesn't micro-twitch at rest.
   int d = (int)rawUs - 1500;
   if (d < 0) d = -d;
   if (d <= (int)PAN_DEADBAND_US) return 1500;
@@ -190,9 +190,9 @@ void setup() {
   Serial.println("========================================");
   Serial.printf("Knob:      CH%d (idx %d)\n",
                 KNOB_CHANNEL_INDEX + 1, KNOB_CHANNEL_INDEX);
-  Serial.printf("Pan servo: PCA9685 ch%d  (CONTINUOUS rotation — µs = SPEED, not angle)\n",
+  Serial.printf("Pan servo: PCA9685 ch%d  (POSITIONAL — µs = angle)\n",
                 GUN_PAN_PCA_CHANNEL);
-  Serial.printf("Speed:     %u..%u µs   deadband ±%u µs   reverse=%s\n",
+  Serial.printf("Angle:     %u..%u µs   deadband ±%u µs   reverse=%s\n",
                 PAN_MIN_US, PAN_MAX_US, PAN_DEADBAND_US,
                 PAN_REVERSE ? "true" : "false");
   Serial.println();

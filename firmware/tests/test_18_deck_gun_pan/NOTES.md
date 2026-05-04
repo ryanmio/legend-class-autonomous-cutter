@@ -59,38 +59,32 @@ You bumped a stick. Stop, hold sticks still, turn only the knob. If a channel ke
 
 ## Phase 2 — drive the deck gun pan servo
 
-> **The pan servo is CONTINUOUS rotation, not positional.** µs commands rotation
-> *speed*, not angle. 1500 = stop, 1500+N = rotate one way at speed ∝ N,
-> 1500−N = rotate the other way. The knob therefore behaves like a slew-rate
-> joystick: knob centered = gun stopped, knob off-center = gun rotates at
-> proportional speed. There is **no position feedback** — operator must center
-> the knob to hold a heading, and a knob left off-center will keep slewing
-> until something mechanical stops it.
+> **The pan servo is now a POSITIONAL 9g micro** (MG90S / SG90 class), swapped
+> in 2026-05-04 to replace the original FS90R continuous-rotation unit. µs
+> commands an angle, not a speed. 1500 = centered, 1300/1700 = ±~30° from
+> center (servo-dependent). Knob position straightforwardly maps to gun angle.
 
-### Tweaks vs. the naive pass-through
+### Behavior
 
-- `PAN_DEADBAND_US ±30` µs around 1500 forces an exact `1500 µs` output when
-  the knob is at rest. Continuous servos almost always creep at the nominal
-  1500 µs "stop" pulse due to factory trim drift. Snapping to 1500 only when
-  actually centered kills the creep without coarsening speed control elsewhere.
-- Speed cap tightened to `1300..1700` µs (±200 from neutral) so the gun slews
-  at a controllable rate. Widen via the constants if it feels too slow.
+- Pass-through with clamp: knob µs (CH5) → servo µs (PCA9685 ch8), constrained to `[PAN_MIN_US..PAN_MAX_US]`.
+- Center deadband (`PAN_DEADBAND_US ±15`) snaps output to exactly 1500 when the knob is near center — filters TX-side jitter so the servo doesn't micro-twitch at rest.
+- No-frame and channel-freeze failsafes hold pan at 1500 µs on iBUS loss.
+- Running min/max of commanded pan µs printed every 2 s — sweep the knob fully and you'll see how much travel the linkage actually allows before binding (test_15 pattern).
 
-### Future work — closing the position loop
+### History — earlier failed approaches (kept here so we don't repeat)
 
-Without feedback, the gun is open-loop. Practical paths if/when we want
-"gun points where I aim":
+The original servo was an FS90R (continuous rotation, µs = speed). Two
+attempts at making that work failed:
 
-- **Live with it.** Operator discipline — slew, then center the knob, trust
-  your eyes. Fine for the bench test.
-- **Potentiometer on the turret shaft** → ESP32 ADC. Closed-loop: knob =
-  desired angle, error drives speed. ~$1, one wire, soft-coded limits.
-- **Limit switches** at the mechanical extremes — stops slewing past them,
-  no angle awareness in between.
-- **Swap to a positional servo** (what `config.h`'s scaffold comment
-  originally assumed). Most invasive.
+1. **Naïve passthrough** — knob µs → servo µs. Failed because the knob doesn't
+   auto-center, so on TX power-on the gun started spinning immediately and
+   wouldn't stop until the operator manually centered the knob.
+2. **Toggle-switch arm + huge deadband** — would have gated the motor with a
+   physical TX switch and used only the knob extremes for deliberate slewing.
+   Phase 1 follow-up showed no switches are mapped on this transmitter and
+   we'd need to dig into the FS-i6X menu to map one.
 
-Out of scope for this test.
+Hardware swap to positional servo solved the architectural problem cleanly.
 
 ### Hardware delta in phase 2
 
@@ -142,17 +136,17 @@ CH5 (idx 4) is changing:  1388 → 1363  (Δ -25)
 The phase 1 discovery sketch is preserved at the bottom of the `.ino` inside an
 `#if 0` block — re-enable if you ever need to re-map a knob.
 
-### Phase 2 — pending
+### Phase 2 — pending (positional servo, 2026-05-04 attempt)
 
-Continuous-rotation servo. Default speed cap `PAN_MIN_US..PAN_MAX_US = 1300..1700` µs
-(±200 from 1500), center deadband ±30 µs to defeat creep.
+Default angle clamp `PAN_MIN_US..PAN_MAX_US = 1300..1700` µs (~±30°),
+center deadband ±15 µs.
 
 When running, verify:
-- Knob centered → gun stationary (no creep). The 2-second `Pan range so far`
-  line should pin to `1500..1500` while you hold the knob still.
-- Knob off-center → gun rotates at proportional speed.
-- Knob fully one way → gun rotates fast in that direction; capped at `PAN_MIN`/`MAX_US`.
-- Failsafe (TX off) → gun stops within ~500 ms.
+- TX power-on with knob anywhere → servo holds the angle the knob commands. No spinning, no runaway.
+- Knob turn → gun pans to the corresponding angle, holds there.
+- Knob centered → gun returns to 1500 µs angle. The 2-second `Pan range so far` line should pin to `1500..1500` at rest.
+- Sweep limits — turn the knob fully both ways, watch for the linkage binding before the knob hits its mechanical end. Tighten `PAN_MIN_US`/`MAX_US` based on what you see.
+- Failsafe (TX off) → gun returns to 1500 µs within ~500 ms.
 
 When phase 2 passes:
 - update `firmware/legend_cutter/config.h:63` from `CH_GUN_PAN 3` → `8`
