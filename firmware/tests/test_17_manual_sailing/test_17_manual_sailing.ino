@@ -6,17 +6,28 @@
  *   transmitter sticks → ESP32 (iBUS) → PCA9685 → both ESCs + rudder servo,
  * with differential-thrust mixing and a reverse-interlock safety.
  *
- * STICK SCHEME (Mode-2 with center-sprung throttle):
- *   CH1  right-stick H   → rudder
+ * STICK SCHEME (Mode-2, throttle stick rests at the BOTTOM — not center-sprung):
+ *   CH1  right-stick H   → rudder (full stick range scaled to RUDDER_MIN/MAX_US)
  *   CH2  right-stick V   → reverse command (down = more reverse)
- *   CH3  left-stick V    → forward throttle  AND  reverse-enable interlock
+ *   CH3  left-stick V    → forward throttle (any lift off idle = forward)
+ *                          AND reverse-enable interlock
+ *
+ * Throttle:
+ *   stick at bottom (≤ THROTTLE_IDLE_MAX_US)  → motors stopped (idle)
+ *   stick lifted off bottom                    → forward, scaled to MAX_FWD_US
+ *   so rest position = idle, lifting at all = motors engaging.
  *
  * Reverse only engages when BOTH:
- *   - left stick is pushed all the way down (≤ LEFT_STICK_DOWN_US)
+ *   - left stick at idle (≤ THROTTLE_IDLE_MAX_US, i.e. rest position)
  *   - right stick V is below neutral (CH2 < 1500 - dead band)
- * One stick alone never produces reverse output. This prevents an idle
- * left stick from accidentally allowing reverse, and prevents a bumped
- * right stick from kicking the motors backwards.
+ * One stick alone never produces reverse output. Specifically: while throttle
+ * is forward (lifted), pulling right-stick down is ignored — interlock blocks
+ * reverse so the boat can't slam from forward to reverse instantly.
+ *
+ * SMOOTHING: throttle and rudder targets are slew-rate limited so a stick
+ * slammed to the extreme ramps to it over THROTTLE_SLEW_US_PER_SEC /
+ * RUDDER_SLEW_US_PER_SEC respectively. Bypassed on failsafe entry (snap to
+ * 1500 immediately for safety).
  *
  * Five pass gates (auto-verified):
  *   PASS 1/5  iBUS acquired AND all sticks at safe neutral → ARMED
@@ -25,9 +36,9 @@
  *   PASS 4/5  Forward throttle advanced WITH rudder offset → port and
  *             starboard ESC outputs differ by ≥ DIFF_MIN_SPLIT_US
  *             (proves the differential-thrust mix is actually splitting)
- *   PASS 5/5  Reverse interlock verified — Phase A: right-stick down with
- *             left stick centered must NOT drive reverse (output stays at
- *             1500). Phase B: left stick fully down + right stick down DOES
+ *   PASS 5/5  Reverse interlock verified — Phase A: forward throttle
+ *             commanded + right-stick down must KEEP throttle forward, no
+ *             reverse engages. Phase B: left stick at idle + right stick down DOES
  *             drive reverse.
  *
  * After all five pass and operator returns sticks to neutral, sketch enters
@@ -85,9 +96,19 @@ const bool     RUDDER_REVERSE           = false;
 const float    DIFF_THRUST_FACTOR       = 0.3f;
 
 // ---- Safety thresholds ----
-const uint16_t NEUTRAL_DEADBAND_US      = 30;     // stick within 1500±this counts as centered
-const uint16_t LEFT_STICK_DOWN_US       = 1100;   // left stick "all the way down" interlock
+const uint16_t NEUTRAL_DEADBAND_US      = 30;     // right-stick / rudder within 1500±this = centered
+const uint16_t THROTTLE_IDLE_MAX_US     = 1100;   // left-stick at or below this = idle (rest position).
+                                                   // Above this engages forward throttle (scaled).
+                                                   // At or below this enables reverse via right-stick V.
 const uint16_t REVERSE_DEADBAND_US      = 30;     // right-stick-V below 1500-this = reverse intent
+
+// ---- Slew-rate (smoothing) ----
+// Limits how fast the THROTTLE and RUDDER targets can change per second.
+// Prevents a stick slammed to the extreme from instantly slamming the motors.
+// Bypassed on failsafe entry (snap to 1500 immediately for safety).
+// Tune higher for sharper response, lower for softer feel.
+const uint16_t THROTTLE_SLEW_US_PER_SEC = 400;    // 1500→1900 in ~1 s; 1500→MAX_FWD in ~0.75 s
+const uint16_t RUDDER_SLEW_US_PER_SEC   = 1000;   // full sweep ~0.34 s — steering is faster
 
 // ---- Gate thresholds ----
 const uint16_t RUDDER_LEFT_THRESHOLD_US  = 1400;  // rudder µs ≤ this passes left sweep
@@ -121,9 +142,15 @@ enum TestState {
 TestState state = WAIT_SIGNAL;
 
 bool failsafeActive       = false;
-bool revPhaseAObserved    = false;   // we saw the operator try right-stick-down with left stick centered
+bool revPhaseAObserved    = false;   // we saw the operator try right-stick-down with throttle commanding fwd
 unsigned long lastHint    = 0;
 unsigned long phaseAStart = 0;
+
+// Slew-limited "previous" outputs (the actual values we wrote last frame).
+// Updated every authorized frame; reset to 1500 on failsafe entry.
+uint16_t prevThrottleUs   = 1500;
+uint16_t prevRudderUs     = 1500;
+unsigned long lastSlewMs  = 0;
 const unsigned long HINT_INTERVAL_MS    = 8000;
 const unsigned long FREEZE_TIMEOUT_MS   = 500;
 const unsigned long NO_FRAME_TIMEOUT_MS = 500;
@@ -141,42 +168,58 @@ bool atNeutral(uint16_t stickUs) {
   return d <= NEUTRAL_DEADBAND_US;
 }
 
-bool leftStickAllTheWayDown(uint16_t leftStickUs) {
-  return leftStickUs <= LEFT_STICK_DOWN_US;
+bool throttleAtIdle(uint16_t leftStickUs) {
+  return leftStickUs <= THROTTLE_IDLE_MAX_US;
 }
 
 bool rightStickCommandingReverse(uint16_t rightStickVUs) {
   return rightStickVUs < (1500 - REVERSE_DEADBAND_US);
 }
 
-uint16_t clampRudder(uint16_t rawUs) {
+// Map raw rudder stick [1000..2000] linearly across [RUDDER_MIN_US..RUDDER_MAX_US].
+// Two-segment scale around 1500 to handle any asymmetry between L and R limits.
+// Stick at full extreme = rudder at hardware extreme — full stick range usable.
+uint16_t scaledRudder(uint16_t rawUs) {
   if (rawUs < 1000) rawUs = 1000;
   if (rawUs > 2000) rawUs = 2000;
   if (RUDDER_REVERSE) rawUs = 3000 - rawUs;
-  if (rawUs < RUDDER_MIN_US) rawUs = RUDDER_MIN_US;
-  if (rawUs > RUDDER_MAX_US) rawUs = RUDDER_MAX_US;
-  return rawUs;
+  if (rawUs <= 1500) {
+    return map(rawUs, 1000, 1500, RUDDER_MIN_US, 1500);
+  }
+  return map(rawUs, 1500, 2000, 1500, RUDDER_MAX_US);
 }
 
-// Combine left stick (forward) + right stick V (reverse) + interlock into a
-// single throttle µs in [MIN_REV_US..MAX_FWD_US], with 1500 = stop.
+// Throttle: left stick rests at the BOTTOM (1000 µs) — there is no center.
+// Stick above THROTTLE_IDLE_MAX_US scales linearly into [1500..MAX_FWD_US].
+// Stick at/below THROTTLE_IDLE_MAX_US is idle, and reverse can engage if the
+// right-stick-V is pulled below center (interlock satisfied).
 uint16_t computeThrottleUs(uint16_t leftStickUs, uint16_t rightStickVUs) {
-  // Forward: left stick > 1500 + dead band → forward throttle, ignore reverse stick.
-  if (leftStickUs > 1500 + NEUTRAL_DEADBAND_US) {
-    uint16_t fwd = leftStickUs;
-    if (fwd > MAX_FWD_US) fwd = MAX_FWD_US;
-    if (fwd < 1500)       fwd = 1500;
-    return fwd;
+  if (!throttleAtIdle(leftStickUs)) {
+    // Forward: scale [THROTTLE_IDLE_MAX_US..2000] → [1500..MAX_FWD_US].
+    if (leftStickUs >= 2000) return MAX_FWD_US;
+    return (uint16_t)map(leftStickUs, THROTTLE_IDLE_MAX_US, 2000, 1500, MAX_FWD_US);
   }
-  // Reverse: requires interlock — left stick all the way down AND right stick V below neutral.
-  if (leftStickAllTheWayDown(leftStickUs) && rightStickCommandingReverse(rightStickVUs)) {
+  // Throttle at idle — right stick V controls reverse (interlock satisfied).
+  if (rightStickCommandingReverse(rightStickVUs)) {
     uint16_t rev = rightStickVUs;
     if (rev < MIN_REV_US) rev = MIN_REV_US;
     if (rev > 1500)       rev = 1500;
     return rev;
   }
-  // Anything else — including right-stick-down without the interlock — is neutral.
   return 1500;
+}
+
+// Slew-limit prev → target by at most maxPerSec µs/s over the dt elapsed since
+// the last call. Returns the new value to write to the actuator.
+uint16_t slewLimit(uint16_t prev, uint16_t target,
+                   uint16_t maxPerSec, unsigned long dtMs) {
+  if (dtMs == 0) return prev;
+  uint32_t maxStep = (uint32_t)maxPerSec * dtMs / 1000;
+  if (maxStep == 0) maxStep = 1;        // ensure progress on small dt
+  int diff = (int)target - (int)prev;
+  if (diff > (int)maxStep)  return prev + maxStep;
+  if (diff < -(int)maxStep) return prev - maxStep;
+  return target;
 }
 
 // Differential-thrust mix from motors.cpp:46. Produces (port, stbd) µs pair.
@@ -226,9 +269,13 @@ void enterFailsafe(const char* reason) {
   if (failsafeActive) return;
   failsafeActive = true;
   writeNeutral();
+  // Snap slew state to neutral so the post-failsafe ramp starts from 1500
+  // instead of catching up from wherever the slew was last frame.
+  prevThrottleUs = 1500;
+  prevRudderUs   = 1500;
   Serial.println();
   Serial.printf(">>> FAILSAFE — %s. All outputs neutral. <<<\n", reason);
-  Serial.println("Re-center every stick once signal returns to re-arm.");
+  Serial.println("Throttle to idle (stick fully down) + sticks centered to re-arm.");
   if (state != WAIT_SIGNAL) state = WAIT_SAFE_NEUTRAL;
   // reset gate progress that depends on continuous signal
   revPhaseAObserved = false;
@@ -245,11 +292,11 @@ void clearFailsafe() {
 }
 
 bool allSticksAtSafeNeutral(uint16_t leftStick, uint16_t rightStickV, uint16_t rudderRaw) {
-  // Forward throttle not commanded.
-  if (leftStick > 1500 + NEUTRAL_DEADBAND_US) return false;
-  // Right stick V near center (no reverse intent and no random offset).
+  // Throttle stick at idle (rest position — bottom of travel).
+  if (!throttleAtIdle(leftStick)) return false;
+  // Right stick V near center (no reverse intent).
   if (!atNeutral(rightStickV)) return false;
-  // Rudder near center.
+  // Rudder stick near center.
   if (!atNeutral(rudderRaw)) return false;
   return true;
 }
@@ -261,8 +308,8 @@ void printHint(uint16_t leftStick, uint16_t rightStickV, uint16_t rudderRaw) {
       Serial.println("  ...waiting for iBUS frames. Turn on your transmitter.");
       break;
     case WAIT_SAFE_NEUTRAL:
-      Serial.printf("  ...waiting for safe neutral.  L-stick=%u  R-stickV=%u  rudder=%u (need all near 1500, fwd not advanced).\n",
-                    leftStick, rightStickV, rudderRaw);
+      Serial.printf("  ...waiting for safe neutral.  L-stick=%u (need ≤%u, idle)  R-stickV=%u (need ~1500)  rudder=%u (need ~1500).\n",
+                    leftStick, THROTTLE_IDLE_MAX_US, rightStickV, rudderRaw);
       break;
     case WAIT_RUDDER_LEFT:
       Serial.printf("  ...sweep RUDDER LEFT (need ≤ %u µs). Currently %u.\n",
@@ -277,11 +324,12 @@ void printHint(uint16_t leftStick, uint16_t rightStickV, uint16_t rudderRaw) {
                     RUDDER_OFFSET_FOR_DIFF_US, FWD_ADVANCE_THRESHOLD_US);
       break;
     case WAIT_REVERSE_PHASE_A:
-      Serial.println("  ...REVERSE PHASE A: pull right stick DOWN with left stick centered.");
-      Serial.println("     Motors must NOT reverse (interlock). Hold for ~1.5 s.");
+      Serial.println("  ...REVERSE PHASE A: lift left stick OFF idle (any forward) AND pull right stick DOWN.");
+      Serial.println("     Motors must NOT reverse (interlock blocks reverse while throttle is forward).");
+      Serial.println("     Hold for ~1.5 s.");
       break;
     case WAIT_REVERSE_PHASE_B:
-      Serial.println("  ...REVERSE PHASE B: left stick ALL THE WAY DOWN + right stick DOWN.");
+      Serial.println("  ...REVERSE PHASE B: drop left stick to IDLE (bottom) + right stick DOWN.");
       Serial.println("     Motors should now reverse.");
       break;
     case WAIT_FINAL_NEUTRAL:
@@ -330,7 +378,7 @@ void setup() {
   ibusSerial.begin(115200, SERIAL_8N1, 16, -1);
 
   Serial.println();
-  Serial.println("Step 1: turn on TX. Center all sticks (left-stick V at 1500, right stick at rest).");
+  Serial.println("Step 1: turn on TX. Throttle stick (left V) all the way DOWN at idle. Right stick at rest.");
   Serial.println("----------------------------------------");
   lastHint = millis();
 }
@@ -359,9 +407,21 @@ void handleFrame() {
   uint16_t rightStickV = channels[REVERSE_CHANNEL_INDEX];
   uint16_t rudderRaw   = channels[RUDDER_CHANNEL_INDEX];
 
-  // ---- Compute outputs every frame so live values reflect current sticks ----
-  uint16_t rudderUs   = clampRudder(rudderRaw);
-  uint16_t throttleUs = computeThrottleUs(leftStick, rightStickV);
+  // ---- Compute target outputs from sticks (no slew yet) ----
+  uint16_t rudderTarget   = scaledRudder(rudderRaw);
+  uint16_t throttleTarget = computeThrottleUs(leftStick, rightStickV);
+
+  // ---- Slew-limit toward targets ----
+  unsigned long now  = millis();
+  unsigned long dtMs = lastSlewMs ? (now - lastSlewMs) : 0;
+  lastSlewMs = now;
+  uint16_t throttleUs = slewLimit(prevThrottleUs, throttleTarget,
+                                  THROTTLE_SLEW_US_PER_SEC, dtMs);
+  uint16_t rudderUs   = slewLimit(prevRudderUs,   rudderTarget,
+                                  RUDDER_SLEW_US_PER_SEC,   dtMs);
+  prevThrottleUs = throttleUs;
+  prevRudderUs   = rudderUs;
+
   uint16_t portUs, stbdUs;
   computePortStbd(throttleUs, rudderUs, portUs, stbdUs);
 
@@ -375,7 +435,12 @@ void handleFrame() {
     // Rudder stays at the commanded position even when motors are locked,
     // so the operator can sweep during the rudder gates without spinning props.
     // EXCEPT in WAIT_SIGNAL/failsafe — there we force rudder neutral too.
-    if (state == WAIT_SIGNAL || failsafeActive) rudderUs = 1500;
+    if (state == WAIT_SIGNAL || failsafeActive) {
+      rudderUs       = 1500;
+      prevRudderUs   = 1500;   // keep slew state in sync with what we wrote
+    }
+    // In WAIT_SAFE_NEUTRAL keep slew state flat for throttle, since motors are off.
+    prevThrottleUs = 1500;
   }
 
   writeOutputs(portUs, stbdUs, rudderUs);
@@ -441,7 +506,8 @@ void handleFrame() {
         Serial.printf("PASS (4/5): differential thrust verified.\n");
         Serial.printf("            L-stick=%u  rudder=%u (Δ%+d)  PORT=%u  STBD=%u  |split|=%d µs\n",
                       leftStick, rudderRaw, (int)rudderRaw - 1500, portUs, stbdUs, splitUs);
-        Serial.println("Step 5: return forward throttle to neutral, then we test REVERSE.");
+        Serial.println("Step 5a: keep LEFT STICK FORWARD, also pull RIGHT STICK DOWN.");
+        Serial.println("         Motors must STAY forward — the interlock blocks reverse while throttle is forward.");
         Serial.println("----------------------------------------");
         state = WAIT_REVERSE_PHASE_A;
         revPhaseAObserved = false;
@@ -452,20 +518,19 @@ void handleFrame() {
     }
 
     case WAIT_REVERSE_PHASE_A: {
-      // Don't progress until forward throttle is back to neutral.
-      bool fwdAtNeutral = !(leftStick > 1500 + NEUTRAL_DEADBAND_US);
-      if (!fwdAtNeutral) break;
-
-      // Phase A condition: right stick down, BUT left stick NOT all the way down (centered/idle).
-      // The interlock should keep throttleUs at 1500.
-      bool rightDown    = rightStickCommandingReverse(rightStickV);
-      bool leftCentered = atNeutral(leftStick);
-      if (rightDown && leftCentered) {
+      // Phase A — operator commands FORWARD (left stick lifted off idle) AND
+      // pulls right stick DOWN. The interlock must keep throttleUs in the
+      // forward range; reverse is blocked because the throttle is forward.
+      bool leftForward = !throttleAtIdle(leftStick);
+      bool rightDown   = rightStickCommandingReverse(rightStickV);
+      if (leftForward && rightDown) {
         if (phaseAStart == 0) phaseAStart = millis();
-        if (throttleUs != 1500) {
-          // This would mean the interlock is broken — abort gate.
+        if (throttleUs < 1500) {
+          // Interlock broken — right-stick-down somehow drove throttle into reverse
+          // even though forward was commanded. This is a logic failure in
+          // computeThrottleUs(). Halt and surface it.
           Serial.println();
-          Serial.printf("[FAIL] interlock broken: right-stick down with left centered drove throttle to %u µs.\n",
+          Serial.printf("[FAIL] interlock broken: forward + right-down drove throttle to %u µs (reverse).\n",
                         throttleUs);
           Serial.println("       Halting. Check computeThrottleUs() logic.");
           state = WAIT_SAFE_NEUTRAL;
@@ -475,23 +540,24 @@ void handleFrame() {
         if (millis() - phaseAStart >= PHASE_A_HOLD_MS) {
           revPhaseAObserved = true;
           Serial.println();
-          Serial.println("[OK] interlock holds: right-stick down with left centered → motors stay at 1500.");
-          Serial.println("Step 5b: now push LEFT STICK ALL THE WAY DOWN + right stick down → motors should reverse.");
+          Serial.println("[OK] interlock holds: forward + right-down → throttle stays forward, no reverse.");
+          Serial.println("Step 5b: drop LEFT STICK to IDLE (bottom) while keeping right stick down.");
+          Serial.println("         Motors should now reverse.");
           state = WAIT_REVERSE_PHASE_B;
           lastHint = millis();
         }
       } else {
-        // Reset hold timer if operator releases.
+        // Reset hold timer if operator releases either stick.
         phaseAStart = 0;
       }
       break;
     }
 
     case WAIT_REVERSE_PHASE_B: {
-      bool leftDown  = leftStickAllTheWayDown(leftStick);
+      bool leftIdle  = throttleAtIdle(leftStick);
       bool rightDown = rightStickCommandingReverse(rightStickV);
       bool reversing = throttleUs < 1500 - NEUTRAL_DEADBAND_US;
-      if (leftDown && rightDown && reversing) {
+      if (leftIdle && rightDown && reversing) {
         Serial.println();
         Serial.printf("PASS (5/5): reverse engaged via interlock. L-stick=%u  R-stickV=%u  throttle out=%u µs  PORT=%u  STBD=%u\n",
                       leftStick, rightStickV, throttleUs, portUs, stbdUs);
