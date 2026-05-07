@@ -1,14 +1,6 @@
 # Firmware Audit — legend_cutter vs Confirmed Tests
 
-Do this audit after all individual and combined tests are complete and NOTES.md results
-are filled in. The goal is to reconcile every module in `legend_cutter/` against actual
-test evidence before doing any on-water integrated testing.
-
----
-
-## How to use this file
-
-For each item below, mark it one of:
+KEY
 
 - `[ ]` — not checked yet
 - `[x]` — confirmed correct, no change needed
@@ -168,12 +160,13 @@ untested.
 
 ### 3f. Telemetry / WiFi / WebSocket / HTTP — `telemetry.cpp`
 
-No test at all. Several TODO comments inside (HTTP endpoints not wired up, JSON
-command parsing not implemented).
+Addressed by **test_20_wifi_leds**: WiFi AP bring-up, WebSocket at 10 Hz,
+HTTP `/status` and `/led` endpoints all exercised together. LED control
+confirmed end-to-end (app toggle → GPIO state) before integrating into main firmware.
 
-- [ ] Decide: is WiFi telemetry in scope for first on-water test, or defer?
-- [ ] If in scope: test AP bring-up, WebSocket connection, HTTP /status endpoint
-- [ ] Implement TODO endpoints before relying on phone app control
+- [x] Decide: WiFi telemetry IS in scope for first on-water test
+- [ ] Run test_20 and confirm all 5 gates pass
+- [ ] Implement remaining HTTP endpoints in `telemetry.cpp` after test_20 passes
 
 ---
 
