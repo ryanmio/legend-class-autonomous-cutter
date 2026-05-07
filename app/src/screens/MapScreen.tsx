@@ -74,7 +74,7 @@ const MAP_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-export default function MapScreen({ route }: Props) {
+export default function MapScreen({ route, navigation }: Props) {
   const { ip } = route.params;
   const { data, connected } = useTelemetry();
   const webViewRef = useRef<WebView>(null);
@@ -102,6 +102,9 @@ export default function MapScreen({ route }: Props) {
       />
 
       <View style={[styles.topBar, { top: insets.top + 8 }]} pointerEvents="box-none">
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.backBtnText}>‹ BACK</Text>
+        </TouchableOpacity>
         <View style={styles.connRow}>
           <Text style={[styles.dot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
           <Text style={styles.connText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
@@ -124,6 +127,8 @@ const styles = StyleSheet.create({
     position: 'absolute', left: 16, right: 16,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
   },
+  backBtn:       { backgroundColor: 'rgba(10,15,26,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
+  backBtnText:   { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },
   connRow:       { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(10,15,26,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
   dot:           { fontSize: 10, marginRight: 5 },
   connText:      { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },
