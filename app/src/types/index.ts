@@ -22,6 +22,10 @@ export interface TelemetryData {
   pitch: string;
   depth_m: string;
   sonar_ok: boolean;
+  // LED light states — broadcast by firmware so app always reflects hardware truth
+  nav_on?: boolean;
+  bridge_on?: boolean;
+  deck_on?: boolean;
   // Added in later phases
   mode?: 'MANUAL' | 'AUTONOMOUS' | 'FAILSAFE' | 'ESTOP' | 'IDLE';
 }

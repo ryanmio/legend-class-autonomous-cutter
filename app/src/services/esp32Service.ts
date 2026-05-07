@@ -81,6 +81,10 @@ export async function setRadar(ip: string, on: boolean) {
   return post(ip, '/radar', { on });
 }
 
+export async function setLed(ip: string, light: 'nav' | 'bridge' | 'deck', state: boolean) {
+  return post(ip, '/led', { light, state });
+}
+
 export async function playAudio(ip: string, track: number) {
   return post(ip, '/audio', { track });
 }

@@ -6,13 +6,15 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
-import { setBayDoor, setAnchor, setRadar } from '../services/esp32Service';
+import { setBayDoor, setAnchor, setRadar, setLed } from '../services/esp32Service';
+import { useTelemetry } from '../hooks/useTelemetry';
 import EmergencyStop from '../components/EmergencyStop';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Systems'>;
 
 export default function SystemsScreen({ route }: Props) {
   const { ip } = route.params;
+  const { data } = useTelemetry();
   const [radar, setRadarState] = useState(false);
 
   const toggleRadar = async () => {
@@ -57,6 +59,23 @@ export default function SystemsScreen({ route }: Props) {
       <TouchableOpacity style={[styles.toggleBtn, radar && styles.toggleOn]} onPress={toggleRadar}>
         <Text style={styles.toggleText}>{radar ? 'ROTATING' : 'STOPPED'}</Text>
       </TouchableOpacity>
+
+      <Text style={styles.section}>LIGHTS</Text>
+      <View style={styles.row}>
+        {([
+          { key: 'nav'    as const, label: 'NAV',    on: data?.nav_on    ?? false },
+          { key: 'bridge' as const, label: 'BRIDGE', on: data?.bridge_on ?? false },
+          { key: 'deck'   as const, label: 'DECK',   on: data?.deck_on   ?? false },
+        ]).map(({ key, label, on }) => (
+          <TouchableOpacity
+            key={key}
+            style={[styles.toggleBtn, on && styles.toggleOn]}
+            onPress={() => setLed(ip, key, !on).catch(() => {})}
+          >
+            <Text style={styles.toggleText}>{on ? `${label} ON` : label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
       <EmergencyStop ip={ip} />
     </View>
