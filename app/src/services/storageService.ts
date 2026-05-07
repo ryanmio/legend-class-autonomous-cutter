@@ -6,23 +6,18 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Waypoint } from '../types';
 
 const KEYS = {
-  lastIP:       'lastIP',
-  lastCamIP:    'lastCamIP',
-  missions:     'missions',
-  depthLog:     'depthLog',
+  lastIP:   'lastIP',
+  missions: 'missions',
+  depthLog: 'depthLog',
 } as const;
 
 // ---- Connection ----
-export async function saveLastIP(ip: string, camIP: string) {
-  await AsyncStorage.multiSet([[KEYS.lastIP, ip], [KEYS.lastCamIP, camIP]]);
+export async function saveLastIP(ip: string) {
+  await AsyncStorage.setItem(KEYS.lastIP, ip);
 }
 
-export async function loadLastIP(): Promise<{ ip: string; camIP: string } | null> {
-  const pairs = await AsyncStorage.multiGet([KEYS.lastIP, KEYS.lastCamIP]);
-  const ip    = pairs[0][1];
-  const camIP = pairs[1][1];
-  if (!ip) return null;
-  return { ip, camIP: camIP ?? ip };
+export async function loadLastIP(): Promise<string | null> {
+  return AsyncStorage.getItem(KEYS.lastIP);
 }
 
 // ---- Waypoint missions ----

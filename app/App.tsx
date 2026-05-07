@@ -15,14 +15,14 @@ import SettingsScreen from './src/screens/SettingsScreen';
 
 export type RootStackParamList = {
   Connection: undefined;
-  Helm: { ip: string; cameraIP: string };
-  Map: { ip: string };
-  Telemetry: { ip: string };
-  Weapons: { ip: string };
-  Systems: { ip: string };
-  FPV: { cameraIP: string };
-  Survey: { ip: string };
-  Settings: { ip: string };
+  Helm:       { ip: string };
+  Map:        { ip: string };
+  Telemetry:  { ip: string };
+  Weapons:    { ip: string };
+  Systems:    { ip: string };
+  FPV:        { ip: string };   // kept for future camera; not in nav bar yet
+  Survey:     { ip: string };
+  Settings:   { ip: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();

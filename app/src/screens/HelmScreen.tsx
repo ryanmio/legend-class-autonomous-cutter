@@ -14,7 +14,7 @@ import EmergencyStop from '../components/EmergencyStop';
 type Props = NativeStackScreenProps<RootStackParamList, 'Helm'>;
 
 export default function HelmScreen({ route, navigation }: Props) {
-  const { ip, cameraIP } = route.params;
+  const { ip } = route.params;
   const { data, connected } = useTelemetry();
   useKeepAwake();
 
@@ -51,11 +51,11 @@ export default function HelmScreen({ route, navigation }: Props) {
 
       {/* Bottom nav */}
       <View style={styles.navRow}>
-        {(['Map', 'Telemetry', 'Weapons', 'Systems', 'FPV'] as const).map((screen) => (
+        {(['Map', 'Telemetry', 'Weapons', 'Systems'] as const).map((screen) => (
           <TouchableOpacity
             key={screen}
             style={styles.navBtn}
-            onPress={() => navigation.navigate(screen as any, { ip, cameraIP } as any)}
+            onPress={() => navigation.navigate(screen, { ip })}
           >
             <Text style={styles.navBtnText}>{screen.toUpperCase()}</Text>
           </TouchableOpacity>
