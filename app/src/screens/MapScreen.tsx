@@ -1,11 +1,11 @@
 import React, { useRef, useEffect } from 'react';
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import Screen from '../components/Screen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 
@@ -78,6 +78,7 @@ export default function MapScreen({ route }: Props) {
   const { ip } = route.params;
   const { data, connected } = useTelemetry();
   const webViewRef = useRef<WebView>(null);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (!webViewRef.current || !data) return;
@@ -90,7 +91,7 @@ export default function MapScreen({ route }: Props) {
   }, [data?.gps_fix, data?.lat, data?.lon]);
 
   return (
-    <Screen style={styles.screen}>
+    <View style={styles.screen}>
       <WebView
         ref={webViewRef}
         source={{ html: MAP_HTML }}
@@ -100,7 +101,7 @@ export default function MapScreen({ route }: Props) {
         domStorageEnabled
       />
 
-      <View style={styles.topBar} pointerEvents="box-none">
+      <View style={[styles.topBar, { top: insets.top + 8 }]} pointerEvents="box-none">
         <View style={styles.connRow}>
           <Text style={[styles.dot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
           <Text style={styles.connText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
@@ -112,15 +113,15 @@ export default function MapScreen({ route }: Props) {
           <Text style={styles.centerBtnText}>CENTER</Text>
         </TouchableOpacity>
       </View>
-    </Screen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen:        { padding: 0 },
+  screen:        { flex: 1, backgroundColor: Colors.background },
   map:           { flex: 1 },
   topBar:        {
-    position: 'absolute', top: 12, left: 16, right: 16,
+    position: 'absolute', left: 16, right: 16,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
   },
   connRow:       { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(10,15,26,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
