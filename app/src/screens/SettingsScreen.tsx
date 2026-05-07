@@ -1,14 +1,10 @@
-// SettingsScreen.tsx
-// WiFi IP config, PID tuning, servo limit calibration,
-// failsafe config, IMU calibration trigger.
-
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { setPID, triggerIMUCalibration } from '../services/esp32Service';
-import EmergencyStop from '../components/EmergencyStop';
+import Screen from '../components/Screen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
@@ -41,39 +37,39 @@ export default function SettingsScreen({ route }: Props) {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
-      <Text style={styles.title}>SETTINGS</Text>
+    <Screen>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <Text style={styles.title}>SETTINGS</Text>
 
-      <Text style={styles.section}>HEADING-HOLD PID</Text>
-      {([['Kp', kp, setKp], ['Ki', ki, setKi], ['Kd', kd, setKd]] as const).map(([label, val, setter]) => (
-        <View key={label} style={styles.inputRow}>
-          <Text style={styles.inputLabel}>{label}</Text>
-          <TextInput
-            style={styles.input}
-            value={val}
-            onChangeText={setter as (v: string) => void}
-            keyboardType="decimal-pad"
-          />
-        </View>
-      ))}
-      <TouchableOpacity style={styles.btn} onPress={handleSavePID}>
-        <Text style={styles.btnText}>SAVE PID TO ESP32</Text>
-      </TouchableOpacity>
+        <Text style={styles.section}>HEADING-HOLD PID</Text>
+        {([['Kp', kp, setKp], ['Ki', ki, setKi], ['Kd', kd, setKd]] as const).map(([label, val, setter]) => (
+          <View key={label} style={styles.inputRow}>
+            <Text style={styles.inputLabel}>{label}</Text>
+            <TextInput
+              style={styles.input}
+              value={val}
+              onChangeText={setter as (v: string) => void}
+              keyboardType="decimal-pad"
+            />
+          </View>
+        ))}
+        <TouchableOpacity style={styles.btn} onPress={handleSavePID}>
+          <Text style={styles.btnText}>SAVE PID TO ESP32</Text>
+        </TouchableOpacity>
 
-      <Text style={styles.section}>SENSORS</Text>
-      <TouchableOpacity style={styles.btn} onPress={handleCalibrate}>
-        <Text style={styles.btnText}>CALIBRATE IMU COMPASS</Text>
-      </TouchableOpacity>
+        <Text style={styles.section}>SENSORS</Text>
+        <TouchableOpacity style={styles.btn} onPress={handleCalibrate}>
+          <Text style={styles.btnText}>CALIBRATE IMU COMPASS</Text>
+        </TouchableOpacity>
 
-      <Text style={styles.placeholder}>Servo limit calibration (Phase 4)</Text>
-
-      <EmergencyStop ip={ip} />
-    </ScrollView>
+        <Text style={styles.placeholder}>Servo limit calibration (Phase 4)</Text>
+      </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container:   { flex: 1, backgroundColor: Colors.background },
+  scroll:      { padding: 16, paddingBottom: 32 },
   title:       { color: Colors.accent, fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
   section:     { color: Colors.textSecondary, fontSize: 11, letterSpacing: 2, marginTop: 24, marginBottom: 10 },
   inputRow:    { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },

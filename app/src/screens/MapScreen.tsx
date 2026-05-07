@@ -1,12 +1,3 @@
-// MapScreen.tsx
-// Real-time boat position on a Leaflet.js map rendered inside a WebView.
-// Works with Expo Go — no native dev build required.
-//
-// NOTE: OpenStreetMap tiles need internet access. When the phone is connected
-// to the boat's WiFi AP (no internet), iOS WiFi Assist routes tile requests
-// over cellular automatically. If tiles don't load, the marker + track trail
-// still update — coordinates show in the HUD overlay at the bottom.
-
 import React, { useRef, useEffect } from 'react';
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -14,12 +5,10 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import EmergencyStop from '../components/EmergencyStop';
+import Screen from '../components/Screen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 
-// Self-contained HTML — Leaflet loaded from CDN.
-// updateBoat(lat, lon, hasFix) is called from React Native via injectJavaScript.
 const MAP_HTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -32,7 +21,7 @@ const MAP_HTML = `<!DOCTYPE html>
     body{background:#0a0f1a}
     #map{width:100vw;height:100vh}
     #hud{
-      position:absolute;bottom:90px;left:12px;right:12px;
+      position:absolute;bottom:20px;left:12px;right:12px;
       background:rgba(10,15,26,0.88);color:#6b8fa8;
       padding:7px 14px;border-radius:8px;
       font:13px/1.5 monospace;z-index:1000;
@@ -57,7 +46,7 @@ const MAP_HTML = `<!DOCTYPE html>
     var marker  = null;
     var trail   = L.polyline([],{color:'#00bfff',weight:2.5,opacity:0.8}).addTo(map);
     var pts     = [];
-    var locked  = false;   // true = map pans to follow the boat
+    var locked  = false;
 
     window.updateBoat = function(lat, lon, hasFix) {
       var hud = document.getElementById('hud');
@@ -65,7 +54,7 @@ const MAP_HTML = `<!DOCTYPE html>
       var ll = [lat, lon];
       if (!marker) {
         marker = L.marker(ll,{icon:icon}).addTo(map);
-        map.setView(ll, 16);   // first fix — zoom in once
+        map.setView(ll, 16);
       } else {
         marker.setLatLng(ll);
         if (locked) map.panTo(ll,{animate:true,duration:0.5});
@@ -76,12 +65,10 @@ const MAP_HTML = `<!DOCTYPE html>
       hud.textContent = lat.toFixed(6) + ',  ' + lon.toFixed(6);
     };
 
-    // Called by CENTER button in React Native
     window.centerOnBoat = function() {
       if (marker) { map.setView(marker.getLatLng(), map.getZoom()); locked = true; }
     };
 
-    // User dragging the map disengages follow-lock
     map.on('dragstart', function() { locked = false; });
   </script>
 </body>
@@ -92,7 +79,6 @@ export default function MapScreen({ route }: Props) {
   const { data, connected } = useTelemetry();
   const webViewRef = useRef<WebView>(null);
 
-  // Push GPS updates into the WebView whenever lat/lon or fix status changes.
   useEffect(() => {
     if (!webViewRef.current || !data) return;
     const lat    = parseFloat(data.lat ?? '');
@@ -104,7 +90,7 @@ export default function MapScreen({ route }: Props) {
   }, [data?.gps_fix, data?.lat, data?.lon]);
 
   return (
-    <View style={styles.container}>
+    <Screen style={styles.screen}>
       <WebView
         ref={webViewRef}
         source={{ html: MAP_HTML }}
@@ -114,8 +100,7 @@ export default function MapScreen({ route }: Props) {
         domStorageEnabled
       />
 
-      {/* Connection dot + CENTER button floating above the map */}
-      <View style={styles.topBar}>
+      <View style={styles.topBar} pointerEvents="box-none">
         <View style={styles.connRow}>
           <Text style={[styles.dot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
           <Text style={styles.connText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
@@ -127,21 +112,18 @@ export default function MapScreen({ route }: Props) {
           <Text style={styles.centerBtnText}>CENTER</Text>
         </TouchableOpacity>
       </View>
-
-      <EmergencyStop ip={ip} />
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container:     { flex: 1, backgroundColor: Colors.background },
+  screen:        { padding: 0 },
   map:           { flex: 1 },
   topBar:        {
-    position: 'absolute', top: 16, left: 16, right: 16,
+    position: 'absolute', top: 12, left: 16, right: 16,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    pointerEvents: 'box-none',
   },
-  connRow:       { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(10,15,26,0.8)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
+  connRow:       { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(10,15,26,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
   dot:           { fontSize: 10, marginRight: 5 },
   connText:      { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },
   centerBtn:     { backgroundColor: Colors.accent, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },

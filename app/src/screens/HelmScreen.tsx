@@ -1,7 +1,3 @@
-// HelmScreen.tsx
-// Primary sailing screen: throttle slider, rudder control, speed/heading readout,
-// battery indicator, bilge alarm, mode indicator, navigation to other screens.
-
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -9,7 +5,7 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import EmergencyStop from '../components/EmergencyStop';
+import Screen from '../components/Screen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Helm'>;
 
@@ -19,51 +15,46 @@ export default function HelmScreen({ route, navigation }: Props) {
   useKeepAwake();
 
   return (
-    <View style={styles.container}>
-      {/* Status bar */}
-      <View style={styles.statusRow}>
-        <Text style={[styles.statusDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
-        <Text style={styles.statusText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
-        <Text style={[styles.modeTag, data?.mode === 'AUTONOMOUS' && styles.modeAuto]}>
-          {data?.mode ?? 'IDLE'}
-        </Text>
-      </View>
-
-      {/* Key readouts */}
-      <View style={styles.readoutRow}>
-        <Readout label="HEADING" value={data?.heading   != null ? `${data.heading}°`      : '--'} />
-        <Readout label="SPEED"   value={data?.speed_kts != null ? `${data.speed_kts} kts` : '--'} />
-        <Readout label="DEPTH"   value={data?.sonar_ok && data?.depth_m != null ? `${data.depth_m} m` : '--'} />
-        <Readout label="BATT"    value={data?.batt_v   != null ? `${data.batt_v} V`       : '--'} warn={data?.batt_low} />
-      </View>
-
-      {/* Bilge alarm */}
-      {(data?.bilge_fwd || data?.bilge_aft) && (
-        <View style={styles.alarm}>
-          <Text style={styles.alarmText}>⚠ BILGE WATER DETECTED — PUMP {data?.pump ? 'ON' : 'OFF'}</Text>
+    <Screen>
+      <View style={styles.inner}>
+        <View style={styles.statusRow}>
+          <Text style={[styles.statusDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
+          <Text style={styles.statusText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
+          <Text style={[styles.modeTag, data?.mode === 'AUTONOMOUS' && styles.modeAuto]}>
+            {data?.mode ?? 'IDLE'}
+          </Text>
         </View>
-      )}
 
-      {/* TODO: throttle slider + rudder joystick (Phase 1) */}
-      <View style={styles.controlPlaceholder}>
-        <Text style={styles.placeholder}>Throttle + Rudder controls (Phase 1)</Text>
+        <View style={styles.readoutRow}>
+          <Readout label="HEADING" value={data?.heading   != null ? `${data.heading}°`      : '--'} />
+          <Readout label="SPEED"   value={data?.speed_kts != null ? `${data.speed_kts} kts` : '--'} />
+          <Readout label="DEPTH"   value={data?.sonar_ok && data?.depth_m != null ? `${data.depth_m} m` : '--'} />
+          <Readout label="BATT"    value={data?.batt_v   != null ? `${data.batt_v} V`       : '--'} warn={data?.batt_low} />
+        </View>
+
+        {(data?.bilge_fwd || data?.bilge_aft) && (
+          <View style={styles.alarm}>
+            <Text style={styles.alarmText}>⚠ BILGE WATER DETECTED — PUMP {data?.pump ? 'ON' : 'OFF'}</Text>
+          </View>
+        )}
+
+        <View style={styles.controlPlaceholder}>
+          <Text style={styles.placeholder}>Throttle + Rudder controls (Phase 1)</Text>
+        </View>
+
+        <View style={styles.navRow}>
+          {(['Map', 'Telemetry', 'Weapons', 'Systems'] as const).map((screen) => (
+            <TouchableOpacity
+              key={screen}
+              style={styles.navBtn}
+              onPress={() => navigation.navigate(screen, { ip })}
+            >
+              <Text style={styles.navBtnText}>{screen.toUpperCase()}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
-
-      {/* Bottom nav */}
-      <View style={styles.navRow}>
-        {(['Map', 'Telemetry', 'Weapons', 'Systems'] as const).map((screen) => (
-          <TouchableOpacity
-            key={screen}
-            style={styles.navBtn}
-            onPress={() => navigation.navigate(screen, { ip })}
-          >
-            <Text style={styles.navBtnText}>{screen.toUpperCase()}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <EmergencyStop ip={ip} />
-    </View>
+    </Screen>
   );
 }
 
@@ -77,7 +68,7 @@ function Readout({ label, value, warn }: { label: string; value: string; warn?: 
 }
 
 const styles = StyleSheet.create({
-  container:          { flex: 1, backgroundColor: Colors.background, padding: 16 },
+  inner:              { flex: 1, padding: 16 },
   statusRow:          { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   statusDot:          { fontSize: 10, marginRight: 6 },
   statusText:         { color: Colors.textSecondary, fontSize: 12, flex: 1 },
@@ -91,7 +82,7 @@ const styles = StyleSheet.create({
   alarmText:          { color: '#fff', fontWeight: 'bold', textAlign: 'center' },
   controlPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   placeholder:        { color: Colors.textSecondary, fontStyle: 'italic' },
-  navRow:             { flexDirection: 'row', justifyContent: 'space-around', paddingBottom: 16 },
+  navRow:             { flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 8 },
   navBtn:             { padding: 8 },
   navBtnText:         { color: Colors.accent, fontSize: 10, letterSpacing: 1 },
 });

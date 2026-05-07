@@ -1,23 +1,16 @@
-// TelemetryScreen.tsx
-// Live readouts — only renders rows for fields actually present in the
-// current firmware's telemetry broadcast. Works with any test sketch.
-
 import React from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import EmergencyStop from '../components/EmergencyStop';
+import Screen from '../components/Screen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Telemetry'>;
 
 export default function TelemetryScreen({ route }: Props) {
-  const { ip } = route.params;
   const { data, connected } = useTelemetry();
 
-  // Build row list dynamically — skip any field the firmware didn't send.
-  // Tuple: [label, display string, warn flag]
   const rows: [string, string, boolean?][] = [];
 
   if (data) {
@@ -51,30 +44,31 @@ export default function TelemetryScreen({ route }: Props) {
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>
-        TELEMETRY{'  '}
-        <Text style={{ color: connected ? Colors.success : Colors.danger }}>●</Text>
-      </Text>
-      <ScrollView>
-        {rows.map(([label, val, warn]) => (
-          <View key={label} style={styles.row}>
-            <Text style={styles.label}>{label}</Text>
-            <Text style={[styles.value, warn && { color: Colors.warning }]}>{val}</Text>
-          </View>
-        ))}
-        {!data && <Text style={styles.empty}>Waiting for telemetry…</Text>}
-      </ScrollView>
-      <EmergencyStop ip={ip} />
-    </View>
+    <Screen>
+      <View style={styles.inner}>
+        <Text style={styles.title}>
+          TELEMETRY{'  '}
+          <Text style={{ color: connected ? Colors.success : Colors.danger }}>●</Text>
+        </Text>
+        <ScrollView>
+          {rows.map(([label, val, warn]) => (
+            <View key={label} style={styles.row}>
+              <Text style={styles.label}>{label}</Text>
+              <Text style={[styles.value, warn && { color: Colors.warning }]}>{val}</Text>
+            </View>
+          ))}
+          {!data && <Text style={styles.empty}>Waiting for telemetry…</Text>}
+        </ScrollView>
+      </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background, padding: 16 },
-  title:     { color: Colors.accent, fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
-  row:       { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomColor: Colors.surface, borderBottomWidth: 1 },
-  label:     { color: Colors.textSecondary, fontSize: 13 },
-  value:     { color: Colors.textPrimary, fontSize: 13, fontWeight: '600' },
-  empty:     { color: Colors.textSecondary, textAlign: 'center', marginTop: 40, fontStyle: 'italic' },
+  inner:  { flex: 1, padding: 16 },
+  title:  { color: Colors.accent, fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
+  row:    { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomColor: Colors.surface, borderBottomWidth: 1 },
+  label:  { color: Colors.textSecondary, fontSize: 13 },
+  value:  { color: Colors.textPrimary, fontSize: 13, fontWeight: '600' },
+  empty:  { color: Colors.textSecondary, textAlign: 'center', marginTop: 40, fontStyle: 'italic' },
 });
