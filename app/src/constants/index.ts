@@ -3,8 +3,7 @@
 // The ESP32 WiFi AP assigns itself this address
 export const DEFAULT_BOAT_IP = '192.168.4.1';
 
-export const HTTP_PORT       = 80;
-export const WS_PORT         = 81;
+export const HTTP_PORT = 80;
 
 export const TELEMETRY_RECONNECT_MS = 2000;
 

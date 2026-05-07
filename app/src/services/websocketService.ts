@@ -1,63 +1,54 @@
 // websocketService.ts
-// Persistent WebSocket connection to ESP32 telemetry stream.
-// Reconnects automatically on disconnect.
-// Call connect() once; subscribe() to receive parsed TelemetryData at ~10 Hz.
+// Telemetry via HTTP polling — same exported API as a WebSocket service so
+// all screens and hooks work unchanged.
+// Polls GET /telemetry every 1 s; marks connected/disconnected based on response.
 
-import { WS_PORT, TELEMETRY_RECONNECT_MS } from '../constants';
+import { HTTP_PORT } from '../constants';
 import { TelemetryData } from '../types';
 
 type Listener = (data: TelemetryData) => void;
 
-let ws: WebSocket | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-const listeners = new Set<Listener>();
-let currentIP = '';
+const POLL_MS    = 1000;
+const TIMEOUT_MS = 2000;
 
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    if (currentIP) connect(currentIP);
-  }, TELEMETRY_RECONNECT_MS);
+let intervalId: ReturnType<typeof setInterval> | null = null;
+let currentIP  = '';
+const listeners  = new Set<Listener>();
+let _connected   = false;
+
+async function poll() {
+  if (!currentIP) return;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const res = await fetch(`http://${currentIP}:${HTTP_PORT}/telemetry`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data: TelemetryData = await res.json();
+      _connected = true;
+      listeners.forEach((fn) => fn(data));
+    } else {
+      _connected = false;
+    }
+  } catch {
+    _connected = false;
+  }
 }
 
 export function connect(ip: string) {
-  currentIP = ip;
-  if (ws) {
-    ws.onclose = null;
-    ws.close();
-    ws = null;
-  }
-
-  ws = new WebSocket(`ws://${ip}:${WS_PORT}`);
-
-  ws.onopen = () => {
-    console.log('[WS] Connected to', ip);
-  };
-
-  ws.onmessage = (event) => {
-    try {
-      const data: TelemetryData = JSON.parse(event.data as string);
-      listeners.forEach((fn) => fn(data));
-    } catch {
-      // Malformed frame — ignore
-    }
-  };
-
-  ws.onerror = () => {
-    ws?.close();
-  };
-
-  ws.onclose = () => {
-    ws = null;
-    scheduleReconnect();
-  };
+  currentIP  = ip;
+  _connected = false;
+  if (intervalId) clearInterval(intervalId);
+  poll();                                          // immediate first poll
+  intervalId = setInterval(poll, POLL_MS);
 }
 
 export function disconnect() {
-  currentIP = '';
-  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  currentIP  = '';
+  _connected = false;
+  if (intervalId) { clearInterval(intervalId); intervalId = null; }
 }
 
 export function subscribe(fn: Listener): () => void {
@@ -66,5 +57,5 @@ export function subscribe(fn: Listener): () => void {
 }
 
 export function isConnected(): boolean {
-  return ws?.readyState === WebSocket.OPEN;
+  return _connected;
 }
