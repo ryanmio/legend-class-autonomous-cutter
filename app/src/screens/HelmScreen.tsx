@@ -31,10 +31,10 @@ export default function HelmScreen({ route, navigation }: Props) {
 
       {/* Key readouts */}
       <View style={styles.readoutRow}>
-        <Readout label="HEADING" value={data ? `${data.heading}°` : '--'} />
-        <Readout label="SPEED"   value={data ? `${data.speed_kts} kts` : '--'} />
-        <Readout label="DEPTH"   value={data && data.sonar_ok ? `${data.depth_m} m` : '--'} />
-        <Readout label="BATT"    value={data ? `${data.batt_v} V` : '--'} warn={data?.batt_low} />
+        <Readout label="HEADING" value={data?.heading   != null ? `${data.heading}°`      : '--'} />
+        <Readout label="SPEED"   value={data?.speed_kts != null ? `${data.speed_kts} kts` : '--'} />
+        <Readout label="DEPTH"   value={data?.sonar_ok && data?.depth_m != null ? `${data.depth_m} m` : '--'} />
+        <Readout label="BATT"    value={data?.batt_v   != null ? `${data.batt_v} V`       : '--'} warn={data?.batt_low} />
       </View>
 
       {/* Bilge alarm */}

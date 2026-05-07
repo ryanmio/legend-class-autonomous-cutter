@@ -2,7 +2,7 @@
 // Bay doors open/close, anchor deploy/raise, radar on/off, sound effects library.
 
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
@@ -26,6 +26,7 @@ export default function SystemsScreen({ route }: Props) {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>SYSTEMS</Text>
+      <ScrollView contentContainerStyle={styles.scroll}>
 
       <Text style={styles.section}>BAY DOORS</Text>
       <View style={styles.row}>
@@ -77,6 +78,7 @@ export default function SystemsScreen({ route }: Props) {
         ))}
       </View>
 
+      </ScrollView>
       <EmergencyStop ip={ip} />
     </View>
   );
@@ -91,6 +93,7 @@ const styles = StyleSheet.create({
   groupLabel: { color: Colors.textSecondary, fontSize: 11, marginBottom: 4 },
   btn:        { backgroundColor: Colors.surface, padding: 10, borderRadius: 6, marginBottom: 4, alignItems: 'center' },
   btnText:    { color: Colors.textPrimary, fontSize: 12, fontWeight: '600' },
+  scroll:     { paddingBottom: 110 },
   toggleBtn:  { backgroundColor: Colors.surface, padding: 14, borderRadius: 8, alignItems: 'center', width: 140 },
   toggleOn:   { backgroundColor: Colors.accent },
   toggleText: { color: Colors.textPrimary, fontWeight: 'bold' },
