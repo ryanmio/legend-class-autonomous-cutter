@@ -1,12 +1,16 @@
 /*
  * test_20_wifi_leds.ino
  *
- * Integration test: WiFi AP + WebSocket telemetry + LED HTTP control.
- * This is the first WiFi/networking test for the boat.
+ * Integration test: WiFi (STA with AP fallback) + WebSocket telemetry + LED HTTP control.
+ *
+ * WiFi connection priority:
+ *   1. Home WiFi  (SECRET_HOME_SSID)     — bench testing, keeps phone internet
+ *   2. iPhone hotspot (SECRET_HOTSPOT_SSID) — on the water
+ *   3. AP fallback "LegendCutter"         — last resort, no internet on phone
  *
  * PASS criteria:
- *   GATE 1 — Serial prints "AP ready" and SSID is visible on phone
- *   GATE 2 — App connects to ws://192.168.4.1:81 (uptime increments on Telemetry screen)
+ *   GATE 1 — Serial shows "Connected" + IP address
+ *   GATE 2 — App scans, finds boat, connects (uptime increments on Telemetry screen)
  *   GATE 3 — Toggle NAV lights from app → GPIO 18 lights up
  *   GATE 4 — Toggle BRIDGE lights from app → GPIO 19 lights up
  *   GATE 5 — Toggle DECK lights from app → GPIO 23 lights up
@@ -16,41 +20,72 @@
  *   GPIO 19 → Bridge/interior lights
  *   GPIO 23 → Deck/flood lights
  *
- * Libraries (install via Arduino Library Manager before compiling):
- *   "WebSockets" by Markus Sattler     (arduinoWebSockets)
- *   "ArduinoJson" by Benoit Blanchon   (v6 or v7)
+ * Setup:
+ *   1. Copy secrets.h.example → secrets.h and fill in your WiFi credentials
+ *   2. Install libraries via Arduino Library Manager:
+ *        "WebSockets_Generic" by khoih-prog   (provides WebSocketsServer.h)
+ *        "ArduinoJson"        by Benoit Blanchon
  *
- * Built-in (ESP32 Arduino core — no install needed):
- *   WiFi.h, WebServer.h
- *
- * Phone app: connect to SSID "LegendCutter" / "coastguard", then open app
- * and enter 192.168.4.1 as the boat IP. Navigate to Systems screen to toggle
- * LEDs; navigate to Telemetry to see uptime/heap confirming the WS stream.
+ * On the water: enable iPhone hotspot before powering the boat.
+ * At home: just power the boat — it connects to home WiFi automatically.
+ * In both cases the phone app auto-discovers the IP via SCAN.
  */
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>
+#include "secrets.h"
 
 // ── Config ────────────────────────────────────────────────────────────────────
-static const char* WIFI_SSID     = "LegendCutter";
-static const char* WIFI_PASSWORD = "coastguard";
-
 static const uint8_t PIN_NAV    = 18;
 static const uint8_t PIN_BRIDGE = 19;
 static const uint8_t PIN_DECK   = 23;
 
-static const unsigned long TX_INTERVAL_MS = 100;  // 10 Hz
+static const unsigned long TX_INTERVAL_MS = 100;  // 10 Hz telemetry
 
 // ── State ─────────────────────────────────────────────────────────────────────
-static bool navOn    = false;
-static bool bridgeOn = false;
-static bool deckOn   = false;
+static bool   navOn    = false;
+static bool   bridgeOn = false;
+static bool   deckOn   = false;
+static String boatIP;
 
 static WebServer        httpServer(80);
 static WebSocketsServer wsServer(81);
 static unsigned long    lastTx = 0;
+
+// ── WiFi ──────────────────────────────────────────────────────────────────────
+static bool tryConnect(const char* ssid, const char* pass, int timeoutSecs) {
+  WiFi.begin(ssid, pass);
+  Serial.printf("[WiFi] Trying %-28s", ssid);
+  for (int i = 0; i < timeoutSecs * 2; i++) {
+    if (WiFi.status() == WL_CONNECTED) {
+      boatIP = WiFi.localIP().toString();
+      Serial.printf("  OK  %s\n", boatIP.c_str());
+      return true;
+    }
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("  FAIL");
+  WiFi.disconnect(true);
+  delay(100);
+  return false;
+}
+
+static void wifiSetup() {
+  WiFi.mode(WIFI_STA);
+
+  if (tryConnect(SECRET_HOME_SSID,     SECRET_HOME_PASS,     10)) return;
+  if (tryConnect(SECRET_HOTSPOT_SSID,  SECRET_HOTSPOT_PASS,  10)) return;
+
+  // Neither network found — start AP as last resort
+  Serial.println("[WiFi] No known network — starting AP fallback");
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("LegendCutter", "coastguard");
+  boatIP = WiFi.softAPIP().toString();
+  Serial.printf("[WiFi] AP  SSID: LegendCutter  IP: %s\n", boatIP.c_str());
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 static void applyLed(uint8_t pin, bool& state, bool on) {
@@ -82,21 +117,15 @@ static void sendCORS() {
 
 static void handleStatus() {
   sendCORS();
-  httpServer.send(200, "application/json",
-    "{\"ok\":true,\"v\":\"test_20\",\"ip\":\"192.168.4.1\"}");
+  String body = "{\"ok\":true,\"v\":\"test_20\",\"ip\":\"" + boatIP + "\"}";
+  httpServer.send(200, "application/json", body);
 }
 
 static void handleLed() {
   sendCORS();
 
-  if (httpServer.method() == HTTP_OPTIONS) {
-    httpServer.send(204);
-    return;
-  }
-  if (httpServer.method() != HTTP_POST) {
-    httpServer.send(405, "text/plain", "Method Not Allowed");
-    return;
-  }
+  if (httpServer.method() == HTTP_OPTIONS) { httpServer.send(204); return; }
+  if (httpServer.method() != HTTP_POST)    { httpServer.send(405, "text/plain", "Method Not Allowed"); return; }
 
   StaticJsonDocument<128> doc;
   if (deserializeJson(doc, httpServer.arg("plain"))) {
@@ -107,13 +136,10 @@ static void handleLed() {
   const char* light = doc["light"] | "";
   bool        on    = doc["state"]  | false;
 
-  if      (strcmp(light, "nav")    == 0) { applyLed(PIN_NAV,    navOn,    on); }
-  else if (strcmp(light, "bridge") == 0) { applyLed(PIN_BRIDGE, bridgeOn, on); }
-  else if (strcmp(light, "deck")   == 0) { applyLed(PIN_DECK,   deckOn,   on); }
-  else {
-    httpServer.send(400, "text/plain", "Unknown light — use nav|bridge|deck");
-    return;
-  }
+  if      (strcmp(light, "nav")    == 0) applyLed(PIN_NAV,    navOn,    on);
+  else if (strcmp(light, "bridge") == 0) applyLed(PIN_BRIDGE, bridgeOn, on);
+  else if (strcmp(light, "deck")   == 0) applyLed(PIN_DECK,   deckOn,   on);
+  else { httpServer.send(400, "text/plain", "Unknown light — use nav|bridge|deck"); return; }
 
   httpServer.send(200, "application/json", "{\"ok\":true}");
 }
@@ -132,24 +158,21 @@ void setup() {
   pinMode(PIN_DECK,   OUTPUT); digitalWrite(PIN_DECK,   LOW);
   Serial.println("[LED] GPIO 18/19/23 initialised LOW");
 
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(WIFI_SSID, WIFI_PASSWORD);
-  Serial.printf("[WiFi] AP ready  SSID: %-20s  IP: %s\n",
-                WIFI_SSID, WiFi.softAPIP().toString().c_str());
-  Serial.println("[GATE 1] PASS candidate — connect phone to WiFi and verify SSID visible");
+  wifiSetup();
+  Serial.println("[GATE 1] PASS candidate — see IP above; use app SCAN to connect");
 
   httpServer.on("/status", HTTP_GET,     handleStatus);
   httpServer.on("/status", HTTP_OPTIONS, []{ sendCORS(); httpServer.send(204); });
   httpServer.on("/led",    HTTP_POST,    handleLed);
   httpServer.on("/led",    HTTP_OPTIONS, handleLed);
   httpServer.begin();
-  Serial.println("[HTTP] port 80  endpoints: /status  /led");
+  Serial.printf("[HTTP] port 80  endpoints: /status  /led  (boat IP: %s)\n", boatIP.c_str());
 
   wsServer.begin();
   wsServer.onEvent([](uint8_t num, WStype_t type, uint8_t* /*payload*/, size_t /*len*/) {
     if (type == WStype_CONNECTED) {
       Serial.printf("[WS] Client %u connected\n", num);
-      Serial.println("[GATE 2] PASS candidate — app received telemetry; check Telemetry screen");
+      Serial.println("[GATE 2] PASS candidate — check Telemetry screen for uptime");
     } else if (type == WStype_DISCONNECTED) {
       Serial.printf("[WS] Client %u disconnected\n", num);
     }
@@ -157,7 +180,7 @@ void setup() {
   Serial.println("[WS]  port 81");
 
   Serial.println();
-  Serial.println("Waiting for phone connection...");
+  Serial.println("Ready — open app and tap SCAN");
   Serial.println("========================================");
 }
 

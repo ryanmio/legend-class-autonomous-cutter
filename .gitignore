@@ -4,6 +4,7 @@ docs/BUILD_AND_TEST_GUIDE.md
 docs/integration-sequence.md
 docs/power-system-reference.md
 firmware/tests/.DS_Store
+**/secrets.h
 .DS_Store
 /node_modules
 app/node_modules/
