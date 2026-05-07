@@ -1,16 +1,17 @@
 /*
  * test_20_wifi_leds.ino
  *
- * Integration test: WiFi (STA with AP fallback) + WebSocket telemetry + LED HTTP control.
+ * Integration test: WiFi (STA → hotspot → AP fallback) + WebSocket telemetry
+ * + LED HTTP control.
  *
  * WiFi connection priority:
- *   1. Home WiFi  (SECRET_HOME_SSID)     — bench testing, keeps phone internet
- *   2. iPhone hotspot (SECRET_HOTSPOT_SSID) — on the water
- *   3. AP fallback "LegendCutter"         — last resort, no internet on phone
+ *   1. Home WiFi        (SECRET_HOME_SSID)     — bench testing
+ *   2. iPhone hotspot   (SECRET_HOTSPOT_SSID)  — on the water
+ *   3. AP fallback      "LegendCutter"          — last resort
  *
  * PASS criteria:
  *   GATE 1 — Serial shows "Connected" + IP address
- *   GATE 2 — App scans, finds boat, connects (uptime increments on Telemetry screen)
+ *   GATE 2 — App SCAN finds boat; Telemetry screen shows uptime incrementing
  *   GATE 3 — Toggle NAV lights from app → GPIO 18 lights up
  *   GATE 4 — Toggle BRIDGE lights from app → GPIO 19 lights up
  *   GATE 5 — Toggle DECK lights from app → GPIO 23 lights up
@@ -21,19 +22,15 @@
  *   GPIO 23 → Deck/flood lights
  *
  * Setup:
- *   1. Copy secrets.h.example → secrets.h and fill in your WiFi credentials
- *   2. Install libraries via Arduino Library Manager:
- *        "WebSockets_Generic" by khoih-prog   (provides WebSocketsServer.h)
- *        "ArduinoJson"        by Benoit Blanchon
- *
- * On the water: enable iPhone hotspot before powering the boat.
- * At home: just power the boat — it connects to home WiFi automatically.
- * In both cases the phone app auto-discovers the IP via SCAN.
+ *   1. Copy secrets.h.example → secrets.h and fill in your WiFi credentials.
+ *   2. Install via Arduino Library Manager:
+ *        "AsyncTCP"          by dvarrel
+ *        "ESPAsyncWebServer" by lacamera
+ *        "ArduinoJson"       by Benoit Blanchon
  */
 
 #include <WiFi.h>
-#include <WebServer.h>
-#include <WebSocketsServer.h>
+#include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include "secrets.h"
 
@@ -50,9 +47,11 @@ static bool   bridgeOn = false;
 static bool   deckOn   = false;
 static String boatIP;
 
-static WebServer        httpServer(80);
-static WebSocketsServer wsServer(81);
-static unsigned long    lastTx = 0;
+// HTTP on port 80, WebSocket on port 81 — matches app constants
+static AsyncWebServer  httpServer(80);
+static AsyncWebServer  wsApp(81);
+static AsyncWebSocket  ws("/");
+static unsigned long   lastTx = 0;
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
 static bool tryConnect(const char* ssid, const char* pass, int timeoutSecs) {
@@ -75,11 +74,9 @@ static bool tryConnect(const char* ssid, const char* pass, int timeoutSecs) {
 
 static void wifiSetup() {
   WiFi.mode(WIFI_STA);
+  if (tryConnect(SECRET_HOME_SSID,    SECRET_HOME_PASS,    10)) return;
+  if (tryConnect(SECRET_HOTSPOT_SSID, SECRET_HOTSPOT_PASS, 10)) return;
 
-  if (tryConnect(SECRET_HOME_SSID,     SECRET_HOME_PASS,     10)) return;
-  if (tryConnect(SECRET_HOTSPOT_SSID,  SECRET_HOTSPOT_PASS,  10)) return;
-
-  // Neither network found — start AP as last resort
   Serial.println("[WiFi] No known network — starting AP fallback");
   WiFi.mode(WIFI_AP);
   WiFi.softAP("LegendCutter", "coastguard");
@@ -88,6 +85,12 @@ static void wifiSetup() {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+static void addCORS(AsyncWebServerResponse* r) {
+  r->addHeader("Access-Control-Allow-Origin",  "*");
+  r->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  r->addHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
 static void applyLed(uint8_t pin, bool& state, bool on) {
   state = on;
   digitalWrite(pin, on ? HIGH : LOW);
@@ -95,6 +98,8 @@ static void applyLed(uint8_t pin, bool& state, bool on) {
 }
 
 static void broadcastTelemetry() {
+  if (ws.count() == 0) return;
+
   StaticJsonDocument<192> doc;
   doc["v"]         = "test_20";
   doc["uptime"]    = millis() / 1000;
@@ -105,43 +110,59 @@ static void broadcastTelemetry() {
 
   char buf[192];
   serializeJson(doc, buf);
-  wsServer.broadcastTXT(buf);
+  ws.textAll(buf);
 }
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
-static void sendCORS() {
-  httpServer.sendHeader("Access-Control-Allow-Origin",  "*");
-  httpServer.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  httpServer.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-}
+static void setupHTTP() {
+  // CORS preflight for all endpoints
+  httpServer.onNotFound([](AsyncWebServerRequest* req) {
+    if (req->method() == HTTP_OPTIONS) {
+      AsyncWebServerResponse* r = req->beginResponse(204);
+      addCORS(r);
+      req->send(r);
+    } else {
+      req->send(404);
+    }
+  });
 
-static void handleStatus() {
-  sendCORS();
-  String body = "{\"ok\":true,\"v\":\"test_20\",\"ip\":\"" + boatIP + "\"}";
-  httpServer.send(200, "application/json", body);
-}
+  httpServer.on("/status", HTTP_GET, [](AsyncWebServerRequest* req) {
+    String body = "{\"ok\":true,\"v\":\"test_20\",\"ip\":\"" + boatIP + "\"}";
+    AsyncWebServerResponse* r = req->beginResponse(200, "application/json", body);
+    addCORS(r);
+    req->send(r);
+  });
 
-static void handleLed() {
-  sendCORS();
+  // POST /led  body: {"light":"nav"|"bridge"|"deck", "state":true|false}
+  httpServer.on(
+    "/led", HTTP_POST,
+    [](AsyncWebServerRequest* req) {},   // onRequest — body arrives below
+    nullptr,                              // onUpload
+    [](AsyncWebServerRequest* req, uint8_t* data, size_t len,
+       size_t /*index*/, size_t /*total*/) {
 
-  if (httpServer.method() == HTTP_OPTIONS) { httpServer.send(204); return; }
-  if (httpServer.method() != HTTP_POST)    { httpServer.send(405, "text/plain", "Method Not Allowed"); return; }
+      StaticJsonDocument<128> doc;
+      if (deserializeJson(doc, data, len)) {
+        req->send(400, "text/plain", "Bad JSON");
+        return;
+      }
 
-  StaticJsonDocument<128> doc;
-  if (deserializeJson(doc, httpServer.arg("plain"))) {
-    httpServer.send(400, "text/plain", "Bad JSON");
-    return;
-  }
+      const char* light = doc["light"] | "";
+      bool        on    = doc["state"]  | false;
 
-  const char* light = doc["light"] | "";
-  bool        on    = doc["state"]  | false;
+      if      (strcmp(light, "nav")    == 0) applyLed(PIN_NAV,    navOn,    on);
+      else if (strcmp(light, "bridge") == 0) applyLed(PIN_BRIDGE, bridgeOn, on);
+      else if (strcmp(light, "deck")   == 0) applyLed(PIN_DECK,   deckOn,   on);
+      else { req->send(400, "text/plain", "Unknown light — use nav|bridge|deck"); return; }
 
-  if      (strcmp(light, "nav")    == 0) applyLed(PIN_NAV,    navOn,    on);
-  else if (strcmp(light, "bridge") == 0) applyLed(PIN_BRIDGE, bridgeOn, on);
-  else if (strcmp(light, "deck")   == 0) applyLed(PIN_DECK,   deckOn,   on);
-  else { httpServer.send(400, "text/plain", "Unknown light — use nav|bridge|deck"); return; }
+      AsyncWebServerResponse* r = req->beginResponse(200, "application/json", "{\"ok\":true}");
+      addCORS(r);
+      req->send(r);
+    }
+  );
 
-  httpServer.send(200, "application/json", "{\"ok\":true}");
+  httpServer.begin();
+  Serial.println("[HTTP] port 80  /status  /led");
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -159,36 +180,30 @@ void setup() {
   Serial.println("[LED] GPIO 18/19/23 initialised LOW");
 
   wifiSetup();
-  Serial.println("[GATE 1] PASS candidate — see IP above; use app SCAN to connect");
+  Serial.println("[GATE 1] PASS candidate — see IP above");
 
-  httpServer.on("/status", HTTP_GET,     handleStatus);
-  httpServer.on("/status", HTTP_OPTIONS, []{ sendCORS(); httpServer.send(204); });
-  httpServer.on("/led",    HTTP_POST,    handleLed);
-  httpServer.on("/led",    HTTP_OPTIONS, handleLed);
-  httpServer.begin();
-  Serial.printf("[HTTP] port 80  endpoints: /status  /led  (boat IP: %s)\n", boatIP.c_str());
-
-  wsServer.begin();
-  wsServer.onEvent([](uint8_t num, WStype_t type, uint8_t* /*payload*/, size_t /*len*/) {
-    if (type == WStype_CONNECTED) {
-      Serial.printf("[WS] Client %u connected\n", num);
-      Serial.println("[GATE 2] PASS candidate — check Telemetry screen for uptime");
-    } else if (type == WStype_DISCONNECTED) {
-      Serial.printf("[WS] Client %u disconnected\n", num);
+  ws.onEvent([](AsyncWebSocket*, AsyncWebSocketClient* client,
+                AwsEventType type, void*, uint8_t*, size_t) {
+    if (type == WS_EVT_CONNECT) {
+      Serial.printf("[WS] Client %u connected\n", client->id());
+      Serial.println("[GATE 2] PASS candidate — check Telemetry screen");
+    } else if (type == WS_EVT_DISCONNECT) {
+      Serial.printf("[WS] Client %u disconnected\n", client->id());
     }
   });
+  wsApp.addHandler(&ws);
+  wsApp.begin();
   Serial.println("[WS]  port 81");
 
+  setupHTTP();
+
   Serial.println();
-  Serial.println("Ready — open app and tap SCAN");
+  Serial.printf("Ready — open app and tap SCAN  (boat IP: %s)\n", boatIP.c_str());
   Serial.println("========================================");
 }
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
 void loop() {
-  httpServer.handleClient();
-  wsServer.loop();
-
   if (millis() - lastTx >= TX_INTERVAL_MS) {
     lastTx = millis();
     broadcastTelemetry();
