@@ -46,7 +46,7 @@
 // ── Config ────────────────────────────────────────────────────────────────────
 static const unsigned long CAL_WARN_MS = 5000;   // countdown before spin starts
 static const unsigned long CAL_SPIN_MS = 30000;  // spin window duration
-static const unsigned long PRINT_MS    = 250;    // live heading print rate (4 Hz)
+static const unsigned long PRINT_MS    = 2000;   // live heading print rate (0.5 Hz)
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static ICM_20948_I2C myICM;
@@ -155,10 +155,10 @@ static void runCalibration() {
   float minX =  1e9, minY =  1e9, minZ =  1e9;
   float maxX = -1e9, maxY = -1e9, maxZ = -1e9;
 
-  unsigned long spinStart = millis();
-  unsigned long lastPrint = 0;
-  unsigned long lastSec   = 0;
-  int           sampleCnt = 0;
+  unsigned long spinStart  = millis();
+  unsigned long lastPrint  = 0;
+  int           sampleCnt  = 0;
+  int           lastSecPrinted = -1;
 
   while (millis() - spinStart < CAL_SPIN_MS) {
     if (!myICM.dataReady()) { delay(5); continue; }
@@ -171,16 +171,15 @@ static void runCalibration() {
     if (mz < minZ) minZ = mz;  if (mz > maxZ) maxZ = mz;
     sampleCnt++;
 
-    // Print raw mag + running range every 250 ms
-    if (millis() - lastPrint >= 250) {
-      lastPrint = millis();
-      unsigned long remaining = (CAL_SPIN_MS - (millis() - spinStart)) / 1000;
-      Serial.printf("  t=%-2lus  mx=%7.2f  my=%7.2f  mz=%7.2f  "
-                    "rangeX=%.1f  rangeY=%.1f\n",
-                    remaining, mx, my, mz, maxX - minX, maxY - minY);
+    // One line per second: time remaining + growing range (plateaus when spin is complete)
+    int secRemaining = (int)((CAL_SPIN_MS - (millis() - spinStart)) / 1000);
+    if (secRemaining != lastSecPrinted) {
+      lastSecPrinted = secRemaining;
+      Serial.printf("  [%2ds]  rangeX=%5.1f  rangeY=%5.1f  rangeZ=%5.1f\n",
+                    secRemaining, maxX - minX, maxY - minY, maxZ - minZ);
     }
 
-    server.handleClient();  // keep HTTP alive during spin
+    server.handleClient();
     delay(10);
   }
 
