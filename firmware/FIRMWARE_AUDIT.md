@@ -145,10 +145,23 @@ without DMP. Different firmware paths with different failure modes.
 Magnetometer calibration (`imuCalibrateMag()`) is a stub — mag reads are not
 implemented yet in `imu.cpp`.
 
+**test_22_mag_calibration — hard-iron offsets confirmed 2026-05-08:**
+
+```c
+#define MAG_OFFSET_X  -38.62f   // µT
+#define MAG_OFFSET_Y   1.65f
+#define MAG_OFFSET_Z  -14.85f
+```
+
+Range at calibration: X=76.35 µT, Y=51.00 µT, Z=38.70 µT. Plateau-detected
+(full 360° confirmed). See `tests/test_22_mag_calibration/NOTES.md`.
+Heading accuracy vs. compass bearing (Gates 4/5) still pending.
+
 - [ ] Confirm DMP init works on this hardware (may need DMP firmware binary)
-- [ ] Test heading output (imu.heading) against known orientations
-- [ ] Implement magnetometer reads + hard-iron correction
-- [ ] Test `imuCalibrateMag()` spin sequence
+- [ ] Test heading output (imu.heading) against known orientations — use test_23
+- [x] Derive magnetometer hard-iron offsets — test_22 PASS (run 2, 2026-05-08)
+- [ ] Implement magnetometer reads + hard-iron correction in `imu.cpp`
+- [ ] Test `imuCalibrateMag()` spin sequence with NVS storage
 
 ### 3e. Bilge — `bilge.cpp`
 
@@ -231,4 +244,4 @@ These are not written yet. Run them after individual tests are all passing.
 
 ---
 
-*Last updated: 2026-04-30. Re-review after combined tests complete.*
+*Last updated: 2026-05-08. Re-review after combined tests complete.*
