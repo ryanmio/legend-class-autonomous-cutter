@@ -37,7 +37,10 @@
 #include "ICM_20948.h"
 #include "secrets.h"
 
-static const unsigned long CAL_SPIN_MS = 30000;
+static const unsigned long CAL_MIN_MS      = 10000;  // must spin at least this long
+static const unsigned long CAL_TIMEOUT_MS  = 90000;  // give up after this
+static const float         CAL_MIN_RANGE   = 20.0f;  // µT — minimum credible range
+static const float         CAL_PLATEAU_UT  = 1.0f;   // µT growth in 5 s = still spinning
 
 static ICM_20948_I2C myICM;
 static String        boatIP;
@@ -129,14 +132,22 @@ static void runCalibration() {
     Serial.printf("Starting in %d...\n", s);
     delay(1000);
   }
-  Serial.println("SPIN NOW");
+  Serial.println("SPIN NOW — will stop automatically when ranges plateau.");
 
   float minX =  1e9, minY =  1e9, minZ =  1e9;
   float maxX = -1e9, maxY = -1e9, maxZ = -1e9;
   int   sampleCnt = 0;
+  bool  timedOut  = false;
+
+  // Ring buffer: record rangeX/Y every second, check last 5 for plateau
+  static const int HIST = 5;
+  float histX[HIST] = {}, histY[HIST] = {};
+  int   histIdx = 0;
+  unsigned long lastHistMs = 0;
+
   unsigned long spinStart = millis();
 
-  while (millis() - spinStart < CAL_SPIN_MS) {
+  while (true) {
     if (myICM.dataReady()) {
       float ax, ay, az, mx, my, mz;
       readAGMT(ax, ay, az, mx, my, mz);
@@ -146,6 +157,42 @@ static void runCalibration() {
       sampleCnt++;
     }
     server.handleClient();
+
+    unsigned long elapsed = millis() - spinStart;
+
+    // Snapshot range into history once per second
+    if (millis() - lastHistMs >= 1000) {
+      lastHistMs = millis();
+      histX[histIdx % HIST] = maxX - minX;
+      histY[histIdx % HIST] = maxY - minY;
+      histIdx++;
+    }
+
+    // Timeout
+    if (elapsed > CAL_TIMEOUT_MS) {
+      timedOut = true;
+      break;
+    }
+
+    // Plateau check: only after minimum spin time and enough history collected
+    if (elapsed > CAL_MIN_MS && histIdx >= HIST) {
+      float loX = histX[0], hiX = histX[0];
+      float loY = histY[0], hiY = histY[0];
+      for (int i = 1; i < HIST; i++) {
+        if (histX[i] < loX) loX = histX[i];  if (histX[i] > hiX) hiX = histX[i];
+        if (histY[i] < loY) loY = histY[i];  if (histY[i] > hiY) hiY = histY[i];
+      }
+      float growthX = hiX - loX;
+      float growthY = hiY - loY;
+      float rangeX  = maxX - minX;
+      float rangeY  = maxY - minY;
+
+      if (growthX < CAL_PLATEAU_UT && growthY < CAL_PLATEAU_UT
+          && rangeX > CAL_MIN_RANGE && rangeY > CAL_MIN_RANGE) {
+        break;  // plateau reached — full rotation confirmed
+      }
+    }
+
     delay(10);
   }
 
@@ -160,22 +207,22 @@ static void runCalibration() {
 
   Serial.println();
   Serial.println("========================================");
-  Serial.println("CALIBRATION DONE");
-  Serial.printf("Samples: %d\n", sampleCnt);
+
+  if (timedOut) {
+    Serial.println("[WARN] Timed out (90s) before ranges plateaued.");
+    Serial.println("       rangeX or rangeY never stabilized — spin may be");
+    Serial.println("       incomplete or magnetic interference is present.");
+    Serial.println("       Reflash and redo before trusting these offsets.");
+  } else {
+    Serial.println("[GATE 3] PASS — plateau detected, full rotation confirmed.");
+  }
+
   Serial.println();
+  Serial.printf("Samples: %d\n", sampleCnt);
   Serial.printf("Axis  min      max      range    offset\n");
   Serial.printf("X   %7.2f  %7.2f  %6.2f  %7.2f\n", minX, maxX, rangeX, offsetX);
   Serial.printf("Y   %7.2f  %7.2f  %6.2f  %7.2f\n", minY, maxY, rangeY, offsetY);
   Serial.printf("Z   %7.2f  %7.2f  %6.2f  %7.2f\n", minZ, maxZ, rangeZ, offsetZ);
-  Serial.println();
-
-  if (rangeX < 20.0f || rangeY < 20.0f) {
-    Serial.println("[WARN] rangeX or rangeY < 20 uT — spin was incomplete or");
-    Serial.println("       magnetic interference present. Reflash and redo.");
-  } else {
-    Serial.println("[GATE 3] PASS — spin range looks good.");
-  }
-
   Serial.println();
   Serial.println("Copy into test_23:");
   Serial.printf("#define MAG_OFFSET_X  %.2ff\n", offsetX);
