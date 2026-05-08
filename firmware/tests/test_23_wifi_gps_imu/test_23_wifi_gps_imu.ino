@@ -29,8 +29,9 @@
  *   GATE 1 — WiFi connects, Serial shows IP
  *   GATE 2 — App SCAN finds boat, telemetry shows uptime incrementing
  *   GATE 3 — GPS fix acquired, position appears on map
- *   GATE 4 — Send 'H': heading matches compass bearing ±15°
- *   GATE 5 — Helm screen shows heading number instead of '--'
+ *   GATE 4 — Point bow at known bearing, type that number, error < 15°
+ *   GATE 5 — Type 'S': heading variance < 5° over 5 s with boat held still
+ *   GATE 6 — Helm screen shows heading number instead of '--'
  *
  * Hardware:
  *   ICM-20948  SDA=GPIO21  SCL=GPIO22  AD0=GND (0x68)
@@ -179,9 +180,38 @@ static void updateIMU() {
   }
 }
 
-static void printHeadingSnapshot() {
-  Serial.printf("Heading: %.1f°  Pitch: %+.1f°  Roll: %+.1f°  |a|=%.0f mg\n",
-                fusedHeading, livePitch, liveRoll, liveAccelMag);
+static void runGate4(int reference) {
+  float err = fusedHeading - (float)reference;
+  if (err >  180.0f) err -= 360.0f;
+  if (err < -180.0f) err += 360.0f;
+  float absErr = fabsf(err);
+  Serial.printf("IMU heading: %.1f°  Reference: %d°  Error: %.1f°  ",
+                fusedHeading, reference, absErr);
+  if (absErr <= 15.0f)
+    Serial.println("[GATE 4] PASS");
+  else
+    Serial.println("[GATE 4] FAIL — error > 15deg. Check mag offsets or redo test_22.");
+}
+
+static void runGate5() {
+  Serial.println("Stability test — hold boat still for 5 seconds...");
+  float minH = fusedHeading, maxH = fusedHeading;
+  unsigned long start = millis();
+  while (millis() - start < 5000) {
+    updateIMU();
+    server.handleClient();
+    if (fusedHeading < minH) minH = fusedHeading;
+    if (fusedHeading > maxH) maxH = fusedHeading;
+    delay(10);
+  }
+  float range = maxH - minH;
+  // Unwrap: if readings cross 0/360 boundary the naive range will be huge
+  if (range > 180.0f) range = 360.0f - range;
+  Serial.printf("Min: %.1f°  Max: %.1f°  Range: %.1f°  ", minH, maxH, range);
+  if (range <= 5.0f)
+    Serial.println("[GATE 5] PASS");
+  else
+    Serial.println("[GATE 5] FAIL — drift > 5deg. Boat may have moved or ALPHA needs tuning.");
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -295,14 +325,40 @@ void setup() {
   server.on("/led",       HTTP_OPTIONS, handleOptions);
   server.begin();
   Serial.printf("[HTTP] port 80  /status  /telemetry  /led  (IP: %s)\n", boatIP.c_str());
-  Serial.println("Ready. Send 'H' for heading snapshot. [GATE 4]");
+  Serial.println("Ready.");
+  Serial.println("  GATE 4: point bow at a known bearing, type that number + enter.");
+  Serial.println("  GATE 5: type S + enter with boat held still.");
 }
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
+static char   serialBuf[8];
+static uint8_t serialLen = 0;
+
 void loop() {
   while (gpsSerial.available()) gps.encode(gpsSerial.read());
   updateIMU();
   server.handleClient();
 
-  if (Serial.available() && Serial.read() == 'H') printHeadingSnapshot();
+  // Buffer Serial input until newline, then parse command or bearing number
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (serialLen > 0) {
+        serialBuf[serialLen] = '\0';
+        if (serialBuf[0] == 'S' || serialBuf[0] == 's') {
+          runGate5();
+        } else {
+          int ref = atoi(serialBuf);
+          if (ref >= 0 && ref <= 360) {
+            runGate4(ref);
+          } else {
+            Serial.println("Enter a compass bearing (0-360) or S for stability test.");
+          }
+        }
+        serialLen = 0;
+      }
+    } else if (serialLen < sizeof(serialBuf) - 1) {
+      serialBuf[serialLen++] = c;
+    }
+  }
 }
