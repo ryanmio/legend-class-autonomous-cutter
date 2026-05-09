@@ -28,6 +28,12 @@ export interface TelemetryData {
   bridge_on?: boolean;
   deck_on?: boolean;
   mode?: 'MANUAL' | 'AUTONOMOUS' | 'FAILSAFE' | 'ESTOP' | 'IDLE';
+  accel_mag?: number;
+  rudder_us?: number;
+  heading_target?: string;
+  heading_error?: string;
+  wp_bearing?: string;
+  wp_dist_m?: number;
 }
 
 export interface Waypoint {

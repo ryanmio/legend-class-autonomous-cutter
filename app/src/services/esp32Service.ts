@@ -94,6 +94,12 @@ export async function setWaypoints(ip: string, waypoints: { lat: number; lon: nu
   return post(ip, '/waypoints', { waypoints });
 }
 
+// Single active waypoint for heading-hold controller (test_25+)
+// Pass lat=null, lon=null to clear.
+export async function setWaypoint(ip: string, lat: number | null, lon: number | null) {
+  return post(ip, '/waypoint', { lat, lon });
+}
+
 export async function triggerRTH(ip: string) {
   return post(ip, '/rth');
 }
