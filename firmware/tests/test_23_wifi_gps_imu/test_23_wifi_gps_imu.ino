@@ -134,15 +134,25 @@ static void updateIMU() {
   my -= MAG_OFFSET_Y;
   mz -= MAG_OFFSET_Z;
 
-  // Roll / pitch from accel
-  liveRoll  = atan2f(ay, az) * 180.0f / PI;
-  livePitch = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / PI;
+  // IMU is mounted on a vertical wall with X axis pointing up (confirmed by
+  // diagnostic: ax≈+984 mg constant across all yaw rotations; my/mz track
+  // rotation while mx stays flat). Remap axes so standard Z-up tilt
+  // compensation formulas receive the expected orientation.
+  //   Remapped X = chip Y  (horizontal)
+  //   Remapped Y = chip Z  (horizontal)
+  //   Remapped Z = chip X  (vertical, up)
+  float ar_x = ay, ar_y = az, ar_z = ax;
+  float mr_x = my, mr_y = mz, mr_z = mx;
 
-  // Tilt-compensated mag heading
+  // Roll / pitch from remapped accel
+  liveRoll  = atan2f(ar_y, ar_z) * 180.0f / PI;
+  livePitch = atan2f(-ar_x, sqrtf(ar_y*ar_y + ar_z*ar_z)) * 180.0f / PI;
+
+  // Tilt-compensated mag heading using remapped axes
   float rR = liveRoll  * PI / 180.0f;
   float pR = livePitch * PI / 180.0f;
-  float Bx = mx*cosf(pR) + my*sinf(rR)*sinf(pR) + mz*cosf(rR)*sinf(pR);
-  float By = my*cosf(rR) - mz*sinf(rR);
+  float Bx = mr_x*cosf(pR) + mr_y*sinf(rR)*sinf(pR) + mr_z*cosf(rR)*sinf(pR);
+  float By = mr_y*cosf(rR) - mr_z*sinf(rR);
   float magHeading = atan2f(-By, Bx) * 180.0f / PI;
   if (magHeading < 0) magHeading += 360.0f;
 
