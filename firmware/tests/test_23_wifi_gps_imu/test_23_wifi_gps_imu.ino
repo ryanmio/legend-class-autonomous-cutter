@@ -202,29 +202,19 @@ static void printDiag() {
 }
 
 static void runTrackingTest() {
-  Serial.println("Tracking test — slowly rotate boat one full 360 deg circle.");
-  Serial.println("Heading should travel ~360 deg and return near start.");
-  Serial.println("Starting in 3 seconds...");
-  delay(3000);
-
+  Serial.println("Tracking test — spin boat one full 360 deg circle in 15 s. GO.");
   float startHeading = fusedHeading;
-  float minH = startHeading, maxH = startHeading;
+  float maxDeviation = 0;
   unsigned long start = millis();
-
-  Serial.printf("Start: %.1f deg\n", startHeading);
 
   while (millis() - start < 15000) {
     updateIMU();
     server.handleClient();
-
-    if (fusedHeading < minH) minH = fusedHeading;
-    if (fusedHeading > maxH) maxH = fusedHeading;
-
-    static unsigned long lastPrint = 0;
-    if (millis() - lastPrint >= 500) {
-      lastPrint = millis();
-      Serial.printf("  %.1f deg\n", fusedHeading);
-    }
+    float diff = fusedHeading - startHeading;
+    if (diff >  180.0f) diff -= 360.0f;
+    if (diff < -180.0f) diff += 360.0f;
+    float absDiff = fabsf(diff);
+    if (absDiff > maxDeviation) maxDeviation = absDiff;
     delay(10);
   }
 
@@ -232,11 +222,14 @@ static void runTrackingTest() {
   float returnError = fabsf(endHeading - startHeading);
   if (returnError > 180.0f) returnError = 360.0f - returnError;
 
-  Serial.printf("End: %.1f deg  Return error: %.1f deg\n", endHeading, returnError);
-  if (returnError <= 20.0f)
-    Serial.println("[TRACKING] PASS — heading returned within 20 deg of start.");
+  Serial.printf("Start: %.1f deg  End: %.1f deg  Max deviation: %.1f deg  Return error: %.1f deg\n",
+                startHeading, endHeading, maxDeviation, returnError);
+  if (maxDeviation >= 270.0f && returnError <= 20.0f)
+    Serial.println("[TRACKING] PASS — full rotation tracked, closed within 20 deg.");
+  else if (maxDeviation < 270.0f)
+    Serial.println("[TRACKING] FAIL — max deviation < 270 deg, spin was incomplete.");
   else
-    Serial.println("[TRACKING] FAIL — heading did not close the loop.");
+    Serial.println("[TRACKING] FAIL — did not return within 20 deg of start.");
 }
 
 static void runGate4(int reference) {
