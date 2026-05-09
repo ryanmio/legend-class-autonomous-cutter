@@ -96,9 +96,12 @@ static float wpBearing = 0.0f;   // haversine bearing from current GPS to waypoi
 static float wpDistM   = 0.0f;   // distance in metres
 
 // ── Mag calibration (test_22 run 2) ──────────────────────────────────────────
-static const float MAG_OFFSET_X = -38.62f;
-static const float MAG_OFFSET_Y =   1.65f;
-static const float MAG_OFFSET_Z = -14.85f;
+// test_22 offsets measured indoors (metal desk, tools) — values too large
+// (MAG_OFFSET_Z alone adds 14.85 µT to a ~18 µT total horizontal field).
+// Use zero until calibrated outdoors away from metal with boat fully built.
+static const float MAG_OFFSET_X = 0.0f;
+static const float MAG_OFFSET_Y = 0.0f;
+static const float MAG_OFFSET_Z = 0.0f;
 
 // ── Complementary filter ──────────────────────────────────────────────────────
 static const float ALPHA = 0.98f;
