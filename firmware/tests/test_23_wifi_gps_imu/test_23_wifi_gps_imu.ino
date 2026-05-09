@@ -142,7 +142,7 @@ static void updateIMU() {
   //   Remapped Y = chip Z  (horizontal)
   //   Remapped Z = chip X  (vertical, up)
   float ar_x = ay, ar_y = az, ar_z = ax;
-  float mr_x = my, mr_y = mz, mr_z = mx;
+  float mr_x = -my, mr_y = mz, mr_z = -mx;  // chip Y=stern(negate), chip X=up(negate for tilt formula)
 
   // Roll / pitch from remapped accel
   liveRoll  = atan2f(ar_y, ar_z) * 180.0f / PI;

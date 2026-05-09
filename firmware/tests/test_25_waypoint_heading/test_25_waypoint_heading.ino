@@ -238,7 +238,9 @@ static void updateIMU() {
     mx -= MAG_OFFSET_X;  my -= MAG_OFFSET_Y;  mz -= MAG_OFFSET_Z;
 
     float ar_x = ay, ar_y = az, ar_z = ax;
-    float mr_x = my, mr_y = mz, mr_z = mx;
+    // chip Y points toward stern → negate to get bow direction.
+    // chip X points up → negate to get the DOWN component the tilt formula expects.
+    float mr_x = -my, mr_y = mz, mr_z = -mx;
 
     liveRoll  = atan2f(ar_y, ar_z) * 180.0f / PI;
     livePitch = atan2f(-ar_x, sqrtf(ar_y*ar_y + ar_z*ar_z)) * 180.0f / PI;
