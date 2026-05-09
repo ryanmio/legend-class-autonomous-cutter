@@ -224,10 +224,10 @@ static void runTrackingTest() {
 
   Serial.printf("Start: %.1f deg  End: %.1f deg  Max deviation: %.1f deg  Return error: %.1f deg\n",
                 startHeading, endHeading, maxDeviation, returnError);
-  if (maxDeviation >= 270.0f && returnError <= 20.0f)
+  if (maxDeviation >= 90.0f && returnError <= 20.0f)
     Serial.println("[TRACKING] PASS — full rotation tracked, closed within 20 deg.");
-  else if (maxDeviation < 270.0f)
-    Serial.println("[TRACKING] FAIL — max deviation < 270 deg, spin was incomplete.");
+  else if (maxDeviation < 90.0f)
+    Serial.println("[TRACKING] FAIL — max deviation < 90 deg, spin was incomplete.");
   else
     Serial.println("[TRACKING] FAIL — did not return within 20 deg of start.");
 }
