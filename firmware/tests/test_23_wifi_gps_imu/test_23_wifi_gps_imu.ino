@@ -201,6 +201,44 @@ static void printDiag() {
                 myICM.gyrX(), myICM.gyrY(), myICM.gyrZ());
 }
 
+static void runTrackingTest() {
+  Serial.println("Tracking test — slowly rotate boat one full 360 deg circle.");
+  Serial.println("Heading should travel ~360 deg and return near start.");
+  Serial.println("Starting in 3 seconds...");
+  delay(3000);
+
+  float startHeading = fusedHeading;
+  float minH = startHeading, maxH = startHeading;
+  unsigned long start = millis();
+
+  Serial.printf("Start: %.1f deg\n", startHeading);
+
+  while (millis() - start < 15000) {
+    updateIMU();
+    server.handleClient();
+
+    if (fusedHeading < minH) minH = fusedHeading;
+    if (fusedHeading > maxH) maxH = fusedHeading;
+
+    static unsigned long lastPrint = 0;
+    if (millis() - lastPrint >= 500) {
+      lastPrint = millis();
+      Serial.printf("  %.1f deg\n", fusedHeading);
+    }
+    delay(10);
+  }
+
+  float endHeading = fusedHeading;
+  float returnError = fabsf(endHeading - startHeading);
+  if (returnError > 180.0f) returnError = 360.0f - returnError;
+
+  Serial.printf("End: %.1f deg  Return error: %.1f deg\n", endHeading, returnError);
+  if (returnError <= 20.0f)
+    Serial.println("[TRACKING] PASS — heading returned within 20 deg of start.");
+  else
+    Serial.println("[TRACKING] FAIL — heading did not close the loop.");
+}
+
 static void runGate4(int reference) {
   float err = fusedHeading - (float)reference;
   if (err >  180.0f) err -= 360.0f;
@@ -350,6 +388,7 @@ void setup() {
   Serial.println("  GATE 4: point bow at a known bearing, type that number + enter.");
   Serial.println("  GATE 5: type S + enter with boat held still.");
   Serial.println("  DIAG:   type D to print raw accel/mag/gyro.");
+  Serial.println("  TRACK:  type T then spin boat one full circle (15 s).");
 }
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
@@ -371,6 +410,8 @@ void loop() {
           runGate5();
         } else if (serialBuf[0] == 'D' || serialBuf[0] == 'd') {
           printDiag();
+        } else if (serialBuf[0] == 'T' || serialBuf[0] == 't') {
+          runTrackingTest();
         } else {
           int ref = atoi(serialBuf);
           if (ref >= 0 && ref <= 360) {
