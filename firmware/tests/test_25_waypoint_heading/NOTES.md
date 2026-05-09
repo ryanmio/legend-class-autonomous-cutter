@@ -36,15 +36,6 @@ it should point — which is the mounting offset plus any IMU drift.
 6. Type 'W' in Serial Monitor → GATE 4 PASS if error < 20°.
 7. Tap a different spot on the map. Confirm `wp_bearing` changes in telemetry → GATE 5.
 
-### Mounting offset
-
-`MOUNTING_OFFSET_DEG = 0.0f` (default). The 'W' snapshot will show the actual
-error between the haversine bearing and the IMU heading when the rudder is
-straight. That number is the mounting offset. Record it here and hardcode it
-before the first water test.
-
-Measured offset: **TBD** (to be determined on water via GPS course-over-ground)
-
 ### Kp
 
 Same starting point as test_24: Kp = 3.0 µs/deg.

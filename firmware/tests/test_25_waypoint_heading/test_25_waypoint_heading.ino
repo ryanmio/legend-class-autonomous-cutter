@@ -88,9 +88,6 @@ static float targetHeading = -1.0f;   // -1 = inactive
 static float manualTarget  = -1.0f;
 static float Kp            =  3.0f;   // µs per degree of error
 
-// ── Mounting offset (calibrate on water via GPS course-over-ground) ───────────
-static const float MOUNTING_OFFSET_DEG = 0.0f;
-
 // ── Waypoint state ────────────────────────────────────────────────────────────
 static bool  wpSet    = false;
 static float wpLat    = 0.0f;
@@ -186,8 +183,7 @@ static void updateWaypointBearing() {
     float lon = (float)gps.location.lng();
     wpBearing  = haversineBearing(lat, lon, wpLat, wpLon);
     wpDistM    = haversineDistM(lat, lon, wpLat, wpLon);
-    // Apply mounting offset and set as controller target.
-    targetHeading = fmodf(wpBearing + MOUNTING_OFFSET_DEG + 360.0f, 360.0f);
+    targetHeading = wpBearing;
 }
 
 // ── Proportional heading hold ─────────────────────────────────────────────────
@@ -294,8 +290,7 @@ static void runWaypointSnapshot() {
     } else {
         Serial.printf( "  Waypoint    : %.6f, %.6f\n", wpLat, wpLon);
         if (hasFix) {
-            Serial.printf("  WP bearing  : %.1f deg (haversine, mounting offset %.1f deg)\n",
-                          wpBearing, MOUNTING_OFFSET_DEG);
+            Serial.printf("  WP bearing  : %.1f deg (haversine)\n", wpBearing);
             Serial.printf("  WP distance : %.1f m\n", wpDistM);
             Serial.printf("  IMU heading : %.1f deg\n", fusedHeading);
             float err = shortestPathError(targetHeading, fusedHeading);
