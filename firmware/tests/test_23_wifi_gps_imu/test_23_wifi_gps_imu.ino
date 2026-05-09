@@ -180,6 +180,17 @@ static void updateIMU() {
   }
 }
 
+static void printDiag() {
+  if (!myICM.dataReady()) { Serial.println("IMU not ready"); return; }
+  myICM.getAGMT();
+  Serial.printf("RAW  ax=%7.1f  ay=%7.1f  az=%7.1f  mg\n",
+                myICM.accX(), myICM.accY(), myICM.accZ());
+  Serial.printf("RAW  mx=%7.2f  my=%7.2f  mz=%7.2f  uT\n",
+                myICM.magX(), myICM.magY(), myICM.magZ());
+  Serial.printf("RAW  gx=%7.2f  gy=%7.2f  gz=%7.2f  deg/s\n",
+                myICM.gyrX(), myICM.gyrY(), myICM.gyrZ());
+}
+
 static void runGate4(int reference) {
   float err = fusedHeading - (float)reference;
   if (err >  180.0f) err -= 360.0f;
@@ -328,6 +339,7 @@ void setup() {
   Serial.println("Ready.");
   Serial.println("  GATE 4: point bow at a known bearing, type that number + enter.");
   Serial.println("  GATE 5: type S + enter with boat held still.");
+  Serial.println("  DIAG:   type D to print raw accel/mag/gyro.");
 }
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
@@ -347,6 +359,8 @@ void loop() {
         serialBuf[serialLen] = '\0';
         if (serialBuf[0] == 'S' || serialBuf[0] == 's') {
           runGate5();
+        } else if (serialBuf[0] == 'D' || serialBuf[0] == 'd') {
+          printDiag();
         } else {
           int ref = atoi(serialBuf);
           if (ref >= 0 && ref <= 360) {
