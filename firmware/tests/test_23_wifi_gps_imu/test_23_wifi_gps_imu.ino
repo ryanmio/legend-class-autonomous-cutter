@@ -203,33 +203,38 @@ static void printDiag() {
 
 static void runTrackingTest() {
   Serial.println("Tracking test — spin boat one full 360 deg circle in 15 s. GO.");
-  float startHeading = fusedHeading;
-  float maxDeviation = 0;
-  unsigned long start = millis();
+  float prevHeading      = fusedHeading;
+  float startHeading     = fusedHeading;
+  float cumulativeRotation = 0;
+  unsigned long start    = millis();
 
   while (millis() - start < 15000) {
     updateIMU();
     server.handleClient();
-    float diff = fusedHeading - startHeading;
-    if (diff >  180.0f) diff -= 360.0f;
-    if (diff < -180.0f) diff += 360.0f;
-    float absDiff = fabsf(diff);
-    if (absDiff > maxDeviation) maxDeviation = absDiff;
+    // Accumulate signed rotation step by step — distinguishes full circle
+    // from 180-out-and-back (which nets to ~0 cumulative).
+    float delta = fusedHeading - prevHeading;
+    if (delta >  180.0f) delta -= 360.0f;
+    if (delta < -180.0f) delta += 360.0f;
+    cumulativeRotation += delta;
+    prevHeading = fusedHeading;
     delay(10);
   }
 
-  float endHeading = fusedHeading;
+  float endHeading  = fusedHeading;
   float returnError = fabsf(endHeading - startHeading);
   if (returnError > 180.0f) returnError = 360.0f - returnError;
+  float absCumulative = fabsf(cumulativeRotation);
 
-  Serial.printf("Start: %.1f deg  End: %.1f deg  Max deviation: %.1f deg  Return error: %.1f deg\n",
-                startHeading, endHeading, maxDeviation, returnError);
-  if (maxDeviation >= 90.0f && returnError <= 20.0f)
-    Serial.println("[TRACKING] PASS — full rotation tracked, closed within 20 deg.");
-  else if (maxDeviation < 90.0f)
-    Serial.println("[TRACKING] FAIL — max deviation < 90 deg, spin was incomplete.");
+  Serial.printf("Start: %.1f deg  End: %.1f deg  Cumulative: %.1f deg  Return error: %.1f deg\n",
+                startHeading, endHeading, cumulativeRotation, returnError);
+  if (absCumulative >= 300.0f && returnError <= 20.0f)
+    Serial.println("[TRACKING] PASS — full rotation confirmed, closed within 20 deg.");
+  else if (absCumulative < 300.0f)
+    Serial.printf("[TRACKING] FAIL — only %.1f deg of cumulative rotation (need 300+). Spin further.\n",
+                  absCumulative);
   else
-    Serial.println("[TRACKING] FAIL — did not return within 20 deg of start.");
+    Serial.println("[TRACKING] FAIL — full rotation detected but did not return within 20 deg of start.");
 }
 
 static void runGate4(int reference) {
