@@ -99,9 +99,9 @@ static float wpDistM   = 0.0f;   // distance in metres
 // test_22 offsets measured indoors (metal desk, tools) — values too large
 // (MAG_OFFSET_Z alone adds 14.85 µT to a ~18 µT total horizontal field).
 // Use zero until calibrated outdoors away from metal with boat fully built.
-static const float MAG_OFFSET_X = 0.0f;
-static const float MAG_OFFSET_Y = 0.0f;
-static const float MAG_OFFSET_Z = 0.0f;
+static const float MAG_OFFSET_X = -20.70f;
+static const float MAG_OFFSET_Y =  -0.45f;
+static const float MAG_OFFSET_Z = -17.70f;
 
 // ── Complementary filter ──────────────────────────────────────────────────────
 static const float ALPHA = 0.98f;
@@ -243,7 +243,7 @@ static void updateIMU() {
     float ar_x = ay, ar_y = az, ar_z = ax;
     // chip Y points toward stern → negate to get bow direction.
     // chip X points up → negate to get the DOWN component the tilt formula expects.
-    float mr_x = -my, mr_y = mz, mr_z = -mx;
+    float mr_x = -mz, mr_y = -my, mr_z = -mx;  // X=up, Y=port, Z=stern
 
     liveRoll  = atan2f(ar_y, ar_z) * 180.0f / PI;
     livePitch = atan2f(-ar_x, sqrtf(ar_y*ar_y + ar_z*ar_z)) * 180.0f / PI;

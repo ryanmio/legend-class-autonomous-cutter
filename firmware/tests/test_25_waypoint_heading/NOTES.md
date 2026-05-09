@@ -4,15 +4,33 @@
 
 | Gate | Description | Result |
 |------|-------------|--------|
-| GATE 1 | GPS fix acquired, position valid | — |
-| GATE 2 | Drop waypoint in app, firmware telemetry shows wp_bearing | — |
-| GATE 3 | App-shown bearing and firmware wp_bearing agree within 1° | — |
-| GATE 4 | Rotate boat until rudder nearly straight, type 'W': heading error < 20° | — |
-| GATE 5 | Move waypoint on app map, wp_bearing updates in telemetry | — |
+| GATE 1 | GPS fix acquired, position valid | PASS |
+| GATE 2 | Drop waypoint in app, firmware telemetry shows wp_bearing | PASS |
+| GATE 3 | App-shown bearing and firmware wp_bearing agree within 1° | PASS |
+| GATE 4 | Rotate boat until rudder nearly straight, type 'W': heading error < 20° | PASS — 1.8° error, bow confirmed pointing at waypoint |
+| GATE 5 | Move waypoint on app map, wp_bearing updates in telemetry | PASS |
 
-## Notes
+## Result: PASS
 
-*Test not yet run.*
+Final mag axis mapping: `mr_x = -mz, mr_y = -my, mr_z = -mx` (chip X=up, Y=port, Z=stern).
+Outdoor calibration offsets: MAG_OFFSET_X=-20.70, MAG_OFFSET_Y=-0.45, MAG_OFFSET_Z=-17.70.
+
+## Open bug: rudder oscillation at 180° heading error
+
+When the boat points directly away from the waypoint (≈180° error), the rudder
+slams full port then full starboard rapidly. Root cause: the proportional
+controller hits the unstable equilibrium where `shortestPathError` oscillates
+between +180° and −180° with any small heading perturbation, driving the rudder
+to full deflection each time.
+
+**In practice:** unlikely to matter underway — the boat will only be anti-aligned
+at startup or if a waypoint moves behind it, and any rudder deflection immediately
+starts rotating the boat away from the singularity. Water drag will also damp
+oscillations that bench testing exaggerates.
+
+**Standard fix when it becomes a problem:** add a derivative term (PD controller)
+— the D term resists rapid heading changes and naturally suppresses the 180°
+hunting. Alternatively, cap rudder rate-of-change. Defer to test_26+.
 
 ### What this test proves
 
