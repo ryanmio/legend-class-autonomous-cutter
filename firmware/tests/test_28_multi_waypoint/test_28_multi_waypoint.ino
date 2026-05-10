@@ -40,14 +40,17 @@
  *   5. All gates auto-detected; no y/n prompts (per feedback_test_style).
  *
  * Gate flow (auto-detected, sketch prompts each phase ONCE):
- *   1/4  POST /mission with >= 1 waypoint → wp_count and wp_idx visible.
- *   2/4  After sim_gps far→near to WP1 → wp_idx 0→1.
- *   3/4  Mission completion (wp_idx == wp_count) → mission_active=false,
+ *   1/3  POST /mission with >= 1 waypoint → wp_count and wp_idx visible.
+ *   2/3  After sim_gps far→near to WP1 → wp_idx 0→1.
+ *   3/3  Mission completion (wp_idx == wp_count) → mission_active=false,
  *        MISSION COMPLETE printed once. If at completion mode==AUTO,
  *        ESCs are also verified neutral.
- *   4/4  In a fresh mission, kill TX during AUTO → MODE_FAILSAFE; restore
- *        TX, ACK via SwA UP → DOWN; mission_active still true and wp_idx
- *        unchanged from when failsafe tripped.
+ *
+ * Gate 4 from the original handoff (failsafe-during-mission preserves
+ * mission state) was dropped: it only verifies that updateMode doesn't
+ * touch wp_idx / mission_active, which is a code-review check, not a
+ * bench-discovery check. First water test (test_29) will exercise it
+ * naturally if RC drops.
  *
  * Hardware (additions to test_27):
  *   BN-220 GPS  → UART2  RX=GPIO17 (← white)  TX=GPIO4 (→ green)
@@ -165,24 +168,15 @@ static float    boatLon       = 0.0f;
 static bool     gpsValid      = false;
 static bool     gpsSimulated  = false;
 
-// ── Failsafe-during-mission tracking (gate 4) ──────────────────────────────
-// When mode transitions INTO FAILSAFE, snapshot whether a mission was active
-// and what wp_idx was. Gate 4 passes when AUTO is re-entered with mission
-// still active and wp_idx unchanged from that snapshot.
-static bool     missionActiveAtFs = false;
-static uint8_t  wpIdxAtFs         = 0;
-static bool     fsDuringMission   = false;
-
 // ── Test phase ──────────────────────────────────────────────────────────────
 enum Phase {
     P_WAIT_MISSION,   // gate 1: waiting for POST /mission
     P_WAIT_ADVANCE,   // gate 2: waiting for first wp_idx advancement
     P_WAIT_COMPLETE,  // gate 3: waiting for mission completion
-    P_WAIT_FAILSAFE,  // gate 4: waiting for failsafe-during-mission cycle
     P_DONE
 };
 static Phase phase = P_WAIT_MISSION;
-static bool  g1Pass = false, g2Pass = false, g3Pass = false, g4Pass = false;
+static bool  g1Pass = false, g2Pass = false, g3Pass = false;
 
 // ── iBUS / RC state ─────────────────────────────────────────────────────────
 static uint8_t  ibusBuf[32], ibusIdx = 0;
@@ -670,10 +664,6 @@ static void updateMode() {
                 mode = MODE_FAILSAFE;
                 failsafeAckRequired = true;
                 ackRefusalPrinted   = false;
-                // Snapshot mission state for gate 4 auto-detection.
-                missionActiveAtFs = missionActive;
-                wpIdxAtFs         = wpIdx;
-                if (missionActive) fsDuringMission = true;
                 Serial.printf("\n[FAILSAFE] guard tripped — ch[5]=%u sustained %lu ms. "
                               "Outputs neutral. Flip SwA UP (MANUAL) to ACK.\n",
                               ch[IBUS_IDX_FAILSAFE_GUARD],
@@ -690,9 +680,6 @@ static void updateMode() {
             mode = MODE_FAILSAFE;
             failsafeAckRequired = true;
             ackRefusalPrinted   = false;
-            missionActiveAtFs = missionActive;
-            wpIdxAtFs         = wpIdx;
-            if (missionActive) fsDuringMission = true;
             Serial.printf("\n[FAILSAFE] no frames for %lu ms. "
                           "Outputs neutral. Flip SwA UP (MANUAL) to ACK after RC returns.\n",
                           millis() - lastFrameMs);
@@ -803,14 +790,6 @@ static void prompt() {
         Serial.println("STEP 3: POST /sim_gps within 3 m of each remaining waypoint in order.");
         Serial.println("(mission completes when wp_idx reaches wp_count)");
         break;
-      case P_WAIT_FAILSAFE:
-        Serial.println("STEP 4: POST a fresh mission, sim_gps far from WP1, /cruise, "
-                       "flip SwA DOWN.");
-        Serial.println("        Then KILL TX. After failsafe trips, restore TX, "
-                       "SwA UP, then SwA DOWN.");
-        Serial.println("(gate 4 passes when AUTO re-engages with mission_active still true "
-                       "and wp_idx unchanged)");
-        break;
       case P_DONE:
         break;
     }
@@ -821,10 +800,9 @@ static void printSummary() {
     Serial.println("========================================");
     Serial.println("  test_28 RESULTS");
     Serial.println("========================================");
-    Serial.printf("Gate 1/4  Mission accepted             : %s\n", g1Pass ? "PASS" : "FAIL");
-    Serial.printf("Gate 2/4  First waypoint advance       : %s\n", g2Pass ? "PASS" : "FAIL");
-    Serial.printf("Gate 3/4  Mission completes cleanly    : %s\n", g3Pass ? "PASS" : "FAIL");
-    Serial.printf("Gate 4/4  Mission survives FAILSAFE    : %s\n", g4Pass ? "PASS" : "FAIL");
+    Serial.printf("Gate 1/3  Mission accepted             : %s\n", g1Pass ? "PASS" : "FAIL");
+    Serial.printf("Gate 2/3  First waypoint advance       : %s\n", g2Pass ? "PASS" : "FAIL");
+    Serial.printf("Gate 3/3  Mission completes cleanly    : %s\n", g3Pass ? "PASS" : "FAIL");
     Serial.println("Outputs frozen at neutral. Reboot to re-run.");
 }
 
@@ -833,7 +811,7 @@ static void runGates() {
       case P_WAIT_MISSION:
         if (missionActive && wpCount >= 1) {
             g1Pass = true;
-            Serial.printf("PASS (1/4): mission accepted, wp_count=%u, wp_idx=%u.\n",
+            Serial.printf("PASS (1/3): mission accepted, wp_count=%u, wp_idx=%u.\n",
                           wpCount, wpIdx);
             phase = P_WAIT_ADVANCE;
             prompt();
@@ -843,55 +821,37 @@ static void runGates() {
       case P_WAIT_ADVANCE:
         if (wpIdx >= 1) {
             g2Pass = true;
-            Serial.printf("PASS (2/4): first advance observed (wp_idx=%u).\n", wpIdx);
+            Serial.printf("PASS (2/3): first advance observed (wp_idx=%u).\n", wpIdx);
             // If the operator only loaded 1 waypoint, gate 3 already fired
             // implicitly (mission_active=false). Handle the cascade.
             if (!missionActive) {
                 g3Pass = true;
-                Serial.println("PASS (3/4): mission completed (single-waypoint mission).");
-                phase = P_WAIT_FAILSAFE;
+                Serial.println("PASS (3/3): mission completed (single-waypoint mission).");
+                phase = P_DONE;
+                printSummary();
             } else {
                 phase = P_WAIT_COMPLETE;
+                prompt();
             }
-            prompt();
         }
         break;
 
       case P_WAIT_COMPLETE:
         if (!missionActive) {
-            // Mission just completed. If we're in AUTO at this moment, also
-            // verify ESCs neutralized; otherwise the mode-governs-output
-            // contract makes that check meaningless.
             if (mode == MODE_AUTO) {
                 if (outPort == NEUTRAL_US) {
                     g3Pass = true;
-                    Serial.println("PASS (3/4): mission complete, ESCs neutralized in AUTO.");
+                    Serial.println("PASS (3/3): mission complete, ESCs neutralized in AUTO.");
                 } else {
                     g3Pass = false;
-                    Serial.printf("FAIL (3/4): mission complete in AUTO but ESCs at %u µs "
+                    Serial.printf("FAIL (3/3): mission complete in AUTO but ESCs at %u µs "
                                   "(expected %u).\n", outPort, NEUTRAL_US);
                 }
             } else {
                 g3Pass = true;
-                Serial.printf("PASS (3/4): mission complete (mode=%s, ESCs governed by mode).\n",
+                Serial.printf("PASS (3/3): mission complete (mode=%s, ESCs governed by mode).\n",
                               modeName(mode));
             }
-            phase = P_WAIT_FAILSAFE;
-            prompt();
-        }
-        break;
-
-      case P_WAIT_FAILSAFE:
-        // Gate 4 needs three things observed: (a) failsafe entered while a
-        // mission was active, (b) mode is back to AUTO, (c) mission_active
-        // and wp_idx survived the round-trip. The fsDuringMission latch
-        // flips on the FAILSAFE-entry edge; missionActiveAtFs / wpIdxAtFs
-        // capture the snapshot.
-        if (fsDuringMission && missionActiveAtFs &&
-            mode == MODE_AUTO && missionActive && wpIdx == wpIdxAtFs) {
-            g4Pass = true;
-            Serial.printf("PASS (4/4): mission survived FAILSAFE "
-                          "(wp_idx=%u, mission_active=true).\n", wpIdx);
             phase = P_DONE;
             printSummary();
         }
