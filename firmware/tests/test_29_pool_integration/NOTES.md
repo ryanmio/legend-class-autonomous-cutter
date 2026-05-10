@@ -1,0 +1,125 @@
+# test_29_pool_integration — Notes
+
+## Status: PENDING (write-time commit)
+
+## What this sketch is
+
+Production-direction sketch for the **first water test**. Not a bench
+gate test — there are no auto-detected gates. The operator drives via
+the app; the sketch operates.
+
+Merges:
+- **test_27** Mode FSM, CH6 SwD failsafe guard with sticky ACK, /cruise,
+  /telemetry, INA219 voltage telemetry.
+- **test_25** Single /waypoint + haversine bearing + heading-hold.
+- **NEW** Capture detection (sticky), live /pid tuning, /sim_gps for
+  bench dry-runs of the app.
+
+## What's NEW vs everything before
+
+1. **POST /waypoint** — `{lat, lon}` arms a single waypoint; `{lat:null,
+   lon:null}` clears. Already wired in `app/src/screens/MapScreen.tsx`.
+2. **Capture detection** — when `wp_dist < 3 m`, the sticky `captured`
+   flag fires; ESCs + rudder forced neutral until the operator clears
+   or moves the waypoint. Equivalent to "mission complete" for a
+   single-leg run.
+3. **POST /pid {kp, kd}** — live heading-hold tuning during the run.
+   Defaults Kp=3.0, Kd=8.0 (test_27/test_28 baseline). Ki=0 — pool
+   tuning is P+D only.
+4. **POST /sim_gps {lat, lon}** — bench-debug position injection.
+   Sticky for the session. Don't POST in water.
+5. **Cruise floor refusal removed** — cruise=NEUTRAL_US (1500) is now
+   valid. Static-heading-hold scenario from AUTOPILOT_PLAN test_32
+   step 2 just works.
+6. **AUTO without a waypoint = neutral** — test_27's "AUTO holds
+   heading at entry, runs cruise" placeholder is replaced. From here,
+   AUTO means "drive to the active waypoint" or stay neutral.
+
+## What's deliberately NOT here
+
+- Multi-waypoint missions (pool too small per `project_pool_environment`
+  memory; bay/lake scope).
+- Cross-track guidance (plan-test_30).
+- Integral term (plan-test_31; pool is P+D).
+- GPS-loss failsafe (sea-trial scope).
+- /estop, /rth, /set-home, /mode (RC failsafe + SwD physical guard
+  cover the safety case for pool; production firmware adds these).
+
+## HTTP API
+
+| Method | Path        | Body                           | Effect |
+|--------|-------------|--------------------------------|--------|
+| GET    | /status     |                                | `{ok, v, ip}` |
+| GET    | /telemetry  |                                | full JSON (see below) |
+| POST   | /cruise     | `{us:1660}` or `{pct:50}`      | sets AUTO cruise µs |
+| POST   | /waypoint   | `{lat, lon}` or `{lat:null,lon:null}` | arms / clears waypoint |
+| POST   | /pid        | `{kp, kd}` (either or both)    | live tuning |
+| POST   | /sim_gps    | `{lat, lon}`                   | bench-only position injection |
+
+## Telemetry shape
+
+```
+{
+  "v":            "test_29",
+  "uptime":       int seconds,
+  "heap":         int bytes,
+  "mode":         "MANUAL" | "AUTO" | "FAILSAFE",
+  "cruise_us":    1500..1800,
+  "failsafe_ack": bool,
+  "rc_ever_good": bool,
+  "rc_age_ms":    int,
+  "rudder_us":    1330..1670,
+  "esc_us":       1500..1800,
+  "ch_throttle":  raw iBUS,
+  "ch_rudder":    raw iBUS,
+  "ch_mode":      raw iBUS,
+  "ch_guard":     raw iBUS,
+  "heading":      "0..360",
+  "bus_v":        "X.XX"   (if INA219 present),
+  "shunt_ma":     "X"      (if INA219 present),
+  "gps_fix":      bool,
+  "gps_simulated":bool,
+  "lat":          "X.XXXXXX" (if gps_fix),
+  "lon":          "X.XXXXXX" (if gps_fix),
+  "sats":         int       (real GPS only),
+  "speed_kts":    "X.X"     (real GPS only),
+  "course":       "X.X"     (real GPS only),
+  "wp_set":       bool,
+  "captured":     bool,
+  "wp_lat":       "X.XXXXXX" (if wp_set),
+  "wp_lon":       "X.XXXXXX" (if wp_set),
+  "wp_dist_m":    "X.X"      (if wp_set + gps_fix),
+  "wp_bearing":   "X.X"      (if wp_set + gps_fix),
+  "pid_kp":       "X.XX",
+  "pid_kd":       "X.XX"
+}
+```
+
+## Pre-flight checklist (before getting wet)
+
+- [ ] Bilge MOSFET fix verified.
+- [ ] Hatch waterproofing verified.
+- [ ] Manual TX control: rudder + throttle work on the bench.
+- [ ] SwA at MANUAL boot position. SwD at up.
+- [ ] Phone connected to same network as boat. App opened.
+- [ ] `/telemetry` visible in app. Voltage reading sane.
+- [ ] PID live-set to conservative values (Kp=3.0, Kd=8.0 default is fine).
+- [ ] Cruise set low to start (1660 default; iterate).
+- [ ] Props on, rudder linkage free, hatch sealed.
+
+## Pool sequence (per AUTOPILOT_PLAN test_32)
+
+1. **Manual hover** ~5 min. Confirm RC, sticks, no leaks.
+2. **Heading hold static.** Drop a waypoint on the map nearby. Set
+   cruise to 1500 (neutral). Flip SwA AUTO. Boat doesn't move; rudder
+   should track waypoint as you spin the boat by hand.
+3. **Single-waypoint AUTO at cruise.** Set cruise to ~1660. Drop
+   waypoint a few metres ahead. Flip AUTO. Boat drives, captures within
+   3 m, ESCs neutralize.
+4. **Failsafe live.** Start an AUTO run. Kill TX. Boat should stop
+   within ~4 s (CH6 guard 500 ms detect + processing). Restore TX,
+   flip SwA UP to ACK, then DOWN to re-engage. wp_idx survives the
+   cycle.
+
+A 3-waypoint mission is NOT in scope per recent conversation
+(2026-05-10) — the pool is too small.
