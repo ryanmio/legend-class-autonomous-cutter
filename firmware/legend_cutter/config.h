@@ -87,10 +87,21 @@
 #define IBUS_BAUD        115200
 #define IBUS_CHANNELS        10
 // Channel indices (0-based) from Flysky FS-i6X transmitter
-#define IBUS_CH_THROTTLE      2   // CH3 left-stick vertical — verified test_17
-#define IBUS_CH_RUDDER        3   // CH4 (scaffold value); test_17 actually used idx 0 (CH1, right-stick H). UNVERIFIED — reconcile.
-#define IBUS_CH_GUN_PAN       4   // CH5 right-knob — verified test_18 PASS 2026-05-04
-#define IBUS_CH_MODE          4   // SWA/SWB switch — CONFLICT with IBUS_CH_GUN_PAN, no switches mapped on this TX. Reassign when a physical control is chosen.
+// Final map locked in 2026-05-10 after the test_27 RC-loss diagnostic.
+#define IBUS_CH_RUDDER          0   // CH1 right-stick H — verified test_07/15/17/26/27
+#define IBUS_CH_REVERSE         1   // CH2 right-stick V (down = reverse) — used in test_17 only
+#define IBUS_CH_THROTTLE        2   // CH3 left-stick V — verified test_08/17/26/27
+#define IBUS_CH_GUN_PAN         4   // CH5 right-knob (VrA) — verified test_18 PASS 2026-05-04
+#define IBUS_CH_FAILSAFE_GUARD  5   // CH6 SwD — guard for TX-loss detection. SwD sits up
+                                    //   (~1000 µs) in normal operation; receiver outputs
+                                    //   ~2000 µs from its stored failsafe value when TX
+                                    //   is gone. Firmware: ch[5] > 1500 sustained 500 ms
+                                    //   → MODE_FAILSAFE. Required because FS-iA10B with
+                                    //   CH-OFF failsafe holds-last instead of going silent.
+#define IBUS_CH_MODE            6   // CH7 SwA — manual/auto switch. Up=MANUAL (~1000 µs),
+                                    //   down=AUTO (~2000 µs). Up is MANUAL because the
+                                    //   FS-i6X forces switches up at TX power-up — that
+                                    //   makes MANUAL the safe boot state.
 // iBUS raw value range: 1000–2000
 
 // ==================== CONTROL MIXING ====================

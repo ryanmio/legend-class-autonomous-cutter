@@ -50,10 +50,24 @@ potentially break hardware. The previous agent did exactly that.
   2026-05-09 with 1.8° error.
 - IMU axis mapping: `mr_x = -mz, mr_y = -my, mr_z = -mx` (chip X=up,
   Y=port, Z=stern). Already in test_25 / test_26.
-- iBUS channel map: CH1 rudder, CH2 reverse, CH3 throttle, CH5 knob,
-  **CH6 (idx 5) = SwC mode switch (up=MANUAL ~1000 µs, down=AUTO ~2000 µs)**.
-  Inverted 2026-05-10 — the FS-i6X forces SwC UP at TX power-up, so MANUAL
-  must be the up position to make the boot state safe.
+- iBUS channel map (locked 2026-05-10 after the test_27 RC-loss diag):
+  - CH1 (idx 0) — rudder, right-stick H
+  - CH2 (idx 1) — reverse, right-stick V down (test_17 only)
+  - CH3 (idx 2) — throttle, left-stick V
+  - CH5 (idx 4) — VrA knob (deck gun pan / winch)
+  - **CH6 (idx 5) — SwD failsafe guard.** Sits up (~1000 µs) in normal
+    operation; receiver outputs ~2000 µs from its stored failsafe value
+    when the TX is gone. Firmware: `ch[5] > 1500` sustained 500 ms →
+    MODE_FAILSAFE. This is the required workaround for FS-iA10B's
+    hold-last behavior when channels are configured failsafe=OFF — see
+    `test_27_rc_failsafe/rc_loss_diag/`.
+  - **CH7 (idx 6) — SwA mode switch.** Up = MANUAL (~1000 µs), down =
+    AUTO (~2000 µs). Up is MANUAL because the FS-i6X forces switches up
+    at TX power-up; that makes MANUAL the safe boot state.
+  - CH4 (idx 3) and CH8–CH10 (idx 7–9) — unused.
+
+  test_26's PASS used the old idx-5 mode location and is preserved as
+  historical record. New tests must use the locked map above.
 
 ---
 
