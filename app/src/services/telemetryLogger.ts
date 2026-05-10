@@ -79,7 +79,7 @@ export function getCSV(): string {
   const body = rows.map((r) =>
     cols.map((c) => {
       if (c === 'ts') return new Date(r.ts).toISOString();
-      return escapeCell((r as Record<string, unknown>)[c]);
+      return escapeCell((r as unknown as Record<string, unknown>)[c]);
     }).join(',')
   );
   return [header, ...body].join('\n');
