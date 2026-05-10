@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -6,9 +6,12 @@ import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { BATT_LOW_V, BATT_CRIT_V } from '../types';
 import { useTelemetry } from '../hooks/useTelemetry';
-import { setLed } from '../services/esp32Service';
+import { setLed, setCruise as sendCruise } from '../services/esp32Service';
 import { subscribeRunning } from '../services/telemetryLogger';
+import { CruiseModal } from '../components/CruiseModal';
 import Screen from '../components/Screen';
+
+type LightKey = 'nav' | 'bridge' | 'deck';
 
 const LIGHTS = [
   { key: 'nav'    as const, label: 'NAV'    },
@@ -29,11 +32,34 @@ export default function HelmScreen({ route, navigation }: Props) {
   const { ip } = route.params;
   const { data, connected } = useTelemetry();
   const [logging, setLogging] = useState(false);
+  const [cruiseModalOpen, setCruiseModalOpen] = useState(false);
+  // Local optimistic light state. test_29 firmware doesn't echo nav_on /
+  // bridge_on / deck_on yet, so taps would visually do nothing without
+  // this. When production firmware sends the fields, replace this with
+  // a server-state-with-pending-override pattern.
+  const [localLights, setLocalLights] = useState<Record<LightKey, boolean>>({
+    nav: false, bridge: false, deck: false,
+  });
   useKeepAwake();
 
   useEffect(() => subscribeRunning(setLogging), []);
 
-  const battV = data?.batt_v != null ? parseFloat(data.batt_v) : undefined;
+  const battV    = data?.batt_v != null ? parseFloat(data.batt_v) : undefined;
+  const cruiseUs = data?.cruise_us;
+  const wpDist   = data?.wp_set && data?.wp_dist_m != null ? `${data.wp_dist_m} m` : '--';
+
+  const handlePickCruise = useCallback((us: number) => {
+    sendCruise(ip, { us }).catch(() => {});
+    setCruiseModalOpen(false);
+  }, [ip]);
+
+  const toggleLight = useCallback((key: LightKey) => {
+    setLocalLights((prev) => {
+      const next = !prev[key];
+      setLed(ip, key, next).catch(() => {});
+      return { ...prev, [key]: next };
+    });
+  }, [ip]);
 
   return (
     <Screen>
@@ -56,7 +82,7 @@ export default function HelmScreen({ route, navigation }: Props) {
           <Readout label="HEADING" value={data?.heading   != null ? `${data.heading}°`      : '--'} />
           <Readout label="SPEED"   value={data?.speed_kts != null ? `${data.speed_kts} kts` : '--'} />
           <Readout label="DEPTH"   value={data?.sonar_ok && data?.depth_m != null ? `${data.depth_m} m` : '--'} />
-          <Readout label="BATT"    value={data?.batt_v   != null ? `${data.batt_v} V`       : '--'} color={voltageColor(battV)} />
+          <Readout label="BATT"    value={battV != null ? `${battV.toFixed(2)} V` : '--'} color={voltageColor(battV)} />
         </View>
 
         {(data?.bilge_fwd || data?.bilge_aft) && (
@@ -65,18 +91,28 @@ export default function HelmScreen({ route, navigation }: Props) {
           </View>
         )}
 
+        <Text style={styles.sectionLabel}>AUTOPILOT</Text>
+        <View style={styles.autopilotRow}>
+          <TouchableOpacity style={styles.apCard} onPress={() => setCruiseModalOpen(true)}>
+            <Text style={styles.apCardLabel}>CRUISE</Text>
+            <Text style={styles.apCardValue}>{cruiseUs != null ? `${cruiseUs} µs` : '--'}</Text>
+          </TouchableOpacity>
+          <View style={styles.apCard}>
+            <Text style={styles.apCardLabel}>WP DIST</Text>
+            <Text style={styles.apCardValue}>{wpDist}</Text>
+          </View>
+        </View>
+
         <View style={styles.lightsSection}>
           <Text style={styles.sectionLabel}>LIGHTS</Text>
           <View style={styles.lightsRow}>
             {LIGHTS.map(({ key, label }) => {
-              const on = (key === 'nav'    ? data?.nav_on
-                       :  key === 'bridge' ? data?.bridge_on
-                       :                     data?.deck_on) ?? false;
+              const on = localLights[key];
               return (
                 <TouchableOpacity
                   key={key}
                   style={[styles.lightBtn, on && styles.lightBtnOn]}
-                  onPress={() => setLed(ip, key, !on).catch(() => {})}
+                  onPress={() => toggleLight(key)}
                 >
                   <Text style={[styles.lightBtnText, on && styles.lightBtnTextOn]}>
                     {on ? `${label} ON` : label}
@@ -99,6 +135,13 @@ export default function HelmScreen({ route, navigation }: Props) {
           ))}
         </View>
       </View>
+
+      <CruiseModal
+        visible={cruiseModalOpen}
+        currentUs={cruiseUs}
+        onPick={handlePickCruise}
+        onCancel={() => setCruiseModalOpen(false)}
+      />
     </Screen>
   );
 }
@@ -128,6 +171,10 @@ const styles = StyleSheet.create({
   readoutValue:       { color: Colors.textPrimary, fontSize: 20, fontWeight: 'bold', marginTop: 2 },
   alarm:              { backgroundColor: Colors.danger, padding: 10, borderRadius: 6, marginBottom: 12 },
   alarmText:          { color: '#fff', fontWeight: 'bold', textAlign: 'center' },
+  autopilotRow:       { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  apCard:             { flex: 1, backgroundColor: Colors.surface, padding: 12, borderRadius: 8, alignItems: 'center' },
+  apCardLabel:        { color: Colors.textSecondary, fontSize: 10, letterSpacing: 1 },
+  apCardValue:        { color: Colors.accent, fontSize: 18, fontWeight: 'bold', fontFamily: 'monospace', marginTop: 2 },
   lightsSection:      { flex: 1, justifyContent: 'flex-start' },
   sectionLabel:       { color: Colors.textSecondary, fontSize: 11, letterSpacing: 2, marginBottom: 8 },
   lightsRow:          { flexDirection: 'row', gap: 12 },

@@ -67,21 +67,20 @@ export default function TelemetryScreen({ route }: Props) {
         </View>
 
         {/* Voltage gets the prominent slot — it's the field most likely
-            to surprise during a pool run. */}
-        {battV != null && (
-          <View style={styles.battCard}>
-            <Text style={styles.battLabel}>BATTERY</Text>
-            <Text style={[styles.battValue, { color: voltageColor(battV) }]}>
-              {battV.toFixed(2)} V
-            </Text>
-            {data?.batt_a != null && (
-              <Text style={styles.battSub}>{data.batt_a} A</Text>
-            )}
-            <Text style={styles.battThreshold}>
-              warn &lt; {BATT_LOW_V} V    crit &lt; {BATT_CRIT_V} V
-            </Text>
-          </View>
-        )}
+            to surprise during a pool run. Always rendered, even when no
+            INA219 reading, so the slot is visible (just shows '--'). */}
+        <View style={styles.battCard}>
+          <Text style={styles.battLabel}>BATTERY</Text>
+          <Text style={[styles.battValue, { color: voltageColor(battV) }]}>
+            {battV != null ? `${battV.toFixed(2)} V` : '--'}
+          </Text>
+          {data?.batt_a != null && (
+            <Text style={styles.battSub}>{data.batt_a} A</Text>
+          )}
+          <Text style={styles.battThreshold}>
+            warn &lt; {BATT_LOW_V} V    crit &lt; {BATT_CRIT_V} V
+          </Text>
+        </View>
 
         {data?.mode && (
           <View style={[styles.modeCard, { borderColor: modeColor(data.mode) }]}>

@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { View, TouchableOpacity, Text, StyleSheet, Modal, Pressable } from 'react-native';
+import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -7,12 +7,9 @@ import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { setWaypoint as sendWaypoint, setCruise as sendCruise } from '../services/esp32Service';
+import { CruiseModal } from '../components/CruiseModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
-
-// ── Cruise presets (µs) ───────────────────────────────────────────────────────
-// 1500 = neutral (static heading-hold). 1750 = the firmware AUTO_CRUISE_CAP.
-const CRUISE_PRESETS = [1500, 1600, 1660, 1700, 1750];
 
 // ── Haversine bearing and distance (used for the local HUD overlay) ───────────
 function bearingTo(fromLat: number, fromLon: number, toLat: number, toLon: number): number {
@@ -142,54 +139,6 @@ function modeColor(mode: string | undefined): string {
     case 'FAILSAFE': return Colors.danger;
     default:         return Colors.textSecondary;
   }
-}
-
-// ── Cruise modal (preset buttons) ────────────────────────────────────────────
-function CruiseModal({
-  visible, currentUs, onPick, onCancel,
-}: {
-  visible: boolean;
-  currentUs: number | undefined;
-  onPick: (us: number) => void;
-  onCancel: () => void;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <Pressable style={modalStyles.backdrop} onPress={onCancel}>
-        <Pressable style={modalStyles.card}>
-          <Text style={modalStyles.title}>CRUISE</Text>
-          <Text style={modalStyles.current}>
-            current: {currentUs != null ? `${currentUs} µs` : '—'}
-          </Text>
-          <Text style={modalStyles.hint}>
-            1500 = neutral (static heading-hold). 1750 = firmware cap.
-          </Text>
-          <View style={modalStyles.row}>
-            {CRUISE_PRESETS.map((us) => (
-              <TouchableOpacity
-                key={us}
-                style={[
-                  modalStyles.preset,
-                  currentUs === us && modalStyles.presetActive,
-                ]}
-                onPress={() => onPick(us)}
-              >
-                <Text style={[
-                  modalStyles.presetText,
-                  currentUs === us && modalStyles.presetTextActive,
-                ]}>
-                  {us}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <TouchableOpacity style={modalStyles.cancel} onPress={onCancel}>
-            <Text style={modalStyles.cancelText}>CLOSE</Text>
-          </TouchableOpacity>
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -453,53 +402,3 @@ const styles = StyleSheet.create({
   },
 });
 
-const modalStyles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 20,
-    width: '100%',
-    maxWidth: 400,
-  },
-  title: {
-    color: Colors.accent, fontSize: 16, fontWeight: 'bold',
-    letterSpacing: 2, marginBottom: 6, fontFamily: 'monospace',
-  },
-  current: {
-    color: Colors.textPrimary, fontSize: 14, fontFamily: 'monospace',
-    marginBottom: 4,
-  },
-  hint: {
-    color: Colors.textSecondary, fontSize: 11, marginBottom: 14,
-    lineHeight: 16,
-  },
-  row: {
-    flexDirection: 'row', gap: 6, justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  preset: {
-    flex: 1,
-    paddingVertical: 12,
-    backgroundColor: Colors.surfaceLight,
-    borderRadius: 6,
-    alignItems: 'center',
-  },
-  presetActive: { backgroundColor: Colors.accent },
-  presetText:   { color: Colors.textPrimary, fontFamily: 'monospace', fontWeight: 'bold' },
-  presetTextActive: { color: '#000' },
-  cancel: {
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  cancelText: {
-    color: Colors.textSecondary, fontFamily: 'monospace', letterSpacing: 2,
-  },
-});
