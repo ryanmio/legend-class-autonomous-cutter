@@ -103,10 +103,11 @@ static const uint16_t STICK_NEUTRAL_DB  = 30;
 static const uint32_t FAILSAFE_NO_FRAME_MS = 3000;
 
 // ── Default cruise (operator can override via POST /cruise) ─────────────────
-// 1700 µs sits comfortably above this rig's ESC deadband (1600 failed in
-// test_26, 1653 spun reliably) and below the safety cap. Test runs hands-off-
-// the-laptop with this default; HTTP /cruise is exercised separately.
-static const uint16_t DEFAULT_CRUISE_US = 1700;
+// 1660 µs is just above test_26's confirmed-spin point of 1653 µs. The
+// motors at 1700 µs were violently loud on the bench and risked vibrating
+// the boat structure (Ryan, 2026-05-10). Slow it down; POST /cruise can
+// raise it for in-water testing where there's drag to load the motors.
+static const uint16_t DEFAULT_CRUISE_US = 1660;
 
 // ── IMU update throttle ────────────────────────────────────────────────────
 static const uint32_t IMU_UPDATE_INTERVAL_MS = 20;
