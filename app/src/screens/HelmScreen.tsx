@@ -5,7 +5,14 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
+import { setLed } from '../services/esp32Service';
 import Screen from '../components/Screen';
+
+const LIGHTS = [
+  { key: 'nav'    as const, label: 'NAV'    },
+  { key: 'bridge' as const, label: 'BRIDGE' },
+  { key: 'deck'   as const, label: 'DECK'   },
+];
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Helm'>;
 
@@ -38,12 +45,30 @@ export default function HelmScreen({ route, navigation }: Props) {
           </View>
         )}
 
-        <View style={styles.controlPlaceholder}>
-          <Text style={styles.placeholder}>Throttle + Rudder controls (Phase 1)</Text>
+        <View style={styles.lightsSection}>
+          <Text style={styles.sectionLabel}>LIGHTS</Text>
+          <View style={styles.lightsRow}>
+            {LIGHTS.map(({ key, label }) => {
+              const on = (key === 'nav'    ? data?.nav_on
+                       :  key === 'bridge' ? data?.bridge_on
+                       :                     data?.deck_on) ?? false;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={[styles.lightBtn, on && styles.lightBtnOn]}
+                  onPress={() => setLed(ip, key, !on).catch(() => {})}
+                >
+                  <Text style={[styles.lightBtnText, on && styles.lightBtnTextOn]}>
+                    {on ? `${label} ON` : label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
 
         <View style={styles.navRow}>
-          {(['Map', 'Telemetry', 'Weapons', 'Systems'] as const).map((screen) => (
+          {(['Map', 'Telemetry', 'Weapons', 'Survey', 'Settings'] as const).map((screen) => (
             <TouchableOpacity
               key={screen}
               style={styles.navBtn}
@@ -80,8 +105,13 @@ const styles = StyleSheet.create({
   readoutValue:       { color: Colors.textPrimary, fontSize: 20, fontWeight: 'bold', marginTop: 2 },
   alarm:              { backgroundColor: Colors.danger, padding: 10, borderRadius: 6, marginBottom: 12 },
   alarmText:          { color: '#fff', fontWeight: 'bold', textAlign: 'center' },
-  controlPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  placeholder:        { color: Colors.textSecondary, fontStyle: 'italic' },
+  lightsSection:      { flex: 1, justifyContent: 'flex-start' },
+  sectionLabel:       { color: Colors.textSecondary, fontSize: 11, letterSpacing: 2, marginBottom: 8 },
+  lightsRow:          { flexDirection: 'row', gap: 12 },
+  lightBtn:           { flex: 1, backgroundColor: Colors.surface, padding: 18, borderRadius: 8, alignItems: 'center' },
+  lightBtnOn:         { backgroundColor: Colors.accent },
+  lightBtnText:       { color: Colors.textSecondary, fontWeight: 'bold', fontSize: 13, letterSpacing: 1 },
+  lightBtnTextOn:     { color: '#000' },
   navRow:             { flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 8 },
   navBtn:             { padding: 8 },
   navBtnText:         { color: Colors.accent, fontSize: 10, letterSpacing: 1 },

@@ -2,18 +2,22 @@
 // HTTP command client for the Legend Cutter ESP32.
 // All requests go to http://<ip>:<HTTP_PORT>/<endpoint>.
 //
+// Only endpoints the app actually calls live here. Helpers for future
+// firmware features (E-STOP, RTH, multi-waypoint missions, deck gun,
+// audio, IMU calibration, radar, mode override, etc.) will be added back
+// when the firmware exposes them — keeping them as stubs that 404'd was
+// noise that pretended the app did more than it does.
+//
 // Endpoint status as of test_29 (pool integration sketch):
 //   IMPLEMENTED in test_29: /status, /telemetry, /cruise, /waypoint,
 //                           /pid, /sim_gps
-//   NOT IMPLEMENTED YET    : /mode, /estop, /rth, /set-home, /waypoints,
-//                            /calibrate-imu, /audio, /led, /gun, /ciws,
-//                            /anim, /track, /door, /anchor, /radar
-//   Calls to the not-implemented endpoints will return 404 from the
-//   firmware. Kept here so the existing Weapons/Systems screens still
-//   compile; they're not load-bearing for pool day.
+//   PRODUCTION FIRMWARE   : /led  (toggles nav/bridge/deck lights —
+//                                  returns 404 on test_29, lights
+//                                  controls show in HelmScreen anyway
+//                                  for production firmware readiness)
 
 import { HTTP_PORT } from '../constants';
-import { PIDParams, AnimMode } from '../types';
+import { PIDParams } from '../types';
 
 const TIMEOUT_MS = 4000;
 
@@ -40,8 +44,6 @@ async function post(ip: string, path: string, body?: object) {
   if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
   return res.json();
 }
-
-// ── IMPLEMENTED in test_29 ───────────────────────────────────────────────
 
 export async function checkStatus(ip: string) {
   const res = await fetchWithTimeout(url(ip, '/status'));
@@ -72,53 +74,8 @@ export async function setSimGps(ip: string, lat: number, lon: number) {
   return post(ip, '/sim_gps', { lat, lon });
 }
 
-// ── NOT IMPLEMENTED in test_29 — production firmware backlog ─────────────
-
-export async function setMode(ip: string, mode: 'manual' | 'autonomous') {
-  return post(ip, '/mode', { mode });
-}
-export async function emergencyStop(ip: string) {
-  return post(ip, '/estop');
-}
-export async function releaseEStop(ip: string) {
-  return post(ip, '/estop-release');
-}
-export async function setGunPosition(ip: string, pan: number, tilt: number) {
-  return post(ip, '/gun', { pan, tilt });
-}
-export async function setCIWS(ip: string, pan: number, spin: boolean) {
-  return post(ip, '/ciws', { pan, spin });
-}
-export async function setAnimMode(ip: string, mode: AnimMode) {
-  return post(ip, '/anim', { mode });
-}
-export async function setTrackBearing(ip: string, bearing: number) {
-  return post(ip, '/track', { bearing });
-}
-export async function setBayDoor(ip: string, side: 'port' | 'stbd', action: 'open' | 'close' | 'stop') {
-  return post(ip, '/door', { side, action });
-}
-export async function setAnchor(ip: string, which: 'fwd' | 'aft', action: 'lower' | 'raise' | 'stop') {
-  return post(ip, '/anchor', { which, action });
-}
-export async function setRadar(ip: string, on: boolean) {
-  return post(ip, '/radar', { on });
-}
+// Toggle hull lights. Returns 404 on test_29 — production firmware will
+// implement /led. HelmScreen catches errors silently until then.
 export async function setLed(ip: string, light: 'nav' | 'bridge' | 'deck', state: boolean) {
   return post(ip, '/led', { light, state });
-}
-export async function playAudio(ip: string, track: number) {
-  return post(ip, '/audio', { track });
-}
-export async function setWaypoints(ip: string, waypoints: { lat: number; lon: number }[]) {
-  return post(ip, '/waypoints', { waypoints });
-}
-export async function triggerRTH(ip: string) {
-  return post(ip, '/rth');
-}
-export async function setHome(ip: string) {
-  return post(ip, '/set-home');
-}
-export async function triggerIMUCalibration(ip: string) {
-  return post(ip, '/calibrate-imu');
 }

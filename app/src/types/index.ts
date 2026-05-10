@@ -73,12 +73,6 @@ export interface TelemetryData {
   deck_on?: boolean;
 }
 
-export interface Waypoint {
-  lat: number;
-  lon: number;
-  label?: string;
-}
-
 export interface PIDParams {
   kp: number;
   kd: number;
@@ -86,14 +80,6 @@ export interface PIDParams {
 }
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed';
-
-export type AnimMode =
-  | 'none'
-  | 'patrol_scan'
-  | 'track_target'
-  | 'combat_demo'
-  | 'random_alert'
-  | 'lrad_hail';
 
 // Battery thresholds (V) for 4S LiPo. Land at yellow, urgent at red.
 // 14.4 V = 3.6 V/cell ("low — return now"); 13.6 V = 3.4 V/cell

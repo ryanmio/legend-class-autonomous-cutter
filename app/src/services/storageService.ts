@@ -1,80 +1,18 @@
 // storageService.ts
-// Persistent local storage for waypoint missions, bathymetric track logs,
-// last connected IP, and app preferences.
+// Persistent local storage. Currently only the last connected IP — mission
+// libraries and depth logs were removed with their consumer screens and
+// will be reintroduced when there's a real feature to support.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Waypoint } from '../types';
 
 const KEYS = {
-  lastIP:   'lastIP',
-  missions: 'missions',
-  depthLog: 'depthLog',
+  lastIP: 'lastIP',
 } as const;
 
-// ---- Connection ----
 export async function saveLastIP(ip: string) {
   await AsyncStorage.setItem(KEYS.lastIP, ip);
 }
 
 export async function loadLastIP(): Promise<string | null> {
   return AsyncStorage.getItem(KEYS.lastIP);
-}
-
-// ---- Waypoint missions ----
-export interface Mission {
-  name: string;
-  waypoints: Waypoint[];
-  createdAt: number;
-}
-
-export async function saveMission(mission: Mission) {
-  const raw  = await AsyncStorage.getItem(KEYS.missions);
-  const list: Mission[] = raw ? JSON.parse(raw) : [];
-  list.push(mission);
-  await AsyncStorage.setItem(KEYS.missions, JSON.stringify(list));
-}
-
-export async function loadMissions(): Promise<Mission[]> {
-  const raw = await AsyncStorage.getItem(KEYS.missions);
-  return raw ? JSON.parse(raw) : [];
-}
-
-export async function deleteMission(name: string) {
-  const missions = await loadMissions();
-  await AsyncStorage.setItem(
-    KEYS.missions,
-    JSON.stringify(missions.filter((m) => m.name !== name))
-  );
-}
-
-// ---- Depth / bathymetric log ----
-export interface DepthPoint {
-  lat: number;
-  lon: number;
-  depthM: number;
-  ts: number;
-}
-
-export async function appendDepthPoints(points: DepthPoint[]) {
-  const raw      = await AsyncStorage.getItem(KEYS.depthLog);
-  const existing: DepthPoint[] = raw ? JSON.parse(raw) : [];
-  await AsyncStorage.setItem(KEYS.depthLog, JSON.stringify([...existing, ...points]));
-}
-
-export async function loadDepthLog(): Promise<DepthPoint[]> {
-  const raw = await AsyncStorage.getItem(KEYS.depthLog);
-  return raw ? JSON.parse(raw) : [];
-}
-
-export async function clearDepthLog() {
-  await AsyncStorage.removeItem(KEYS.depthLog);
-}
-
-// ---- CSV export ----
-export function depthLogToCSV(points: DepthPoint[]): string {
-  const header = 'timestamp,lat,lon,depth_m\n';
-  const rows   = points.map((p) =>
-    `${new Date(p.ts).toISOString()},${p.lat},${p.lon},${p.depthM}`
-  );
-  return header + rows.join('\n');
 }
