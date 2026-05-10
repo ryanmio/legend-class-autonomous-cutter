@@ -1,5 +1,12 @@
 # test_26_mode_switch — Notes
 
+> **Stale channel map.** This test PASSed on the pre-2026-05-10 layout
+> (mode switch on CH6 / idx 5). After test_27 the layout changed: CH6 is
+> now the SwD failsafe guard, and the mode switch moved to CH7 (idx 6,
+> SwA). Do NOT copy this sketch's channel constants into production
+> firmware or future tests. Canonical map: `firmware/legend_cutter/config.h`
+> and the iBUS section of `handoff prompt.md`.
+
 ## Gates
 
 | Gate | Description | Result |

@@ -1,6 +1,15 @@
 /*
  * test_26_mode_switch.ino - v4
  *
+ * !!!  STALE CHANNEL MAP — DO NOT COPY INTO NEW CODE  !!!
+ * As of 2026-05-10 the iBUS channel layout changed to support a real RC
+ * failsafe (test_27). This sketch's `IBUS_IDX_MODE = 5` (CH6) is now the
+ * SwD FAILSAFE GUARD; the mode switch (SwA) moved to CH7 (idx 6).
+ * Current canonical map: see firmware/legend_cutter/config.h and the
+ * iBUS section of handoff prompt.md. This sketch is preserved as a
+ * historical PASS record only — do NOT lift its channel constants
+ * for production firmware or future tests.
+ *
  * What's NEW vs everything before:
  *   - SwC (CH6, iBUS index 5) selects MANUAL vs AUTO.
  *     UP (~1000 µs) = MANUAL, DOWN (~2000 µs) = AUTO.
