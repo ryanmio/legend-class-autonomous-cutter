@@ -1,47 +1,61 @@
 /*
- * test_27_rc_failsafe.ino - v1
+ * test_27_rc_failsafe.ino - v2 (failsafe-guard)
+ *
+ * v1 (no-frame timeout) failed live: FS-iA10B holds-last on TX-off, frames
+ * keep streaming, no-frame timeout never fires. v2 detects RC loss via a
+ * dedicated guard channel (CH6 / idx 5) configured on the TX failsafe menu.
+ * SwD sits up (~1000 µs) in normal use; receiver outputs ~2000 µs from its
+ * stored failsafe value when the TX is gone. Detector: ch[5] > 1500
+ * sustained 500 ms → MODE_FAILSAFE. The 3 s no-frame timeout stays as
+ * defense-in-depth for receivers that genuinely go silent.
+ *
+ * Channel map (locked 2026-05-10 — see handoff prompt):
+ *   CH1 (idx 0)  rudder           CH5 (idx 4)  knob (gun pan / winch)
+ *   CH2 (idx 1)  reverse          CH6 (idx 5)  SwD failsafe guard
+ *   CH3 (idx 2)  throttle         CH7 (idx 6)  SwA mode (up=MANUAL,
+ *   CH4 (idx 3)  unused                          down=AUTO)
  *
  * What's NEW vs test_26:
  *   - Canonical Mode enum (MODE_MANUAL / MODE_AUTO / MODE_FAILSAFE) — same
  *     shape the production firmware will inherit.
- *   - 3 s no-frame RC failsafe: outputs forced to neutral, mode → FAILSAFE.
- *     Replaces the test_26 1.5 s "outputs neutral + halt the test" pattern
- *     with a true mode the test continues to operate in.
+ *   - Failsafe-guard detection on CH6 (idx 5) — the actual TX-loss signal
+ *     for FS-iA10B with this TX/RX configuration.
+ *   - 3 s no-frame timeout as defense-in-depth alongside the guard.
  *   - STICKY ACK: once FAILSAFE trips, firmware refuses to re-engage AUTO
- *     even after RC frames return — operator must flip SwC to MANUAL to
+ *     even after RC frames return — operator must flip SwA UP (MANUAL) to
  *     acknowledge before AUTO can be re-armed. Prevents the runaway case
  *     where TX glitches mid-mission and recovers with the switch still in
  *     AUTO.
- *   - Cruise µs is set via HTTP `POST /cruise` (not captured-from-stick).
- *     Default 0 — AUTO refuses to engage until cruise is configured. This
- *     is the same flow the app will use for water testing.
- *   - HTTP `GET /telemetry` exposes mode, cruise, RC age, INA219 voltage,
- *     fused heading. Single biggest force-multiplier for the first water
- *     test — the operator can see voltage without unscrewing the hatch.
+ *   - Cruise µs is set via HTTP `POST /cruise` (default 1660 — quiet, just
+ *     above the ESC deadband). Same flow the app will use in water.
+ *   - HTTP `GET /telemetry` exposes mode, cruise, RC age, guard µs, INA219
+ *     voltage, fused heading. Single biggest force-multiplier for the
+ *     first water test — operator sees voltage without unscrewing the
+ *     hatch.
  *
  * What this sketch does NOT prove (already covered, don't re-walk):
  *   - Manual stick → ESC / rudder mapping (test_17). MANUAL passthrough is
  *     used here only as a side-effect of the mode state machine.
- *   - SwC mode classifier hysteresis (test_26). Reused as-is.
+ *   - SwA mode classifier hysteresis (test_26). Reused as-is.
  *   - Heading-hold rudder geometry (test_25). AUTO uses heading hold so the
  *     failsafe has something running to interrupt; the rudder behavior is
  *     not under test.
  *
  * Gate flow (auto-detected, sketch prompts):
- *   1/4  Boot, SwC UP, sticks safe → MODE_MANUAL detected.
- *   2/4  Operator POSTs /cruise via HTTP, then flips SwC DOWN → AUTO with
+ *   1/4  Boot, SwA UP, sticks safe → MODE_MANUAL detected.
+ *   2/4  Operator POSTs /cruise via HTTP, then flips SwA DOWN → AUTO with
  *        motors at cruise µs. Operator confirms motors spinning.
  *   3/4  Operator turns TX off. Within 3 s the no-frame timeout trips,
  *        mode → FAILSAFE, outputs go neutral. Operator confirms motors
  *        stopped (y/n).
- *   4/4  Operator turns TX back on with SwC still in AUTO position. Sketch
+ *   4/4  Operator turns TX back on with SwA still in AUTO position. Sketch
  *        observes ACK_REQUIRED (frames good but mode stays FAILSAFE).
- *        Operator flips SwC UP → ack accepted, mode → MANUAL. Operator
- *        flips SwC DOWN → AUTO re-engages, motors spin again.
+ *        Operator flips SwA UP → ack accepted, mode → MANUAL. Operator
+ *        flips SwA DOWN → AUTO re-engages, motors spin again.
  *
  * Failsafe applies regardless of pre-failure mode. If TX dies in MANUAL,
  * mode still goes to FAILSAFE; the ack is just trivially satisfied because
- * SwC is already in MANUAL when frames return.
+ * SwA is already in MANUAL when frames return.
  *
  * Hardware (additions to test_26):
  *   INA219            → I2C @ 0x41 (high-side current sense, already wired)
@@ -83,13 +97,14 @@ static const uint16_t MAX_FWD_US    = 1800;
 static const uint16_t AUTO_CRUISE_FLOOR_US = 1650;
 static const uint16_t AUTO_CRUISE_CAP_US   = 1750;
 
-// ── iBUS channel indices ────────────────────────────────────────────────────
-static const uint8_t  IBUS_IDX_RUDDER   = 0;
-static const uint8_t  IBUS_IDX_THROTTLE = 2;
-static const uint8_t  IBUS_IDX_MODE     = 5;
-static const uint8_t  IBUS_RX_PIN       = 16;
+// ── iBUS channel indices (locked 2026-05-10) ────────────────────────────────
+static const uint8_t  IBUS_IDX_RUDDER         = 0;   // CH1
+static const uint8_t  IBUS_IDX_THROTTLE       = 2;   // CH3
+static const uint8_t  IBUS_IDX_FAILSAFE_GUARD = 5;   // CH6 — SwD
+static const uint8_t  IBUS_IDX_MODE           = 6;   // CH7 — SwA
+static const uint8_t  IBUS_RX_PIN             = 16;
 
-// ── SwC hysteresis (up = MANUAL, down = AUTO; same as test_26) ──────────────
+// ── SwA hysteresis (up = MANUAL, down = AUTO; same as test_26) ──────────────
 static const uint16_t MODE_MAN_BELOW_US  = 1450;
 static const uint16_t MODE_AUTO_ABOVE_US = 1550;
 
@@ -98,9 +113,16 @@ static const uint16_t THROTTLE_IDLE_MAX = 1100;
 static const uint16_t STICK_NEUTRAL_DB  = 30;
 
 // ── Failsafe ────────────────────────────────────────────────────────────────
-// 3 s no-frame timeout matches PLANNING_NOTES.md and gives 1 s of response
-// budget under the test_32 "boat stops within 4 s of TX off" criterion.
-static const uint32_t FAILSAFE_NO_FRAME_MS = 3000;
+// PRIMARY: dedicated guard channel (CH6 / idx 5 / SwD). FS-iA10B holds-last
+// on TX-off so iBUS frames keep arriving; the receiver overrides only the
+// configured-failsafe channel (CH6) with the stored value (~2000 µs) when
+// the TX is gone. Threshold + 500 ms debounce ignores deliberate flicks.
+static const uint16_t FAILSAFE_GUARD_THRESHOLD = 1500;
+static const uint32_t FAILSAFE_DETECT_MS       = 500;
+// SECONDARY (defense-in-depth): no-frame timeout. Catches receivers that
+// genuinely go silent on signal loss — not what FS-iA10B does, but the
+// production firmware should be portable across receivers.
+static const uint32_t FAILSAFE_NO_FRAME_MS     = 3000;
 
 // ── Default cruise (operator can override via POST /cruise) ─────────────────
 // 1660 µs is just above test_26's confirmed-spin point of 1653 µs. The
@@ -163,8 +185,9 @@ static uint32_t recoveryAutoEngagedMs     = 0;
 // ── iBUS / RC state ─────────────────────────────────────────────────────────
 static uint8_t  ibusBuf[32], ibusIdx = 0;
 static uint16_t ch[10]   = {0};
-static bool     ibusEverGood = false;
-static uint32_t lastFrameMs  = 0;
+static bool     ibusEverGood     = false;
+static uint32_t lastFrameMs      = 0;
+static uint32_t guardAboveSinceMs = 0;   // 0 = guard not currently above threshold
 
 // ── Output state ────────────────────────────────────────────────────────────
 static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_US;
@@ -398,7 +421,8 @@ static void handleTelemetry() {
     doc["esc_us"]           = outPort;
     doc["ch_throttle"]      = ch[IBUS_IDX_THROTTLE];
     doc["ch_rudder"]        = ch[IBUS_IDX_RUDDER];
-    doc["ch_swc"]           = ch[IBUS_IDX_MODE];
+    doc["ch_mode"]          = ch[IBUS_IDX_MODE];
+    doc["ch_guard"]         = ch[IBUS_IDX_FAILSAFE_GUARD];
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
@@ -464,7 +488,7 @@ static void updateMode() {
     Mode prev = mode;
 
     // Reset the "refusing AUTO" latch whenever the conditions for refusal no
-    // longer hold (SwC away from AUTO, or cruise has been set above floor).
+    // longer hold (SwA away from AUTO, or cruise has been set above floor).
     // Done up here so the reset fires regardless of which branch we take.
     if (!swcInAuto() || cruiseUs >= AUTO_CRUISE_FLOOR_US) autoRefusalPrinted = false;
 
@@ -472,34 +496,59 @@ static void updateMode() {
     // Outputs are forced neutral by applyOutputs() while !ibusEverGood.
     if (!ibusEverGood) {
         mode = MODE_MANUAL;
+        guardAboveSinceMs = 0;
         return;
     }
 
-    // No frames for 3 s → FAILSAFE + sticky ack.
+    // PRIMARY failsafe: dedicated guard channel (ch[5] / SwD). Receiver outputs
+    // its stored failsafe value (~2000 µs) on TX-loss; debounce 500 ms to ignore
+    // any brief electrical blip.
+    if (ch[IBUS_IDX_FAILSAFE_GUARD] > FAILSAFE_GUARD_THRESHOLD) {
+        if (guardAboveSinceMs == 0) guardAboveSinceMs = millis();
+        if (millis() - guardAboveSinceMs >= FAILSAFE_DETECT_MS) {
+            if (mode != MODE_FAILSAFE) {
+                mode = MODE_FAILSAFE;
+                failsafeAckRequired = true;
+                ackRefusalPrinted   = false;
+                Serial.printf("\n[FAILSAFE] guard tripped — ch[5]=%u sustained %lu ms. "
+                              "Outputs neutral. Flip SwA UP (MANUAL) to ACK.\n",
+                              ch[IBUS_IDX_FAILSAFE_GUARD],
+                              millis() - guardAboveSinceMs);
+            }
+            return;
+        }
+    } else {
+        guardAboveSinceMs = 0;
+    }
+
+    // SECONDARY failsafe (defense-in-depth): no frames for 3 s. Catches receivers
+    // that genuinely go silent on signal loss — not what FS-iA10B does today, but
+    // a future receiver swap or genuine wiring failure should still trip safe.
     if (millis() - lastFrameMs >= FAILSAFE_NO_FRAME_MS) {
         if (mode != MODE_FAILSAFE) {
             mode = MODE_FAILSAFE;
             failsafeAckRequired = true;
             ackRefusalPrinted   = false;
-            Serial.printf("\n[FAILSAFE] RC lost — no frames for %lu ms. "
-                          "Outputs neutral. Flip SwC UP (MANUAL) to ACK after RC returns.\n",
+            Serial.printf("\n[FAILSAFE] no frames for %lu ms. "
+                          "Outputs neutral. Flip SwA UP (MANUAL) to ACK after RC returns.\n",
                           millis() - lastFrameMs);
         }
         return;
     }
 
-    // Frames are fresh. Sticky ack: stay in FAILSAFE until we observe SwC=MANUAL.
+    // Frames are fresh and guard is clear. Sticky ack: stay in FAILSAFE until we
+    // observe SwA=MANUAL even if the guard already cleared.
     if (failsafeAckRequired) {
         if (!ackRefusalPrinted) {
             Serial.println("[FAILSAFE] frames restored but ACK_REQUIRED — "
-                           "flip SwC UP (MANUAL) to clear.");
+                           "flip SwA UP (MANUAL) to clear.");
             ackRefusalPrinted = true;
         }
         if (swcInManual()) {
             failsafeAckRequired = false;
             ackRefusalPrinted   = false;
             mode = MODE_MANUAL;
-            Serial.println("[FAILSAFE] cleared (ACK via SwC=MANUAL). mode=MANUAL");
+            Serial.println("[FAILSAFE] cleared (ACK via SwA=MANUAL). mode=MANUAL");
         }
         return;
     }
@@ -524,7 +573,7 @@ static void updateMode() {
             }
         }
     }
-    // SwC in dead-band (1450..1550) → keep current mode (hysteresis).
+    // SwA in dead-band (1450..1550) → keep current mode (hysteresis).
     mode = next;
 
     if (mode != prev) {
@@ -570,13 +619,13 @@ static void applyOutputs() {
 static void prompt() {
     switch (phase) {
       case P_BOOT:
-        Serial.println("STEP 1: TX on, sticks safe, SwC UP.");
+        Serial.println("STEP 1: TX on, sticks safe, SwA UP.");
         break;
       case P_AUTO_FIRST:
-        Serial.printf("STEP 2: flip SwC DOWN to engage AUTO at %u us.\n", cruiseUs);
+        Serial.printf("STEP 2: flip SwA DOWN to engage AUTO at %u us.\n", cruiseUs);
         break;
       case P_RECOVERY:
-        Serial.println("STEP 3: TX back on with SwC=AUTO. Then flip SwC UP, then DOWN.");
+        Serial.println("STEP 3: TX back on with SwA=AUTO. Then flip SwA UP, then DOWN.");
         break;
       case P_FAILSAFE_CONFIRM:
       case P_RECOVERY_CONFIRM:
@@ -629,7 +678,7 @@ static void runGates() {
             g2Pass = firstAutoEnteredPrinted;
             g3Pass = true;
             if (g2Pass) Serial.println("PASS (2/4): AUTO engaged.");
-            else        Serial.println("FAIL (2/4): AUTO never engaged — re-run and flip SwC DOWN before TX off.");
+            else        Serial.println("FAIL (2/4): AUTO never engaged — re-run and flip SwA DOWN before TX off.");
             Serial.println("PASS (3/4): RC loss neutralized outputs.");
             phase = P_RECOVERY;
             prompt();
