@@ -452,8 +452,8 @@ static void handleTelemetry() {
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
     if (ina219OK) {
-        snprintf(buf, sizeof(buf), "%.2f", busVoltage); doc["bus_v"]    = buf;
-        snprintf(buf, sizeof(buf), "%.0f", shuntMa);    doc["shunt_ma"] = buf;
+        snprintf(buf, sizeof(buf), "%.2f", busVoltage);     doc["batt_v"] = buf;
+        snprintf(buf, sizeof(buf), "%.2f", shuntMa / 1000.0f); doc["batt_a"] = buf;
     }
 
     // Position

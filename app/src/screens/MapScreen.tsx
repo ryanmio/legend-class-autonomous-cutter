@@ -1,16 +1,20 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, Text, StyleSheet, Modal, Pressable } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import { setWaypoint as sendWaypoint } from '../services/esp32Service';
+import { setWaypoint as sendWaypoint, setCruise as sendCruise } from '../services/esp32Service';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 
-// ── Haversine bearing and distance ────────────────────────────────────────────
+// ── Cruise presets (µs) ───────────────────────────────────────────────────────
+// 1500 = neutral (static heading-hold). 1750 = the firmware AUTO_CRUISE_CAP.
+const CRUISE_PRESETS = [1500, 1600, 1660, 1700, 1750];
+
+// ── Haversine bearing and distance (used for the local HUD overlay) ───────────
 function bearingTo(fromLat: number, fromLon: number, toLat: number, toLon: number): number {
   const φ1 = fromLat * Math.PI / 180;
   const φ2 = toLat  * Math.PI / 180;
@@ -30,7 +34,7 @@ function distanceTo(fromLat: number, fromLon: number, toLat: number, toLon: numb
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ── Leaflet map HTML ──────────────────────────────────────────────────────────
+// ── Leaflet map HTML (unchanged) ──────────────────────────────────────────────
 const MAP_HTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -130,6 +134,65 @@ const MAP_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+// ── Mode pill colours ─────────────────────────────────────────────────────────
+function modeColor(mode: string | undefined): string {
+  switch (mode) {
+    case 'AUTO':     return Colors.success;
+    case 'MANUAL':   return Colors.accent;
+    case 'FAILSAFE': return Colors.danger;
+    default:         return Colors.textSecondary;
+  }
+}
+
+// ── Cruise modal (preset buttons) ────────────────────────────────────────────
+function CruiseModal({
+  visible, currentUs, onPick, onCancel,
+}: {
+  visible: boolean;
+  currentUs: number | undefined;
+  onPick: (us: number) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <Pressable style={modalStyles.backdrop} onPress={onCancel}>
+        <Pressable style={modalStyles.card}>
+          <Text style={modalStyles.title}>CRUISE</Text>
+          <Text style={modalStyles.current}>
+            current: {currentUs != null ? `${currentUs} µs` : '—'}
+          </Text>
+          <Text style={modalStyles.hint}>
+            1500 = neutral (static heading-hold). 1750 = firmware cap.
+          </Text>
+          <View style={modalStyles.row}>
+            {CRUISE_PRESETS.map((us) => (
+              <TouchableOpacity
+                key={us}
+                style={[
+                  modalStyles.preset,
+                  currentUs === us && modalStyles.presetActive,
+                ]}
+                onPress={() => onPick(us)}
+              >
+                <Text style={[
+                  modalStyles.presetText,
+                  currentUs === us && modalStyles.presetTextActive,
+                ]}>
+                  {us}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TouchableOpacity style={modalStyles.cancel} onPress={onCancel}>
+            <Text style={modalStyles.cancelText}>CLOSE</Text>
+          </TouchableOpacity>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ── Screen ────────────────────────────────────────────────────────────────────
 export default function MapScreen({ route, navigation }: Props) {
   const { ip } = route.params;
   const { data, connected } = useTelemetry();
@@ -140,6 +203,7 @@ export default function MapScreen({ route, navigation }: Props) {
   const [waypoint,  setWaypoint]  = useState<{ lat: number; lon: number } | null>(null);
   const [wpBearing, setWpBearing] = useState<number | null>(null);
   const [wpDistM,   setWpDistM]   = useState<number | null>(null);
+  const [cruiseModalOpen, setCruiseModalOpen] = useState(false);
 
   // Update boat marker and bearing HUD whenever GPS or waypoint changes.
   useEffect(() => {
@@ -181,7 +245,6 @@ export default function MapScreen({ route, navigation }: Props) {
       if (b !== null) setWpBearing(b);
       if (d !== null) setWpDistM(d);
 
-      // Drop the green marker and update the HUD immediately.
       webViewRef.current?.injectJavaScript(`window.setWaypointMarker(${wpLat},${wpLon});true;`);
       if (cur && b !== null && d !== null) {
         webViewRef.current?.injectJavaScript(
@@ -189,7 +252,6 @@ export default function MapScreen({ route, navigation }: Props) {
         );
       }
 
-      // Tell the firmware (best-effort — don't block the UI on failure).
       sendWaypoint(ip, wpLat, wpLon).catch(() => {});
     } catch {}
   }, [ip]);
@@ -199,7 +261,6 @@ export default function MapScreen({ route, navigation }: Props) {
     setWpBearing(null);
     setWpDistM(null);
     webViewRef.current?.injectJavaScript('window.clearWaypointMarker();true;');
-    // Revert HUD to just coordinates.
     const cur = currentGpsRef.current;
     if (cur) {
       webViewRef.current?.injectJavaScript(
@@ -208,6 +269,17 @@ export default function MapScreen({ route, navigation }: Props) {
     }
     sendWaypoint(ip, null, null).catch(() => {});
   }, [ip]);
+
+  const handlePickCruise = useCallback((us: number) => {
+    sendCruise(ip, { us }).catch(() => {});
+    setCruiseModalOpen(false);
+  }, [ip]);
+
+  const mode      = data?.mode;
+  const failsafe  = mode === 'FAILSAFE';
+  const ackNeeded = data?.failsafe_ack === true;
+  const captured  = data?.captured === true;
+  const cruiseUs  = data?.cruise_us;
 
   return (
     <View style={styles.screen}>
@@ -221,7 +293,22 @@ export default function MapScreen({ route, navigation }: Props) {
         onMessage={(e) => handleMapMessage(e.nativeEvent.data)}
       />
 
-      <View style={[styles.topBar, { top: insets.top + 8 }]} pointerEvents="box-none">
+      {/* Full-width FAILSAFE banner — only when mode says so. */}
+      {failsafe && (
+        <View style={[styles.failsafeBanner, { paddingTop: insets.top + 6 }]}>
+          <Text style={styles.failsafeText}>
+            {ackNeeded ? '⚠ FAILSAFE — flip SwA UP to ACK' : '⚠ FAILSAFE'}
+          </Text>
+        </View>
+      )}
+
+      <View
+        style={[
+          styles.topBar,
+          { top: (failsafe ? insets.top + 36 : insets.top) + 8 },
+        ]}
+        pointerEvents="box-none"
+      >
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Text style={styles.backBtnText}>‹ BACK</Text>
         </TouchableOpacity>
@@ -230,6 +317,16 @@ export default function MapScreen({ route, navigation }: Props) {
           <Text style={[styles.dot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
           <Text style={styles.connText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
         </View>
+
+        {mode && (
+          <View style={[styles.modePill, { borderColor: modeColor(mode) }]}>
+            <Text style={[styles.modeText, { color: modeColor(mode) }]}>{mode}</Text>
+          </View>
+        )}
+
+        <TouchableOpacity style={styles.cruisePill} onPress={() => setCruiseModalOpen(true)}>
+          <Text style={styles.cruiseText}>CRUISE {cruiseUs ?? '—'}</Text>
+        </TouchableOpacity>
 
         {waypoint && (
           <TouchableOpacity style={styles.clearBtn} onPress={handleClearWaypoint}>
@@ -245,18 +342,36 @@ export default function MapScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* Bearing readout — shown in native layer above the map when waypoint is active */}
+      {/* Bearing + captured readout. Captured pill replaces the bearing
+          line when the boat has reached the waypoint. */}
       {wpBearing !== null && (
-        <View style={[styles.bearingBar, { top: insets.top + 50 }]} pointerEvents="none">
-          <Text style={styles.bearingText}>
-            {'→ '}
-            {wpBearing.toFixed(1)}°
-            {wpDistM !== null
-              ? `  ·  ${wpDistM >= 1000 ? (wpDistM / 1000).toFixed(2) + ' km' : Math.round(wpDistM) + ' m'}`
-              : ''}
-          </Text>
+        <View
+          style={[
+            styles.bearingBar,
+            { top: (failsafe ? insets.top + 36 : insets.top) + 50 },
+          ]}
+          pointerEvents="none"
+        >
+          {captured ? (
+            <Text style={styles.capturedText}>✓ CAPTURED</Text>
+          ) : (
+            <Text style={styles.bearingText}>
+              {'→ '}
+              {wpBearing.toFixed(1)}°
+              {wpDistM !== null
+                ? `  ·  ${wpDistM >= 1000 ? (wpDistM / 1000).toFixed(2) + ' km' : Math.round(wpDistM) + ' m'}`
+                : ''}
+            </Text>
+          )}
         </View>
       )}
+
+      <CruiseModal
+        visible={cruiseModalOpen}
+        currentUs={cruiseUs}
+        onPick={handlePickCruise}
+        onCancel={() => setCruiseModalOpen(false)}
+      />
     </View>
   );
 }
@@ -264,19 +379,52 @@ export default function MapScreen({ route, navigation }: Props) {
 const styles = StyleSheet.create({
   screen:      { flex: 1, backgroundColor: Colors.background },
   map:         { flex: 1 },
-  topBar:      {
-    position: 'absolute', left: 16, right: 16,
+
+  failsafeBanner: {
+    position: 'absolute', top: 0, left: 0, right: 0,
+    backgroundColor: Colors.danger,
+    paddingBottom: 6,
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  failsafeText: {
+    color: '#fff', fontSize: 13, fontWeight: 'bold',
+    letterSpacing: 1, fontFamily: 'monospace',
+  },
+
+  topBar: {
+    position: 'absolute', left: 12, right: 12,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    flexWrap: 'wrap', gap: 6,
   },
   backBtn:     { backgroundColor: 'rgba(10,15,26,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
   backBtnText: { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },
   connRow:     { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(10,15,26,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
   dot:         { fontSize: 10, marginRight: 5 },
   connText:    { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },
+
+  modePill: {
+    backgroundColor: 'rgba(10,15,26,0.85)',
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  modeText: { fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
+
+  cruisePill: {
+    backgroundColor: 'rgba(10,15,26,0.85)',
+    borderRadius: 12,
+    paddingHorizontal: 10, paddingVertical: 5,
+  },
+  cruiseText: {
+    color: Colors.accent, fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold',
+  },
+
   clearBtn:    { backgroundColor: 'rgba(255,59,48,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
   clearBtnText:{ color: '#fff', fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold' },
   centerBtn:   { backgroundColor: Colors.accent, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
   centerBtnText:{ color: '#000', fontWeight: 'bold', fontSize: 12, letterSpacing: 1 },
+
   bearingBar:  {
     position: 'absolute', left: 16, right: 16, alignItems: 'center',
   },
@@ -290,5 +438,68 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 8,
     overflow: 'hidden',
+  },
+  capturedText: {
+    backgroundColor: 'rgba(52, 199, 89, 0.25)',
+    color: '#34c759',
+    fontFamily: 'monospace',
+    fontSize: 15,
+    fontWeight: 'bold',
+    letterSpacing: 2,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+});
+
+const modalStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  card: {
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    padding: 20,
+    width: '100%',
+    maxWidth: 400,
+  },
+  title: {
+    color: Colors.accent, fontSize: 16, fontWeight: 'bold',
+    letterSpacing: 2, marginBottom: 6, fontFamily: 'monospace',
+  },
+  current: {
+    color: Colors.textPrimary, fontSize: 14, fontFamily: 'monospace',
+    marginBottom: 4,
+  },
+  hint: {
+    color: Colors.textSecondary, fontSize: 11, marginBottom: 14,
+    lineHeight: 16,
+  },
+  row: {
+    flexDirection: 'row', gap: 6, justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  preset: {
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  presetActive: { backgroundColor: Colors.accent },
+  presetText:   { color: Colors.textPrimary, fontFamily: 'monospace', fontWeight: 'bold' },
+  presetTextActive: { color: '#000' },
+  cancel: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  cancelText: {
+    color: Colors.textSecondary, fontFamily: 'monospace', letterSpacing: 2,
   },
 });
