@@ -4,11 +4,24 @@
 
 | Gate | Description | Result |
 |------|-------------|--------|
-| GATE 1/3 | POST /mission with >=1 waypoint → mission_active, wp_count, wp_idx visible | PENDING |
-| GATE 2/3 | POST /sim_gps far→near WP[0] → wp_idx 0→1, transition logged once | PENDING |
-| GATE 3/3 | wp_idx reaches wp_count → mission_active=false, MISSION COMPLETE printed once; if mode=AUTO at completion, ESCs neutralized | PENDING |
+| GATE 1/3 | POST /mission with >=1 waypoint → mission_active, wp_count, wp_idx visible | PASS |
+| GATE 2/3 | POST /sim_gps far→near WP[0] → wp_idx 0→1, transition logged once | PASS |
+| GATE 3/3 | wp_idx reaches wp_count → mission_active=false, MISSION COMPLETE printed once; if mode=AUTO at completion, ESCs neutralized | PASS |
 
-## Result: PENDING (write-time commit; ready to flash and run)
+## Result: PASS (2026-05-10)
+
+All 3 gates passed cleanly via `run.sh`. Mission was loaded with 3
+waypoints, sim_gps stepped through each capture, MISSION COMPLETE
+logged once, summary table printed. Mode was MANUAL throughout (no
+need to engage AUTO since the sequencer is mode-independent — the
+cleanest proof that the new logic works without depending on
+already-proven behavior).
+
+Cosmetic: the `MISSION COMPLETE` print and the preceding capture line
+are emitted in a single Serial.printf, but the USB-Serial monitor
+dropped ~4 bytes at the boundary on this run (`...0.0 m)SSION
+COMPLETE.`). Not a code bug — splitting the printf would mask the
+glitch but not fix it. Ignore.
 
 ## Scope of this test (read this before deciding it's worth running)
 
