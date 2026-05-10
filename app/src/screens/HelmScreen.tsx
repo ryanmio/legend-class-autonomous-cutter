@@ -20,7 +20,7 @@ export default function HelmScreen({ route, navigation }: Props) {
         <View style={styles.statusRow}>
           <Text style={[styles.statusDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
           <Text style={styles.statusText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
-          <Text style={[styles.modeTag, data?.mode === 'AUTONOMOUS' && styles.modeAuto]}>
+          <Text style={[styles.modeTag, data?.mode === 'AUTO' && styles.modeAuto]}>
             {data?.mode ?? 'IDLE'}
           </Text>
         </View>
