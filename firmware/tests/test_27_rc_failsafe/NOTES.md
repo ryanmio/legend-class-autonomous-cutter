@@ -1,0 +1,123 @@
+# test_27_rc_failsafe — Notes
+
+## Gates
+
+| Gate | Description | Result |
+|------|-------------|--------|
+| GATE 1/4 | Boot, SwC UP, sticks safe → MODE_MANUAL detected | TBD |
+| GATE 2/4 | `POST /cruise` + flip SwC DOWN → MODE_AUTO, motors spin (operator y) | TBD |
+| GATE 3/4 | TX off → ≤4 s later, MODE_FAILSAFE, motors neutral (operator y) | TBD |
+| GATE 4/4 | TX on with SwC=AUTO → ACK_REQUIRED → flip UP to ack → flip DOWN → AUTO re-engages, motors spin (operator y) | TBD |
+
+## Result: PENDING
+
+## What this test proves (NEW vs everything before)
+
+1. **Canonical `Mode` enum** (`MODE_MANUAL`, `MODE_AUTO`, `MODE_FAILSAFE`) wired
+   end-to-end through the state machine and applied to outputs by mode, not
+   by gate. Same enum the production firmware will inherit.
+2. **3 s no-frame RC failsafe** — outputs forced neutral, mode → FAILSAFE.
+   Replaces the test_26 1.5 s "halt the test" pattern with a real mode that
+   the test continues to operate in.
+3. **Sticky ACK** — once FAILSAFE trips, firmware refuses to re-engage AUTO
+   even after RC frames return. Operator must flip SwC to MANUAL to
+   acknowledge before AUTO can re-arm. Prevents the runaway scenario where
+   TX glitches mid-mission and recovers with the switch still in AUTO.
+4. **HTTP `POST /cruise`** — cruise µs is set via HTTP (default 0; AUTO
+   refuses until set). Same pattern the app will use for water testing.
+   Replaces test_26's capture-from-stick mechanism.
+5. **HTTP `GET /telemetry`** — exposes mode, cruise, RC age, INA219 voltage,
+   fused heading. Single biggest force-multiplier for the first water test
+   (test_32 success criterion #6: "no battery surprises") — operator can
+   monitor voltage without unscrewing the hatch.
+6. **INA219 voltage observability** — polled at 4 Hz, surfaced in
+   `/telemetry` only. No battery failsafe behavior in this test (deferred
+   to sea trials per conversation 2026-05-10).
+
+## Failsafe semantics (locked in here, inherited by production)
+
+**Trigger:** `millis() - lastFrameMs >= 3000` (3 s no-frame).
+
+**Behavior:** mode → FAILSAFE, `failsafeAckRequired = true`, outputs neutral.
+
+**Recovery (sticky ack):** even after frames return, mode stays FAILSAFE
+until firmware observes a clean `swcInManual()` (CH6 < 1450 µs). On that
+observation, `failsafeAckRequired` clears, mode → MANUAL. Operator can then
+flip SwC DOWN to re-arm AUTO normally.
+
+**Override direction is one-way:** firmware can only *downgrade* the
+operator's mode request (AUTO → MANUAL/FAILSAFE), never *upgrade*. SwC=MANUAL
+is always honored; SwC=AUTO is conditional on (a) frames good, (b) no ack
+pending, (c) cruise µs valid.
+
+**Pre-RC state:** while `ibusEverGood == false` (boot before any iBUS frame),
+outputs are forced neutral regardless of mode value. This is *not* the
+FAILSAFE state — it's a separate startup safe-hold.
+
+## What this test deliberately does NOT cover
+
+- **GPS-loss failsafe** — defer to sea trials. Without an active GPS-driven
+  mission running there's nothing meaningful for GPS loss to interrupt.
+- **Battery failsafe behavior** — INA219 voltage is *measured* but no action
+  is taken on it. Threshold and "limp home" behavior to be experimented
+  with in sea trials per PLANNING_NOTES.md.
+- **PD heading hold tuning** — test_26 noted the rudder slamming to full
+  port during the AUTO spool. AUTO here uses the same heading hold; rudder
+  behavior is along for the ride. Defer to a future PD-tuning test.
+
+## Procedure
+
+1. Props OFF or boat firmly secured.
+2. Copy `secrets.h.example` → `secrets.h` and fill in WiFi credentials.
+3. Flash. Open Serial @ 115200. Note the boat IP printed at boot.
+4. Power up boat, wait through 3 s ESC arming.
+5. TX on, throttle BOTTOM, sticks centered, **SwC UP**.
+   → `PASS (1/4): MANUAL detected`. Sketch prints curl example for STEP 2.
+6. From another machine on the same network:
+   ```
+   curl -X POST http://<boat_ip>/cruise \
+        -H 'Content-Type: application/json' -d '{"us":1720}'
+   ```
+   Sketch logs `[HTTP] /cruise → 1720 µs`.
+7. **Flip SwC DOWN.** Mode transitions to AUTO; both motors spin to 1720 µs.
+   Sketch prints `AUTO engaged. Verify motors are spinning, then KILL THE TX.`
+8. **Turn off the TX.** Within 3 s the failsafe trips: ESCs go neutral,
+   sketch prints `[FAILSAFE] RC lost...` then `Did the motors STOP within
+   4 s of TX off? Type y or n.` Type `y` for `PASS (3/4)`, `n` for FAIL.
+9. **Turn the TX back on with SwC still in the AUTO position.** Sketch
+   prints `[FAILSAFE] frames restored but ACK_REQUIRED`. Mode stays
+   FAILSAFE; motors stay neutral.
+10. **Flip SwC UP** to acknowledge. Sketch prints `[FAILSAFE] cleared (ACK
+    via SwC=MANUAL). mode=MANUAL`.
+11. **Flip SwC DOWN** to re-engage AUTO. Motors spin again. Sketch prompts
+    `Did motors spin again? Type y or n.` Type `y` for `PASS (4/4)` and
+    summary; `n` for FAIL.
+
+After gate 4 the outputs freeze at neutral; reboot to re-run.
+
+## Telemetry shape
+
+```
+GET /telemetry  → {
+  "v": "test_27",
+  "uptime": 123,
+  "mode": "AUTO",
+  "cruise_us": 1720,
+  "failsafe_ack": false,
+  "rc_ever_good": true,
+  "rc_age_ms": 16,
+  "rudder_us": 1500,
+  "esc_us": 1720,
+  "ch_throttle": 1003, "ch_rudder": 1500, "ch_swc": 1980,
+  "heading": "184.5",
+  "bus_v": "14.83", "shunt_ma": "1234"
+}
+```
+
+## /cruise shape
+
+```
+POST /cruise  body {"us": 1720}    → cruise_us = 1720 (must be 1500..1800)
+POST /cruise  body {"pct": 50}     → cruise_us = 1500 + (1800-1500)*0.5 = 1650
+                                     (right at the floor — 51%+ to engage)
+```
