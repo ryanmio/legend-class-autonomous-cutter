@@ -67,33 +67,39 @@ FAILSAFE state — it's a separate startup safe-hold.
 
 ## Procedure
 
+The sketch defaults cruise to 1700 µs so the test runs end-to-end without
+any HTTP traffic. `POST /cruise` is exercised separately by hitting it from
+curl/the app at any time during the run; the value takes effect on the next
+AUTO entry.
+
 1. Props OFF or boat firmly secured.
 2. Copy `secrets.h.example` → `secrets.h` and fill in WiFi credentials.
-3. Flash. Open Serial @ 115200. Note the boat IP printed at boot.
+3. Flash. Open Serial @ 115200.
 4. Power up boat, wait through 3 s ESC arming.
-5. TX on, throttle BOTTOM, sticks centered, **SwC UP**.
-   → `PASS (1/4): MANUAL detected`. Sketch prints curl example for STEP 2.
-6. From another machine on the same network:
-   ```
-   curl -X POST http://<boat_ip>/cruise \
-        -H 'Content-Type: application/json' -d '{"us":1720}'
-   ```
-   Sketch logs `[HTTP] /cruise → 1720 µs`.
-7. **Flip SwC DOWN.** Mode transitions to AUTO; both motors spin to 1720 µs.
-   Sketch prints `AUTO engaged. Verify motors are spinning, then KILL THE TX.`
-8. **Turn off the TX.** Within 3 s the failsafe trips: ESCs go neutral,
-   sketch prints `[FAILSAFE] RC lost...` then `Did the motors STOP within
-   4 s of TX off? Type y or n.` Type `y` for `PASS (3/4)`, `n` for FAIL.
-9. **Turn the TX back on with SwC still in the AUTO position.** Sketch
-   prints `[FAILSAFE] frames restored but ACK_REQUIRED`. Mode stays
-   FAILSAFE; motors stay neutral.
-10. **Flip SwC UP** to acknowledge. Sketch prints `[FAILSAFE] cleared (ACK
-    via SwC=MANUAL). mode=MANUAL`.
-11. **Flip SwC DOWN** to re-engage AUTO. Motors spin again. Sketch prompts
-    `Did motors spin again? Type y or n.` Type `y` for `PASS (4/4)` and
-    summary; `n` for FAIL.
+5. TX on, sticks safe, **SwC UP** → `PASS (1/4): MANUAL detected`.
+6. **Flip SwC DOWN.** Mode → AUTO at 1700 µs, motors spin. Sketch prints
+   `AUTO engaged. Verify motors spinning, then turn off the TX.`
+7. **Turn off the TX.** Within 3 s: failsafe trips, ESCs neutral, sketch
+   prints `[FAILSAFE] RC lost...` then prompts `Did motors spin in AUTO
+   and then STOP after TX off? y/n`. `y` → `PASS (2/4) + (3/4)`, `n` → FAIL.
+8. **Turn TX back on with SwC still in the AUTO position.** Sketch prints
+   `[FAILSAFE] frames restored but ACK_REQUIRED`. Mode stays FAILSAFE.
+9. **Flip SwC UP** to acknowledge. `[FAILSAFE] cleared. mode=MANUAL`.
+10. **Flip SwC DOWN** to re-engage AUTO. Motors spin again. Sketch prompts
+    `Motors spinning again? y/n` → `PASS (4/4)` and summary.
 
 After gate 4 the outputs freeze at neutral; reboot to re-run.
+
+### Optional — exercise the HTTP `/cruise` path
+
+Any time before flipping to AUTO, hit `/cruise` to override the default:
+
+```
+curl -X POST http://<boat_ip>/cruise -H 'Content-Type: application/json' -d '{"us":1720}'
+```
+
+Or `{"pct": 60}`. Telemetry's `cruise_us` will reflect the new value; the
+next `[MODE] MANUAL → AUTO` line shows the value used.
 
 ## Telemetry shape
 

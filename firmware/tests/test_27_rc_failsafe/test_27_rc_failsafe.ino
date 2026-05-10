@@ -101,7 +101,12 @@ static const uint16_t STICK_NEUTRAL_DB  = 30;
 // 3 s no-frame timeout matches PLANNING_NOTES.md and gives 1 s of response
 // budget under the test_32 "boat stops within 4 s of TX off" criterion.
 static const uint32_t FAILSAFE_NO_FRAME_MS = 3000;
-static const uint32_t HINT_INTERVAL_MS     = 12000;
+
+// ── Default cruise (operator can override via POST /cruise) ─────────────────
+// 1700 µs sits comfortably above this rig's ESC deadband (1600 failed in
+// test_26, 1653 spun reliably) and below the safety cap. Test runs hands-off-
+// the-laptop with this default; HTTP /cruise is exercised separately.
+static const uint16_t DEFAULT_CRUISE_US = 1700;
 
 // ── IMU update throttle ────────────────────────────────────────────────────
 static const uint32_t IMU_UPDATE_INTERVAL_MS = 20;
@@ -133,7 +138,7 @@ enum Mode { MODE_MANUAL, MODE_AUTO, MODE_FAILSAFE };
 static Mode    mode                  = MODE_MANUAL;
 static bool    failsafeAckRequired   = false;
 static bool    ackRefusalPrinted     = false;
-static uint16_t cruiseUs             = 0;     // 0 = unset; AUTO refuses
+static uint16_t cruiseUs             = DEFAULT_CRUISE_US;
 
 // ── Test phase (drives gate prompts) ────────────────────────────────────────
 enum Phase {
@@ -159,7 +164,6 @@ static uint8_t  ibusBuf[32], ibusIdx = 0;
 static uint16_t ch[10]   = {0};
 static bool     ibusEverGood = false;
 static uint32_t lastFrameMs  = 0;
-static uint32_t lastHintMs   = 0;
 
 // ── Output state ────────────────────────────────────────────────────────────
 static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_US;
@@ -561,27 +565,17 @@ static void applyOutputs() {
     }
 }
 
-// ── Phase-driven gate prompts and PASS/FAIL recording ──────────────────────
+// ── Phase-driven gate prompts (each phase prints ONCE on entry) ─────────────
 static void prompt() {
     switch (phase) {
       case P_BOOT:
-        Serial.println("  STEP 1: TX on, throttle BOTTOM, sticks centered, SwC UP.");
+        Serial.println("STEP 1: TX on, sticks safe, SwC UP.");
         break;
       case P_AUTO_FIRST:
-        if (!firstAutoEnteredPrinted) {
-            Serial.printf("  STEP 2: POST cruise via HTTP, then flip SwC DOWN.\n");
-            Serial.printf("    curl -X POST http://%s/cruise \\\n", boatIP.c_str());
-            Serial.println("         -H 'Content-Type: application/json' -d '{\"us\":1720}'");
-            Serial.println("    Then flip SwC DOWN to engage AUTO.");
-            Serial.printf("    Current cruise_us=%u (need >= %u).\n",
-                cruiseUs, AUTO_CRUISE_FLOOR_US);
-        } else {
-            Serial.println("  STEP 3: TX off (kill the RC link). Failsafe trips at 3 s.");
-        }
+        Serial.printf("STEP 2: flip SwC DOWN to engage AUTO at %u us.\n", cruiseUs);
         break;
       case P_RECOVERY:
-        Serial.println("  STEP 4: TX back on, leaving SwC in AUTO. Watch for ACK_REQUIRED.");
-        Serial.println("          Then flip SwC UP (ack), then DOWN to re-engage AUTO.");
+        Serial.println("STEP 3: TX back on with SwC=AUTO. Then flip SwC UP, then DOWN.");
         break;
       case P_FAILSAFE_CONFIRM:
       case P_RECOVERY_CONFIRM:
@@ -608,10 +602,8 @@ static void runGates() {
         if (mode == MODE_MANUAL && ibusEverGood &&
             throttleAtIdle() && rudderCentered() && swcInManual()) {
             g1Pass = true;
-            Serial.printf("\nPASS (1/4): MANUAL detected (CH6=%u µs).\n",
-                ch[IBUS_IDX_MODE]);
+            Serial.printf("PASS (1/4): MANUAL detected.\n");
             phase = P_AUTO_FIRST;
-            lastHintMs = millis();
             prompt();
         }
         break;
@@ -620,16 +612,11 @@ static void runGates() {
         if (mode == MODE_AUTO && !firstAutoEnteredPrinted) {
             firstAutoEnteredPrinted = true;
             firstAutoEnteredMs      = millis();
-            Serial.println();
-            Serial.println("  AUTO engaged. Verify motors are spinning, then KILL THE TX.");
-            lastHintMs = millis();
+            Serial.println("AUTO engaged. Verify motors spinning, then turn off the TX.");
         }
         if (mode == MODE_FAILSAFE && !failsafeReportedThisPhase) {
             failsafeReportedThisPhase = true;
-            // Only count the failsafe trip as gate 3 if AUTO was actually
-            // engaged first — otherwise the operator skipped step 2.
-            Serial.println();
-            Serial.println("  Did the motors STOP within 4 s of TX off? Type y or n.");
+            Serial.println("Did motors spin in AUTO and then STOP after TX off? y/n");
             (void)readSerialChar();
             phase = P_FAILSAFE_CONFIRM;
         }
@@ -638,18 +625,16 @@ static void runGates() {
       case P_FAILSAFE_CONFIRM: {
         char c = readSerialChar();
         if (c == 'y' || c == 'Y') {
-            g2Pass = firstAutoEnteredPrinted;   // we did engage AUTO at some point
+            g2Pass = firstAutoEnteredPrinted;
             g3Pass = true;
-            if (g2Pass) Serial.println("PASS (2/4): /cruise + AUTO engaged.");
-            else        Serial.println("FAIL (2/4): AUTO never engaged before failsafe — "
-                                       "did you POST /cruise and flip SwC DOWN?");
+            if (g2Pass) Serial.println("PASS (2/4): AUTO engaged.");
+            else        Serial.println("FAIL (2/4): AUTO never engaged — re-run and flip SwC DOWN before TX off.");
             Serial.println("PASS (3/4): RC loss neutralized outputs.");
             phase = P_RECOVERY;
-            lastHintMs = millis();
             prompt();
         } else if (c == 'n' || c == 'N') {
             g3Pass = false;
-            Serial.println("FAIL (3/4): operator reports motors did not stop.");
+            Serial.println("FAIL (3/4): operator reports motors did not spin or did not stop.");
             phase = P_DONE;
             printSummary();
         }
@@ -657,11 +642,9 @@ static void runGates() {
       }
 
       case P_RECOVERY:
-        // Wait for AUTO re-engagement after the recovery sequence.
         if (mode == MODE_AUTO) {
             recoveryAutoEngagedMs = millis();
-            Serial.println();
-            Serial.println("  AUTO re-engaged after recovery. Did motors spin again? Type y or n.");
+            Serial.println("AUTO re-engaged. Motors spinning again? y/n");
             (void)readSerialChar();
             phase = P_RECOVERY_CONFIRM;
         }
@@ -747,13 +730,12 @@ void setup() {
     server.on("/cruise",    HTTP_POST,    handleCruise);
     server.on("/cruise",    HTTP_OPTIONS, handleOptions);
     server.begin();
-    Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
+    Serial.printf("HTTP up at http://%s/  (POST /cruise to override; GET /telemetry)\n",
+        boatIP.c_str());
+    Serial.printf("Default cruise=%u us. Failsafe=%lu ms.\n",
+        DEFAULT_CRUISE_US, FAILSAFE_NO_FRAME_MS);
 
-    Serial.println();
-    Serial.printf("Failsafe timeout: %lu ms.   AUTO floor: %u µs.   AUTO cap: %u µs.\n",
-        FAILSAFE_NO_FRAME_MS, AUTO_CRUISE_FLOOR_US, AUTO_CRUISE_CAP_US);
     prompt();
-    lastHintMs = millis();
 }
 
 // ── Loop ───────────────────────────────────────────────────────────────────
@@ -773,10 +755,4 @@ void loop() {
         applyOutputs();
     }
     runGates();
-
-    if (phase != P_DONE && phase != P_FAILSAFE_CONFIRM && phase != P_RECOVERY_CONFIRM &&
-        millis() - lastHintMs > HINT_INTERVAL_MS) {
-        prompt();
-        lastHintMs = millis();
-    }
 }
