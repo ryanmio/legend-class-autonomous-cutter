@@ -641,7 +641,7 @@ static void printSummary() {
     Serial.println("========================================");
     Serial.printf("Gate 1/4  MANUAL detected at boot      : %s\n", g1Pass ? "PASS" : "FAIL");
     Serial.printf("Gate 2/4  /cruise + AUTO engages       : %s\n", g2Pass ? "PASS" : "FAIL");
-    Serial.printf("Gate 3/4  3 s RC loss → FAILSAFE       : %s\n", g3Pass ? "PASS" : "FAIL");
+    Serial.printf("Gate 3/4  RC loss → FAILSAFE neutral   : %s\n", g3Pass ? "PASS" : "FAIL");
     Serial.printf("Gate 4/4  ACK + AUTO re-engage         : %s\n", g4Pass ? "PASS" : "FAIL");
     Serial.println("Outputs frozen at neutral. Reboot to re-run.");
 }

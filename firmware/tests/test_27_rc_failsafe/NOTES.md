@@ -4,12 +4,23 @@
 
 | Gate | Description | Result |
 |------|-------------|--------|
-| GATE 1/4 | Boot, SwA UP, sticks safe → MODE_MANUAL detected | TBD |
-| GATE 2/4 | `POST /cruise` + flip SwA DOWN → MODE_AUTO, motors spin (operator y) | TBD |
-| GATE 3/4 | TX off → ≤4 s later, MODE_FAILSAFE, motors neutral (operator y) | TBD |
-| GATE 4/4 | TX on with SwA=AUTO → ACK_REQUIRED → flip UP to ack → flip DOWN → AUTO re-engages, motors spin (operator y) | TBD |
+| GATE 1/4 | Boot, SwA UP, sticks safe → MODE_MANUAL detected | PASS |
+| GATE 2/4 | flip SwA DOWN → MODE_AUTO at 1660 µs, motors spin (operator y) | PASS |
+| GATE 3/4 | TX off → CH6 guard trips, MODE_FAILSAFE, motors neutral (operator y) | PASS |
+| GATE 4/4 | TX on with SwA=AUTO → ACK_REQUIRED → flip UP to ack → flip DOWN → AUTO re-engages, motors spin (operator y) | PASS |
 
-## Result: PENDING
+## Result: PASS (2026-05-10)
+
+First firmware-detected RC failsafe. Guard-based detection on CH6 (SwD,
+configured in TX failsafe menu to ~2000 µs on signal loss) fired within
+~500 ms of TX off, putting the boat into MODE_FAILSAFE with both ESCs
+and rudder neutralized. Sticky-ack recovery exercised end-to-end:
+firmware refused to re-engage AUTO until SwA was flipped to MANUAL,
+then accepted the next AUTO request normally.
+
+The 3 s no-frame timeout (defense-in-depth secondary) was not the path
+that fired this test — frames kept streaming throughout TX-off
+(FS-iA10B holds-last). The guard trigger is what made this work.
 
 ## What this test proves (NEW vs everything before)
 
