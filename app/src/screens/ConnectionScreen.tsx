@@ -8,7 +8,6 @@ import { RootStackParamList } from '../../App';
 import { Colors, DEFAULT_BOAT_IP, HTTP_PORT } from '../constants';
 import { checkStatus } from '../services/esp32Service';
 import { connect } from '../services/websocketService';
-import { start as startLogger } from '../services/telemetryLogger';
 import { saveLastIP, loadLastIP } from '../services/storageService';
 import Screen from '../components/Screen';
 
@@ -92,7 +91,6 @@ export default function ConnectionScreen({ navigation }: Props) {
       await checkStatus(targetIP);
       await saveLastIP(targetIP);
       connect(targetIP);
-      startLogger();
       navigation.replace('Helm', { ip: targetIP });
     } catch {
       setState('failed');

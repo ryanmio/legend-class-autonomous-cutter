@@ -4,6 +4,10 @@
 // built-in Share sheet. No persistence — operator should export before
 // closing the app. (Persistence + file-based export is a follow-up; the
 // pool test only needs to capture one ~30 min run.)
+//
+// Recording is opt-in: nothing starts until start() is called. Screens
+// show a START/STOP control on TelemetryScreen and a running-state pill
+// on HelmScreen via subscribeRunning().
 
 import { Share } from 'react-native';
 import { TelemetryData } from '../types';
@@ -18,28 +22,36 @@ const MAX_ROWS = 7200;
 
 let rows: LogRow[] = [];
 let unsubscribe: (() => void) | null = null;
-let listeners: Array<(count: number) => void> = [];
+let countListeners:   Array<(count: number) => void>   = [];
+let runningListeners: Array<(running: boolean) => void> = [];
 
-function notify() {
-  for (const fn of listeners) fn(rows.length);
-}
+function notifyCount()   { for (const fn of countListeners)   fn(rows.length);          }
+function notifyRunning() { for (const fn of runningListeners) fn(unsubscribe !== null); }
 
 export function start() {
   if (unsubscribe) return;
   unsubscribe = subscribe((data) => {
     rows.push({ ts: Date.now(), ...data });
     if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
-    notify();
+    notifyCount();
   });
+  notifyRunning();
 }
 
 export function stop() {
-  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+  if (!unsubscribe) return;
+  unsubscribe();
+  unsubscribe = null;
+  notifyRunning();
 }
 
 export function clear() {
   rows = [];
-  notify();
+  notifyCount();
+}
+
+export function isRunning(): boolean {
+  return unsubscribe !== null;
 }
 
 export function getRowCount(): number {
@@ -47,9 +59,15 @@ export function getRowCount(): number {
 }
 
 export function subscribeCount(fn: (count: number) => void): () => void {
-  listeners.push(fn);
+  countListeners.push(fn);
   fn(rows.length);
-  return () => { listeners = listeners.filter((l) => l !== fn); };
+  return () => { countListeners = countListeners.filter((l) => l !== fn); };
+}
+
+export function subscribeRunning(fn: (running: boolean) => void): () => void {
+  runningListeners.push(fn);
+  fn(unsubscribe !== null);
+  return () => { runningListeners = runningListeners.filter((l) => l !== fn); };
 }
 
 // Build the union of column keys across all rows, in stable order. ts +

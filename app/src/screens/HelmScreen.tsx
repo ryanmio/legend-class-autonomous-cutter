@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useKeepAwake } from 'expo-keep-awake';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
+import { BATT_LOW_V, BATT_CRIT_V } from '../types';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { setLed } from '../services/esp32Service';
+import { subscribeRunning } from '../services/telemetryLogger';
 import Screen from '../components/Screen';
 
 const LIGHTS = [
@@ -14,12 +16,24 @@ const LIGHTS = [
   { key: 'deck'   as const, label: 'DECK'   },
 ];
 
+function voltageColor(v: number | undefined): string | undefined {
+  if (v == null || isNaN(v)) return undefined;
+  if (v < BATT_CRIT_V) return Colors.danger;
+  if (v < BATT_LOW_V)  return Colors.warning;
+  return Colors.success;
+}
+
 type Props = NativeStackScreenProps<RootStackParamList, 'Helm'>;
 
 export default function HelmScreen({ route, navigation }: Props) {
   const { ip } = route.params;
   const { data, connected } = useTelemetry();
+  const [logging, setLogging] = useState(false);
   useKeepAwake();
+
+  useEffect(() => subscribeRunning(setLogging), []);
+
+  const battV = data?.batt_v != null ? parseFloat(data.batt_v) : undefined;
 
   return (
     <Screen>
@@ -27,6 +41,12 @@ export default function HelmScreen({ route, navigation }: Props) {
         <View style={styles.statusRow}>
           <Text style={[styles.statusDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
           <Text style={styles.statusText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
+          {logging && (
+            <View style={styles.logPill}>
+              <Text style={styles.logPillDot}>●</Text>
+              <Text style={styles.logPillText}>LOG</Text>
+            </View>
+          )}
           <Text style={[styles.modeTag, data?.mode === 'AUTO' && styles.modeAuto]}>
             {data?.mode ?? 'IDLE'}
           </Text>
@@ -36,7 +56,7 @@ export default function HelmScreen({ route, navigation }: Props) {
           <Readout label="HEADING" value={data?.heading   != null ? `${data.heading}°`      : '--'} />
           <Readout label="SPEED"   value={data?.speed_kts != null ? `${data.speed_kts} kts` : '--'} />
           <Readout label="DEPTH"   value={data?.sonar_ok && data?.depth_m != null ? `${data.depth_m} m` : '--'} />
-          <Readout label="BATT"    value={data?.batt_v   != null ? `${data.batt_v} V`       : '--'} warn={data?.batt_low} />
+          <Readout label="BATT"    value={data?.batt_v   != null ? `${data.batt_v} V`       : '--'} color={voltageColor(battV)} />
         </View>
 
         {(data?.bilge_fwd || data?.bilge_aft) && (
@@ -83,11 +103,11 @@ export default function HelmScreen({ route, navigation }: Props) {
   );
 }
 
-function Readout({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+function Readout({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <View style={styles.readout}>
       <Text style={styles.readoutLabel}>{label}</Text>
-      <Text style={[styles.readoutValue, warn && { color: Colors.warning }]}>{value}</Text>
+      <Text style={[styles.readoutValue, color != null && { color }]}>{value}</Text>
     </View>
   );
 }
@@ -97,6 +117,9 @@ const styles = StyleSheet.create({
   statusRow:          { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   statusDot:          { fontSize: 10, marginRight: 6 },
   statusText:         { color: Colors.textSecondary, fontSize: 12, flex: 1 },
+  logPill:            { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, marginRight: 8 },
+  logPillDot:         { color: Colors.success, fontSize: 9, marginRight: 4 },
+  logPillText:        { color: Colors.success, fontSize: 11, fontWeight: 'bold', letterSpacing: 1, fontFamily: 'monospace' },
   modeTag:            { color: Colors.textPrimary, backgroundColor: Colors.surface, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4, fontSize: 12, fontWeight: 'bold' },
   modeAuto:           { backgroundColor: Colors.accent, color: '#000' },
   readoutRow:         { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },

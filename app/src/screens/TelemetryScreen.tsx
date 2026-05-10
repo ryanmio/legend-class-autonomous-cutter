@@ -7,6 +7,8 @@ import { BATT_LOW_V, BATT_CRIT_V } from '../types';
 import { useTelemetry } from '../hooks/useTelemetry';
 import {
   getRowCount, subscribeCount, exportShare, clear as clearLogger,
+  start as startLogger, stop as stopLogger,
+  isRunning, subscribeRunning,
 } from '../services/telemetryLogger';
 import Screen from '../components/Screen';
 
@@ -31,9 +33,11 @@ function modeColor(mode: string | undefined): string {
 
 export default function TelemetryScreen({ route }: Props) {
   const { data, connected } = useTelemetry();
-  const [logRows, setLogRows] = useState(getRowCount());
+  const [logRows, setLogRows]   = useState(getRowCount());
+  const [logging, setLogging]   = useState(isRunning());
 
   useEffect(() => subscribeCount(setLogRows), []);
+  useEffect(() => subscribeRunning(setLogging), []);
 
   const battV = data?.batt_v != null ? parseFloat(data.batt_v) : undefined;
 
@@ -145,7 +149,15 @@ export default function TelemetryScreen({ route }: Props) {
         </ScrollView>
 
         <View style={styles.logBar}>
-          <Text style={styles.logCount}>LOG  {logRows} row{logRows === 1 ? '' : 's'}</Text>
+          <TouchableOpacity
+            style={[styles.logBtn, logging ? styles.logBtnStop : styles.logBtnStart]}
+            onPress={logging ? stopLogger : startLogger}
+          >
+            <Text style={logging ? styles.logBtnStopText : styles.logBtnStartText}>
+              {logging ? '■ STOP' : '▶ START'}
+            </Text>
+          </TouchableOpacity>
+          <Text style={styles.logCount}>{logRows} row{logRows === 1 ? '' : 's'}</Text>
           <TouchableOpacity style={[styles.logBtn, styles.logBtnSecondary]} onPress={onClear} disabled={logRows === 0}>
             <Text style={[styles.logBtnText, logRows === 0 && { opacity: 0.4 }]}>CLEAR</Text>
           </TouchableOpacity>
@@ -235,8 +247,12 @@ const styles = StyleSheet.create({
     paddingTop: 10, marginTop: 4,
     borderTopWidth: 1, borderTopColor: Colors.surface,
   },
-  logCount:        { flex: 1, color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', letterSpacing: 1 },
-  logBtn:          { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 6 },
+  logCount:        { flex: 1, color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', letterSpacing: 1, textAlign: 'center' },
+  logBtn:          { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 6 },
+  logBtnStart:     { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.success },
+  logBtnStop:      { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.warning },
+  logBtnStartText: { color: Colors.success, fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
+  logBtnStopText:  { color: Colors.warning, fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
   logBtnSecondary: { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.danger },
   logBtnPrimary:   { backgroundColor: Colors.accent },
   logBtnText:      { color: Colors.danger, fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
