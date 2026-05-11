@@ -7,18 +7,14 @@ import ConnectionScreen from './src/screens/ConnectionScreen';
 import HelmScreen from './src/screens/HelmScreen';
 import MapScreen from './src/screens/MapScreen';
 import TelemetryScreen from './src/screens/TelemetryScreen';
-import WeaponsScreen from './src/screens/WeaponsScreen';
-import SurveyScreen from './src/screens/SurveyScreen';
-import SettingsScreen from './src/screens/SettingsScreen';
+import SystemsScreen from './src/screens/SystemsScreen';
 
 export type RootStackParamList = {
   Connection: undefined;
   Helm:       { ip: string };
   Map:        { ip: string };
   Telemetry:  { ip: string };
-  Weapons:    { ip: string };
-  Survey:     { ip: string };
-  Settings:   { ip: string };
+  Systems:    { ip: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -40,9 +36,7 @@ export default function App() {
           <Stack.Screen name="Helm"       component={HelmScreen} />
           <Stack.Screen name="Map"        component={MapScreen} />
           <Stack.Screen name="Telemetry"  component={TelemetryScreen} />
-          <Stack.Screen name="Weapons"    component={WeaponsScreen} />
-          <Stack.Screen name="Survey"     component={SurveyScreen} />
-          <Stack.Screen name="Settings"   component={SettingsScreen} />
+          <Stack.Screen name="Systems"    component={SystemsScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
