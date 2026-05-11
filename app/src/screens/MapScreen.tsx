@@ -244,51 +244,71 @@ export default function MapScreen({ route, navigation }: Props) {
 
       {/* Full-width FAILSAFE banner — only when mode says so. */}
       {failsafe && (
-        <View style={[styles.failsafeBanner, { paddingTop: insets.top + 6 }]}>
+        <View style={[styles.failsafeBanner, { paddingTop: insets.top + 8 }]}>
           <Text style={styles.failsafeText}>
-            {ackNeeded ? '⚠ FAILSAFE — flip SwA UP to ACK' : '⚠ FAILSAFE'}
+            {ackNeeded ? 'FAILSAFE · ACK_REQUIRED — flip SwA UP' : 'FAILSAFE'}
           </Text>
         </View>
       )}
 
+      {/* ── Top control bar ───────────────────────────────────────── */}
       <View
         style={[
-          styles.topBar,
-          { top: (failsafe ? insets.top + 36 : insets.top) + 8 },
+          styles.topBarRow,
+          { top: (failsafe ? insets.top + 40 : insets.top) + 8 },
         ]}
         pointerEvents="box-none"
       >
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Text style={styles.backBtnText}>‹ BACK</Text>
+        <TouchableOpacity style={styles.chip} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <Text style={styles.chipBackText}>‹ HELM</Text>
         </TouchableOpacity>
 
-        <View style={styles.connRow}>
-          <Text style={[styles.dot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
-          <Text style={styles.connText}>{connected ? 'CONNECTED' : 'OFFLINE'}</Text>
+        <View style={styles.chip}>
+          <Text style={[styles.chipDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
+          <Text style={styles.chipMuted}>{connected ? 'CONN' : 'OFFLINE'}</Text>
         </View>
 
         {mode && (
-          <View style={[styles.modePill, { borderColor: modeColor(mode) }]}>
-            <Text style={[styles.modeText, { color: modeColor(mode) }]}>{mode}</Text>
+          <View style={[styles.chip, styles.modeChip, { borderColor: modeColor(mode) }]}>
+            <Text style={[styles.chipDot, { color: modeColor(mode) }]}>●</Text>
+            <Text style={[styles.modeChipText, { color: modeColor(mode) }]}>{mode}</Text>
           </View>
         )}
 
-        <TouchableOpacity style={styles.cruisePill} onPress={() => setCruiseModalOpen(true)}>
-          <Text style={styles.cruiseText}>CRUISE {cruiseUs ?? '—'}</Text>
-        </TouchableOpacity>
-
-        {waypoint && (
-          <TouchableOpacity style={styles.clearBtn} onPress={handleClearWaypoint}>
-            <Text style={styles.clearBtnText}>✕ WP</Text>
-          </TouchableOpacity>
-        )}
+        <View style={styles.topBarSpacer} />
 
         <TouchableOpacity
           style={styles.centerBtn}
           onPress={() => webViewRef.current?.injectJavaScript('window.centerOnBoat();true;')}
+          activeOpacity={0.7}
         >
           <Text style={styles.centerBtnText}>CENTER</Text>
         </TouchableOpacity>
+      </View>
+
+      {/* ── Action bar (cruise + WP) ──────────────────────────────── */}
+      <View
+        style={[
+          styles.actionBarRow,
+          { top: (failsafe ? insets.top + 40 : insets.top) + 50 },
+        ]}
+        pointerEvents="box-none"
+      >
+        <TouchableOpacity
+          style={styles.cruisePill}
+          onPress={() => setCruiseModalOpen(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.cruisePillLabel}>CRUISE</Text>
+          <Text style={styles.cruisePillValue}>{cruiseUs ?? '—'}</Text>
+          <Text style={styles.cruisePillChevron}>▾</Text>
+        </TouchableOpacity>
+
+        {waypoint && (
+          <TouchableOpacity style={styles.wpClearBtn} onPress={handleClearWaypoint} activeOpacity={0.7}>
+            <Text style={styles.wpClearBtnText}>✕ CLEAR WP</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Bearing + captured readout. Captured pill replaces the bearing
@@ -297,7 +317,7 @@ export default function MapScreen({ route, navigation }: Props) {
         <View
           style={[
             styles.bearingBar,
-            { top: (failsafe ? insets.top + 36 : insets.top) + 50 },
+            { top: (failsafe ? insets.top + 40 : insets.top) + 96 },
           ]}
           pointerEvents="none"
         >
@@ -325,80 +345,41 @@ export default function MapScreen({ route, navigation }: Props) {
   );
 }
 
+const CHIP_BG = 'rgba(10,15,26,0.88)';
+
 const styles = StyleSheet.create({
-  screen:      { flex: 1, backgroundColor: Colors.background },
-  map:         { flex: 1 },
+  screen: { flex: 1, backgroundColor: Colors.background },
+  map:    { flex: 1 },
 
-  failsafeBanner: {
-    position: 'absolute', top: 0, left: 0, right: 0,
-    backgroundColor: Colors.danger,
-    paddingBottom: 6,
-    alignItems: 'center',
-    zIndex: 100,
-  },
-  failsafeText: {
-    color: '#fff', fontSize: 13, fontWeight: 'bold',
-    letterSpacing: 1, fontFamily: 'monospace',
-  },
+  // Failsafe banner
+  failsafeBanner: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: Colors.danger, paddingBottom: 8, alignItems: 'center', zIndex: 100 },
+  failsafeText:   { color: '#fff', fontSize: 12, fontWeight: '800', letterSpacing: 2, fontFamily: 'monospace' },
 
-  topBar: {
-    position: 'absolute', left: 12, right: 12,
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    flexWrap: 'wrap', gap: 6,
-  },
-  backBtn:     { backgroundColor: 'rgba(10,15,26,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
-  backBtnText: { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },
-  connRow:     { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(10,15,26,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
-  dot:         { fontSize: 10, marginRight: 5 },
-  connText:    { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },
+  // Top bar
+  topBarRow:      { position: 'absolute', left: 12, right: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  topBarSpacer:   { flex: 1 },
+  chip:           { flexDirection: 'row', alignItems: 'center', backgroundColor: CHIP_BG, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 4 },
+  chipBackText:   { color: Colors.accent, fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
+  chipMuted:      { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', letterSpacing: 1, fontWeight: '700' },
+  chipDot:        { fontSize: 9, marginRight: 5 },
+  modeChip:       { borderWidth: 1.5, paddingVertical: 5 },
+  modeChipText:   { fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
+  centerBtn:      { backgroundColor: Colors.accent, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 4 },
+  centerBtnText:  { color: '#000', fontWeight: '800', fontSize: 11, letterSpacing: 2, fontFamily: 'monospace' },
 
-  modePill: {
-    backgroundColor: 'rgba(10,15,26,0.85)',
-    borderWidth: 1.5,
-    borderRadius: 12,
-    paddingHorizontal: 10, paddingVertical: 4,
-  },
-  modeText: { fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
+  // Action bar (cruise + clear-wp)
+  actionBarRow:      { position: 'absolute', left: 12, right: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cruisePill:        { flexDirection: 'row', alignItems: 'center', backgroundColor: CHIP_BG, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 4, borderLeftWidth: 2, borderLeftColor: Colors.accent },
+  cruisePillLabel:   { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', letterSpacing: 2, fontWeight: '700', marginRight: 8 },
+  cruisePillValue:   { color: Colors.accent, fontSize: 13, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+  cruisePillChevron: { color: Colors.accent, fontSize: 11, marginLeft: 6 },
 
-  cruisePill: {
-    backgroundColor: 'rgba(10,15,26,0.85)',
-    borderRadius: 12,
-    paddingHorizontal: 10, paddingVertical: 5,
-  },
-  cruiseText: {
-    color: Colors.accent, fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold',
-  },
+  wpClearBtn:       { backgroundColor: 'rgba(255,59,48,0.92)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 4 },
+  wpClearBtnText:   { color: '#fff', fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
 
-  clearBtn:    { backgroundColor: 'rgba(255,59,48,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
-  clearBtnText:{ color: '#fff', fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold' },
-  centerBtn:   { backgroundColor: Colors.accent, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
-  centerBtnText:{ color: '#000', fontWeight: 'bold', fontSize: 12, letterSpacing: 1 },
-
-  bearingBar:  {
-    position: 'absolute', left: 16, right: 16, alignItems: 'center',
-  },
-  bearingText: {
-    backgroundColor: 'rgba(0,230,118,0.15)',
-    color: '#00e676',
-    fontFamily: 'monospace',
-    fontSize: 15,
-    fontWeight: 'bold',
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  capturedText: {
-    backgroundColor: 'rgba(52, 199, 89, 0.25)',
-    color: '#34c759',
-    fontFamily: 'monospace',
-    fontSize: 15,
-    fontWeight: 'bold',
-    letterSpacing: 2,
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
+  // Bearing / captured readouts
+  bearingBar:    { position: 'absolute', left: 16, right: 16, alignItems: 'center' },
+  bearingText:   { backgroundColor: 'rgba(0,230,118,0.15)', color: '#00e676', fontFamily: 'monospace', fontSize: 14, fontWeight: '800', paddingHorizontal: 14, paddingVertical: 5, borderRadius: 4, overflow: 'hidden', letterSpacing: 1 },
+  capturedText:  { backgroundColor: 'rgba(52, 199, 89, 0.25)', color: '#34c759', fontFamily: 'monospace', fontSize: 14, fontWeight: '800', letterSpacing: 3, paddingHorizontal: 14, paddingVertical: 5, borderRadius: 4, overflow: 'hidden' },
 });
 

@@ -51,14 +51,12 @@ async function scanNetwork(
   lastIP: string | null,
   onProgress: (msg: string) => void,
 ): Promise<string | null> {
-  // Fast path: try last-used IP and AP default simultaneously
   const fastCandidates = [...new Set([lastIP, '192.168.4.1'].filter(Boolean) as string[])];
-  onProgress(`Trying known addresses…`);
+  onProgress('Probing known addresses…');
   const fast = await raceToSuccess(fastCandidates.map((ip) => probeIP(ip, 1500)));
   if (fast) return fast;
 
-  // Full subnet scan — covers .1 through .254 on common home/hotspot subnets
-  onProgress('Scanning network…');
+  onProgress('Scanning subnet…');
   const subnets = ['192.168.1', '192.168.0', '10.0.0', '10.0.1', '172.20.10'];
   const candidates: string[] = [];
   for (const subnet of subnets) {
@@ -116,14 +114,28 @@ export default function ConnectionScreen({ navigation }: Props) {
   return (
     <Screen>
       <View style={styles.inner}>
-        <Text style={styles.title}>LEGEND CUTTER</Text>
-        <Text style={styles.subtitle}>AUTONOMOUS MARITIME PLATFORM</Text>
 
-        <Text style={styles.hint}>
-          Make sure the boat is powered on and your phone is on the same WiFi.
-        </Text>
+        {/* ── Wordmark ─────────────────────────────────────── */}
+        <View style={styles.brandBlock}>
+          <Text style={styles.brand}>LEGEND CUTTER</Text>
+          <View style={styles.stripe}>
+            <View style={[styles.stripeSeg, { backgroundColor: '#c8102e' }]} />
+            <View style={[styles.stripeSeg, { backgroundColor: '#ffffff' }]} />
+            <View style={[styles.stripeSeg, { backgroundColor: '#003a70' }]} />
+          </View>
+          <Text style={styles.subtitle}>AUTONOMOUS MARITIME PLATFORM</Text>
+        </View>
 
-        <Text style={styles.label}>Boat IP</Text>
+        {/* ── Console-style status line ────────────────────── */}
+        <View style={styles.consoleBlock}>
+          <Text style={styles.consoleLine}>
+            <Text style={styles.consolePrompt}>{'> '}</Text>
+            {statusLine(state, scanMsg)}
+          </Text>
+        </View>
+
+        {/* ── IP input ─────────────────────────────────────── */}
+        <Text style={styles.fieldLabel}>BOAT IP</Text>
         <TextInput
           style={styles.input}
           value={ip}
@@ -134,18 +146,19 @@ export default function ConnectionScreen({ navigation }: Props) {
           editable={!busy}
           autoCorrect={false}
         />
+        {lastIP && lastIP !== ip && !busy && (
+          <TouchableOpacity onPress={() => setIP(lastIP)}>
+            <Text style={styles.lastIpHint}>↺ last connected: {lastIP}</Text>
+          </TouchableOpacity>
+        )}
 
-        {(state === 'scanning' || (state === 'failed' && scanMsg)) ? (
-          <Text style={[styles.msg, state === 'failed' && styles.msgError]}>{scanMsg}</Text>
-        ) : state === 'failed' ? (
-          <Text style={styles.msgError}>Connection failed — check IP and try again</Text>
-        ) : null}
-
+        {/* ── Buttons ──────────────────────────────────────── */}
         <View style={styles.btnRow}>
           <TouchableOpacity
             style={[styles.btn, styles.btnSecondary, busy && styles.btnDisabled]}
             onPress={handleScan}
             disabled={busy}
+            activeOpacity={0.7}
           >
             {state === 'scanning'
               ? <ActivityIndicator color={Colors.accent} />
@@ -157,6 +170,7 @@ export default function ConnectionScreen({ navigation }: Props) {
             style={[styles.btn, styles.btnPrimary, busy && styles.btnDisabled]}
             onPress={() => doConnect(ip.trim())}
             disabled={busy}
+            activeOpacity={0.7}
           >
             {state === 'connecting'
               ? <ActivityIndicator color="#fff" />
@@ -169,20 +183,35 @@ export default function ConnectionScreen({ navigation }: Props) {
   );
 }
 
+function statusLine(state: ScreenState, scanMsg: string): string {
+  if (state === 'scanning')   return scanMsg || 'Scanning…';
+  if (state === 'connecting') return 'Connecting…';
+  if (state === 'failed')     return scanMsg || 'Connection failed — verify IP and retry';
+  return 'Ready. Confirm boat is powered and on the same WiFi.';
+}
+
 const styles = StyleSheet.create({
-  inner:           { flex: 1, justifyContent: 'center', padding: 32 },
-  title:           { color: Colors.accent, fontSize: 28, fontWeight: 'bold', textAlign: 'center', letterSpacing: 4 },
-  subtitle:        { color: Colors.textSecondary, fontSize: 11, textAlign: 'center', letterSpacing: 2, marginBottom: 40 },
-  hint:            { color: Colors.textSecondary, fontSize: 12, textAlign: 'center', marginBottom: 24, lineHeight: 18 },
-  label:           { color: Colors.textSecondary, fontSize: 12, marginBottom: 4 },
-  input:           { backgroundColor: Colors.surface, color: Colors.textPrimary, padding: 14, borderRadius: 8, fontSize: 16 },
-  msg:             { color: Colors.textSecondary, textAlign: 'center', marginTop: 10, fontSize: 13 },
-  msgError:        { color: Colors.danger, textAlign: 'center', marginTop: 10, fontSize: 13 },
-  btnRow:          { flexDirection: 'row', gap: 12, marginTop: 28 },
-  btn:             { flex: 1, padding: 16, borderRadius: 8, alignItems: 'center' },
-  btnPrimary:      { backgroundColor: Colors.accent },
-  btnSecondary:    { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent },
-  btnPrimaryText:  { color: '#fff', fontWeight: 'bold', fontSize: 15, letterSpacing: 2 },
-  btnSecondaryText:{ color: Colors.accent, fontWeight: 'bold', fontSize: 15, letterSpacing: 2 },
-  btnDisabled:     { opacity: 0.5 },
+  inner:          { flex: 1, justifyContent: 'center', paddingHorizontal: 28 },
+
+  brandBlock:     { alignItems: 'center', marginBottom: 36 },
+  brand:          { color: Colors.textPrimary, fontSize: 26, fontWeight: '800', letterSpacing: 6, fontFamily: 'monospace' },
+  stripe:         { flexDirection: 'row', width: 180, height: 4, marginTop: 8, borderRadius: 1, overflow: 'hidden' },
+  stripeSeg:      { flex: 1, height: 4 },
+  subtitle:       { color: Colors.textSecondary, fontSize: 10, letterSpacing: 3, fontFamily: 'monospace', marginTop: 12 },
+
+  consoleBlock:   { backgroundColor: Colors.surface, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 4, borderLeftWidth: 2, borderLeftColor: Colors.accent, marginBottom: 24 },
+  consoleLine:    { color: Colors.textPrimary, fontSize: 12, fontFamily: 'monospace', lineHeight: 16 },
+  consolePrompt:  { color: Colors.accent, fontWeight: '800' },
+
+  fieldLabel:     { color: Colors.textSecondary, fontSize: 10, letterSpacing: 2, fontFamily: 'monospace', marginBottom: 6 },
+  input:          { backgroundColor: Colors.surface, color: Colors.textPrimary, padding: 14, borderRadius: 4, fontSize: 16, fontFamily: 'monospace', letterSpacing: 1 },
+  lastIpHint:     { color: Colors.accent, fontSize: 11, fontFamily: 'monospace', marginTop: 8, letterSpacing: 1 },
+
+  btnRow:         { flexDirection: 'row', gap: 10, marginTop: 28 },
+  btn:            { flex: 1, paddingVertical: 16, borderRadius: 4, alignItems: 'center' },
+  btnPrimary:     { backgroundColor: Colors.accent },
+  btnSecondary:   { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent },
+  btnPrimaryText: { color: '#000', fontWeight: '800', fontSize: 13, letterSpacing: 3, fontFamily: 'monospace' },
+  btnSecondaryText:{ color: Colors.accent, fontWeight: '800', fontSize: 13, letterSpacing: 3, fontFamily: 'monospace' },
+  btnDisabled:    { opacity: 0.4 },
 });

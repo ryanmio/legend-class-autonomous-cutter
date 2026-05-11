@@ -27,16 +27,16 @@ function modeColor(mode: string | undefined): string {
     case 'AUTO':     return Colors.success;
     case 'MANUAL':   return Colors.accent;
     case 'FAILSAFE': return Colors.danger;
-    default:         return Colors.textPrimary;
+    default:         return Colors.textSecondary;
   }
 }
 
-export default function TelemetryScreen({ route }: Props) {
+export default function TelemetryScreen({ navigation }: Props) {
   const { data, connected } = useTelemetry();
-  const [logRows, setLogRows]   = useState(getRowCount());
-  const [logging, setLogging]   = useState(isRunning());
+  const [logRows, setLogRows] = useState(getRowCount());
+  const [logging, setLogging] = useState(isRunning());
 
-  useEffect(() => subscribeCount(setLogRows), []);
+  useEffect(() => subscribeCount(setLogRows),  []);
   useEffect(() => subscribeRunning(setLogging), []);
 
   const battV = data?.batt_v != null ? parseFloat(data.batt_v) : undefined;
@@ -51,75 +51,82 @@ export default function TelemetryScreen({ route }: Props) {
       `${logRows} row${logRows === 1 ? '' : 's'} will be discarded.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Clear', style: 'destructive', onPress: clearLogger },
+        { text: 'Clear',  style: 'destructive', onPress: clearLogger },
       ]
     );
   };
 
   return (
     <Screen>
-      <View style={styles.inner}>
-        <View style={styles.header}>
-          <Text style={styles.title}>
-            TELEMETRY{'  '}
-            <Text style={{ color: connected ? Colors.success : Colors.danger }}>●</Text>
-          </Text>
+      <View style={styles.screen}>
+
+        {/* ── Top bar ───────────────────────────────────────────── */}
+        <View style={styles.topBar}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <Text style={styles.backBtnText}>‹ HELM</Text>
+          </TouchableOpacity>
+          <Text style={styles.pageTitle}>TELEMETRY</Text>
+          <View style={styles.topBarRight}>
+            <Text style={[styles.connDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
+            {data?.mode && (
+              <View style={[styles.modeChip, { borderColor: modeColor(data.mode) }]}>
+                <Text style={[styles.modeChipText, { color: modeColor(data.mode) }]}>
+                  {data.mode}
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
 
-        {/* Voltage gets the prominent slot — it's the field most likely
-            to surprise during a pool run. Always rendered, even when no
-            INA219 reading, so the slot is visible (just shows '--'). */}
-        <View style={styles.battCard}>
+        {/* ── Battery card (prominent) ──────────────────────────── */}
+        <View style={[styles.battCard, { borderLeftColor: voltageColor(battV) }]}>
           <Text style={styles.battLabel}>BATTERY</Text>
           <Text style={[styles.battValue, { color: voltageColor(battV) }]}>
-            {battV != null ? `${battV.toFixed(2)} V` : '--'}
+            {battV != null ? `${battV.toFixed(2)}` : '--'}
+            <Text style={styles.battUnit}>{battV != null ? ' V' : ''}</Text>
           </Text>
-          {data?.batt_a != null && (
-            <Text style={styles.battSub}>{data.batt_a} A</Text>
-          )}
-          <Text style={styles.battThreshold}>
-            warn &lt; {BATT_LOW_V} V    crit &lt; {BATT_CRIT_V} V
-          </Text>
+          <View style={styles.battMetaRow}>
+            {data?.batt_a != null && (
+              <Text style={styles.battMeta}>{data.batt_a} A</Text>
+            )}
+            <Text style={styles.battThreshold}>
+              warn &lt; {BATT_LOW_V} V   crit &lt; {BATT_CRIT_V} V
+            </Text>
+          </View>
         </View>
 
-        {data?.mode && (
-          <View style={[styles.modeCard, { borderColor: modeColor(data.mode) }]}>
-            <Text style={[styles.modeText, { color: modeColor(data.mode) }]}>
-              {data.mode}
-            </Text>
-            {data.failsafe_ack && (
-              <Text style={styles.ackText}>ACK_REQUIRED — flip SwA UP</Text>
-            )}
+        {/* ── Failsafe ACK callout (conditional) ────────────────── */}
+        {data?.failsafe_ack && (
+          <View style={styles.ackCallout}>
+            <Text style={styles.ackText}>FAILSAFE · ACK_REQUIRED — flip SwA UP</Text>
           </View>
         )}
 
-        <ScrollView style={styles.scroll}>
-          {data && (
+        {/* ── Detail rows ───────────────────────────────────────── */}
+        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+          {data ? (
             <>
+              <Section label="VESSEL" />
               <Row label="Firmware" value={data.v} />
               {data.uptime    != null && <Row label="Uptime"    value={`${data.uptime} s`} />}
               {data.heap      != null && <Row label="Free Heap" value={`${Math.round(data.heap / 1024)} KB`} />}
               {data.cruise_us != null && <Row label="Cruise"    value={`${data.cruise_us} µs`} />}
               {data.rc_age_ms != null && (
-                <Row
-                  label="RC age"
-                  value={`${data.rc_age_ms} ms`}
-                  warn={data.rc_age_ms > 1000}
-                />
+                <Row label="RC age" value={`${data.rc_age_ms} ms`} warn={data.rc_age_ms > 1000} />
               )}
-              {data.rudder_us != null && <Row label="Rudder"    value={`${data.rudder_us} µs`} />}
-              {data.esc_us    != null && <Row label="ESC"       value={`${data.esc_us} µs`} />}
-              {data.heading   != null && <Row label="Heading"   value={`${data.heading}°`} />}
+              {data.rudder_us != null && <Row label="Rudder" value={`${data.rudder_us} µs`} />}
+              {data.esc_us    != null && <Row label="ESC"    value={`${data.esc_us} µs`} />}
+              {data.heading   != null && <Row label="Heading" value={`${data.heading}°`} />}
 
               <Section label="GPS" />
               <Row label="Fix" value={data.gps_fix ? '✓' : '✗'} warn={data.gps_fix === false} />
               {data.gps_simulated && <Row label="Simulated" value="⚠ /sim_gps active" warn />}
               {data.gps_fix && data.lat != null && <Row label="Position" value={`${data.lat}, ${data.lon}`} />}
-              {data.sats      != null && <Row label="Sats"      value={`${data.sats}`} />}
-              {data.speed_kts != null && <Row label="Speed"     value={`${data.speed_kts} kts`} />}
-              {data.course    != null && <Row label="Course"    value={`${data.course}°`} />}
+              {data.sats      != null && <Row label="Sats"   value={`${data.sats}`} />}
+              {data.speed_kts != null && <Row label="Speed"  value={`${data.speed_kts} kts`} />}
+              {data.course    != null && <Row label="Course" value={`${data.course}°`} />}
 
-              <Section label="Waypoint" />
+              <Section label="WAYPOINT" />
               <Row label="Set"      value={data.wp_set ? '✓' : '✗'} />
               <Row label="Captured" value={data.captured ? '✓' : '✗'} />
               {data.wp_dist_m  != null && <Row label="Distance" value={`${data.wp_dist_m} m`} />}
@@ -129,39 +136,55 @@ export default function TelemetryScreen({ route }: Props) {
               {data.pid_kp != null && <Row label="Kp" value={data.pid_kp} />}
               {data.pid_kd != null && <Row label="Kd" value={data.pid_kd} />}
 
-              <Section label="Lights" />
+              <Section label="LIGHTS" />
               {data.nav_on    != null && <Row label="Nav"    value={data.nav_on    ? 'ON' : 'off'} />}
               {data.bridge_on != null && <Row label="Bridge" value={data.bridge_on ? 'ON' : 'off'} />}
               {data.deck_on   != null && <Row label="Deck"   value={data.deck_on   ? 'ON' : 'off'} />}
+              {data.nav_on == null && data.bridge_on == null && data.deck_on == null && (
+                <Text style={styles.empty}>(no light state in telemetry)</Text>
+              )}
 
               {(data.bilge_fwd != null || data.bilge_aft != null) && (
                 <>
-                  <Section label="Bilge" />
-                  {data.bilge_fwd != null && <Row label="Fwd" value={data.bilge_fwd ? '⚠ WET' : 'dry'} warn={data.bilge_fwd} />}
-                  {data.bilge_aft != null && <Row label="Aft" value={data.bilge_aft ? '⚠ WET' : 'dry'} warn={data.bilge_aft} />}
+                  <Section label="BILGE" />
+                  {data.bilge_fwd != null && <Row label="Fwd"  value={data.bilge_fwd ? '⚠ WET' : 'dry'} warn={data.bilge_fwd} />}
+                  {data.bilge_aft != null && <Row label="Aft"  value={data.bilge_aft ? '⚠ WET' : 'dry'} warn={data.bilge_aft} />}
                   {data.pump      != null && <Row label="Pump" value={data.pump ? 'RUNNING' : 'off'} />}
                 </>
               )}
             </>
+          ) : (
+            <Text style={styles.empty}>Waiting for telemetry…</Text>
           )}
-          {!data && <Text style={styles.empty}>Waiting for telemetry…</Text>}
         </ScrollView>
 
+        {/* ── Log bar ───────────────────────────────────────────── */}
         <View style={styles.logBar}>
           <TouchableOpacity
             style={[styles.logBtn, logging ? styles.logBtnStop : styles.logBtnStart]}
             onPress={logging ? stopLogger : startLogger}
+            activeOpacity={0.7}
           >
             <Text style={logging ? styles.logBtnStopText : styles.logBtnStartText}>
               {logging ? '■ STOP' : '▶ START'}
             </Text>
           </TouchableOpacity>
           <Text style={styles.logCount}>{logRows} row{logRows === 1 ? '' : 's'}</Text>
-          <TouchableOpacity style={[styles.logBtn, styles.logBtnSecondary]} onPress={onClear} disabled={logRows === 0}>
-            <Text style={[styles.logBtnText, logRows === 0 && { opacity: 0.4 }]}>CLEAR</Text>
+          <TouchableOpacity
+            style={[styles.logBtn, styles.logBtnClear]}
+            onPress={onClear}
+            disabled={logRows === 0}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.logBtnClearText, logRows === 0 && { opacity: 0.4 }]}>CLEAR</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.logBtn, styles.logBtnPrimary]} onPress={onExport} disabled={logRows === 0}>
-            <Text style={[styles.logBtnPrimaryText, logRows === 0 && { opacity: 0.4 }]}>EXPORT CSV</Text>
+          <TouchableOpacity
+            style={[styles.logBtn, styles.logBtnExport]}
+            onPress={onExport}
+            disabled={logRows === 0}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.logBtnExportText, logRows === 0 && { opacity: 0.4 }]}>EXPORT</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -179,81 +202,62 @@ function Row({ label, value, warn }: { label: string; value: string | number; wa
   );
 }
 function Section({ label }: { label: string }) {
-  return <Text style={styles.section}>{label}</Text>;
+  return (
+    <View style={styles.sectionHeader}>
+      <View style={styles.sectionHeaderRule} />
+      <Text style={styles.sectionHeaderText}>{label}</Text>
+      <View style={styles.sectionHeaderRule} />
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-  inner:   { flex: 1, padding: 16 },
-  header:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  title:   { color: Colors.accent, fontSize: 18, fontWeight: 'bold' },
+  screen: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
 
-  battCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 10,
-  },
-  battLabel: {
-    color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace',
-    letterSpacing: 2,
-  },
-  battValue: {
-    fontSize: 32, fontFamily: 'monospace', fontWeight: 'bold',
-    marginTop: 2,
-  },
-  battSub: {
-    color: Colors.textSecondary, fontSize: 13, fontFamily: 'monospace',
-  },
-  battThreshold: {
-    color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace',
-    marginTop: 4,
-  },
+  // Top bar
+  topBar:        { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  backBtn:       { paddingVertical: 6, paddingRight: 12 },
+  backBtnText:   { color: Colors.accent, fontSize: 12, fontFamily: 'monospace', letterSpacing: 2, fontWeight: '700' },
+  pageTitle:     { flex: 1, textAlign: 'center', color: Colors.textPrimary, fontSize: 14, fontFamily: 'monospace', letterSpacing: 4, fontWeight: '800' },
+  topBarRight:   { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  connDot:       { fontSize: 10 },
+  modeChip:      { borderWidth: 1.5, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3, minWidth: 80, alignItems: 'center' },
+  modeChipText:  { fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
 
-  modeCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 10,
-    borderWidth: 1.5,
-    alignItems: 'center',
-  },
-  modeText: {
-    fontSize: 18, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 4,
-  },
-  ackText: {
-    color: Colors.danger, fontSize: 11, fontFamily: 'monospace', marginTop: 4,
-  },
+  // Battery card
+  battCard:       { backgroundColor: Colors.surface, borderRadius: 4, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 12, borderLeftWidth: 3 },
+  battLabel:      { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', letterSpacing: 3, fontWeight: '700' },
+  battValue:      { fontSize: 38, fontFamily: 'monospace', fontWeight: '800', marginTop: 2, letterSpacing: -1 },
+  battUnit:       { fontSize: 18, fontWeight: '700', letterSpacing: 1 },
+  battMetaRow:    { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 12 },
+  battMeta:       { color: Colors.textSecondary, fontSize: 12, fontFamily: 'monospace' },
+  battThreshold:  { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', opacity: 0.6 },
 
+  // Failsafe ACK callout
+  ackCallout:    { backgroundColor: Colors.danger, padding: 10, borderRadius: 4, marginBottom: 12 },
+  ackText:       { color: '#fff', fontSize: 12, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1, textAlign: 'center' },
+
+  // Sections
   scroll: { flex: 1 },
-  section: {
-    color: Colors.textSecondary,
-    fontSize: 11,
-    fontFamily: 'monospace',
-    letterSpacing: 2,
-    marginTop: 14,
-    marginBottom: 4,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: Colors.surface,
-  },
-  row:    { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
-  label:  { color: Colors.textSecondary, fontSize: 13 },
-  value:  { color: Colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'monospace' },
-  empty:  { color: Colors.textSecondary, textAlign: 'center', marginTop: 40, fontStyle: 'italic' },
+  sectionHeader:     { flexDirection: 'row', alignItems: 'center', marginTop: 18, marginBottom: 8 },
+  sectionHeaderRule: { flex: 1, height: 1, backgroundColor: Colors.surface },
+  sectionHeaderText: { color: Colors.accent, fontSize: 10, letterSpacing: 4, fontFamily: 'monospace', fontWeight: '800', marginHorizontal: 12 },
 
-  logBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingTop: 10, marginTop: 4,
-    borderTopWidth: 1, borderTopColor: Colors.surface,
-  },
-  logCount:        { flex: 1, color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', letterSpacing: 1, textAlign: 'center' },
-  logBtn:          { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 6 },
-  logBtnStart:     { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.success },
-  logBtnStop:      { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.warning },
-  logBtnStartText: { color: Colors.success, fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
-  logBtnStopText:  { color: Colors.warning, fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
-  logBtnSecondary: { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.danger },
-  logBtnPrimary:   { backgroundColor: Colors.accent },
-  logBtnText:      { color: Colors.danger, fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
-  logBtnPrimaryText:{ color: '#000', fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold', letterSpacing: 1 },
+  row:    { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
+  label:  { color: Colors.textSecondary, fontSize: 13, fontFamily: 'monospace' },
+  value:  { color: Colors.textPrimary, fontSize: 13, fontWeight: '700', fontFamily: 'monospace' },
+  empty:  { color: Colors.textSecondary, textAlign: 'center', marginTop: 24, fontStyle: 'italic', fontFamily: 'monospace', fontSize: 12 },
+
+  // Log bar
+  logBar:           { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 10, marginTop: 4, borderTopWidth: 1, borderTopColor: Colors.surface },
+  logBtn:           { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 4 },
+  logBtnStart:      { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.success },
+  logBtnStop:       { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.warning },
+  logBtnClear:      { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.danger },
+  logBtnExport:     { backgroundColor: Colors.accent },
+  logBtnStartText:  { color: Colors.success, fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+  logBtnStopText:   { color: Colors.warning, fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+  logBtnClearText:  { color: Colors.danger,  fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+  logBtnExportText: { color: '#000',         fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
+  logCount:         { flex: 1, color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', letterSpacing: 1, textAlign: 'center' },
 });
