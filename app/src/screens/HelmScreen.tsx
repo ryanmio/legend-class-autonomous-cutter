@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useKeepAwake } from 'expo-keep-awake';
+import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { BATT_LOW_V, BATT_CRIT_V, TelemetryData } from '../types';
@@ -110,6 +111,7 @@ export default function HelmScreen({ route, navigation }: Props) {
   }, [ip]);
 
   const toggleLight = useCallback((key: LightKey) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLights((prev) => {
       const next = !prev[key];
       setLed(ip, key, next).catch(() => {});
@@ -118,6 +120,7 @@ export default function HelmScreen({ route, navigation }: Props) {
   }, [ip]);
 
   const playSound = useCallback((label: string, prompt: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert(
       prompt,
       'Audio firmware not yet wired — this is a placeholder.',

@@ -3,6 +3,7 @@ import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
@@ -40,8 +41,10 @@ function distanceTo(fromLat: number, fromLon: number, toLat: number, toLon: numb
 // HUD starts hidden so a remount that loads before the first telemetry
 // frame doesn't flash "NO GPS FIX" before we actually know GPS state.
 //
-// Waypoint and path-line use yellow (#ffcc00 — Colors.warning), not green,
-// so they remain readable in bright sunlight on water.
+// Color split: the WP marker and planned path use bright cyan (the
+// app accent — high visibility in sun, signals "active target"). The
+// boat trail uses a muted steel blue so the history doesn't compete
+// with the live target.
 const MAP_HTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -95,20 +98,21 @@ const MAP_HTML = `<!DOCTYPE html>
 
     .boat{font-size:22px;line-height:1}
 
-    /* Waypoint reticle — yellow for sun readability. */
+    /* Waypoint reticle — bright cyan, the active target color. */
     .wp-icon{background:transparent !important;border:none !important}
-    .wp-target{position:relative;width:28px;height:28px}
+    .wp-target{position:relative;width:30px;height:30px}
     .wp-ring{
-      position:absolute;top:2px;left:2px;
-      width:24px;height:24px;
-      border:2px solid #ffcc00;border-radius:50%;
-      background:rgba(255,204,0,0.18);
-      box-shadow:0 0 6px rgba(255,204,0,0.6);
+      position:absolute;top:1px;left:1px;
+      width:28px;height:28px;
+      border:2.5px solid #00bfff;border-radius:50%;
+      background:rgba(0,191,255,0.2);
+      box-shadow:0 0 8px rgba(0,191,255,0.7);
     }
     .wp-dot{
-      position:absolute;top:11px;left:11px;
+      position:absolute;top:12px;left:12px;
       width:6px;height:6px;
-      background:#ffcc00;border-radius:50%;
+      background:#00bfff;border-radius:50%;
+      box-shadow:0 0 4px rgba(0,191,255,0.9);
     }
   </style>
 </head>
@@ -132,13 +136,15 @@ const MAP_HTML = `<!DOCTYPE html>
     });
     var wpIconDef = L.divIcon({
       html:'<div class="wp-target"><div class="wp-ring"></div><div class="wp-dot"></div></div>',
-      iconSize:[28,28], iconAnchor:[14,14], className:'wp-icon'
+      iconSize:[30,30], iconAnchor:[15,15], className:'wp-icon'
     });
 
     var marker   = null;
     var wpMarker = null;
     var pathLine = null;
-    var trail    = L.polyline([], { color:'#00bfff', weight:2.5, opacity:0.8 }).addTo(map);
+    // Trail = where we've been. Muted steel blue so it doesn't compete
+    // with the bright-cyan waypoint and path-line.
+    var trail    = L.polyline([], { color:'#3a6db8', weight:2.5, opacity:0.75 }).addTo(map);
     var pts      = [];
     var locked   = false;
 
@@ -152,7 +158,7 @@ const MAP_HTML = `<!DOCTYPE html>
       document.getElementById('hud-secondary').textContent = secondary || '';
     }
 
-    // Dashed yellow planned-path line between boat and waypoint.
+    // Dashed cyan planned-path line between boat and waypoint.
     function updatePathLine() {
       if (marker && wpMarker) {
         var coords = [marker.getLatLng(), wpMarker.getLatLng()];
@@ -160,7 +166,7 @@ const MAP_HTML = `<!DOCTYPE html>
           pathLine.setLatLngs(coords);
         } else {
           pathLine = L.polyline(coords, {
-            color:'#ffcc00', weight:2.5, dashArray:'8, 6', opacity:0.85
+            color:'#00bfff', weight:2.5, dashArray:'8, 6', opacity:0.9
           }).addTo(map);
         }
       } else if (pathLine) {
@@ -315,12 +321,14 @@ export default function MapScreen({ route, navigation }: Props) {
       if (msg.type !== 'waypoint') return;
       const wpLat: number = msg.lat;
       const wpLon: number = msg.lon;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setWaypoint({ lat: wpLat, lon: wpLon });
       sendWaypoint(ip, wpLat, wpLon).catch(() => {});
     } catch {}
   }, [ip]);
 
   const handleClearWaypoint = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setWaypoint(null);
     sendWaypoint(ip, null, null).catch(() => {});
   }, [ip]);

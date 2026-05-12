@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, Modal, Pressable, TouchableOpacity, StyleSheet } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { Colors } from '../constants';
 
 // 1500 = neutral (static heading-hold). 1750 = firmware AUTO_CRUISE_CAP.
@@ -29,7 +30,10 @@ export function CruiseModal({
               <TouchableOpacity
                 key={us}
                 style={[styles.preset, currentUs === us && styles.presetActive]}
-                onPress={() => onPick(us)}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  onPick(us);
+                }}
               >
                 <Text style={[styles.presetText, currentUs === us && styles.presetTextActive]}>
                   {us}
