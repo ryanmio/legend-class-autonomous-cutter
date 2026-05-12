@@ -264,18 +264,28 @@ export default function MapScreen({ route, navigation }: Props) {
   const [cruiseModalOpen, setCruiseModalOpen] = useState(false);
   const [webViewReady, setWebViewReady] = useState(false);
 
-  // Rehydrate the local waypoint from telemetry. The firmware is the source
-  // of truth — if it reports a waypoint armed, we mirror that on the map so
-  // a return-to-Map after navigating away keeps showing the marker.
+  // Rehydrate from telemetry ONCE per mount. Local state is authoritative
+  // after that — otherwise stale telemetry (the POST /waypoint clear
+  // hasn't propagated to the next /telemetry frame yet) races the user's
+  // CLEAR tap and visually undoes it. The ref also flips to true the
+  // moment the user takes any local action, so a clear that arrives
+  // before any telemetry-driven hydrate also blocks future hydrates.
+  const hydratedRef = useRef(false);
+
   useEffect(() => {
-    if (waypoint != null) return;
+    if (hydratedRef.current) return;
     if (!data?.wp_set) return;
     if (data.wp_lat == null || data.wp_lon == null) return;
     const lat = parseFloat(data.wp_lat);
     const lon = parseFloat(data.wp_lon);
     if (isNaN(lat) || isNaN(lon)) return;
+    hydratedRef.current = true;
     setWaypoint({ lat, lon });
-  }, [data?.wp_set, data?.wp_lat, data?.wp_lon, waypoint]);
+  }, [data?.wp_set, data?.wp_lat, data?.wp_lon]);
+
+  useEffect(() => {
+    if (waypoint != null) hydratedRef.current = true;
+  }, [waypoint]);
 
   // Reflect the local waypoint state into the WebView.
   useEffect(() => {
