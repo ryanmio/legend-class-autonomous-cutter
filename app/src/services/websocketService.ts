@@ -15,6 +15,11 @@ let intervalId: ReturnType<typeof setInterval> | null = null;
 let currentIP  = '';
 const listeners  = new Set<Listener>();
 let _connected   = false;
+// Most recent telemetry frame received this session. Exposed via
+// getLastData() so newly-mounted screens can hydrate from cache instead
+// of starting empty and waiting up to a full poll cycle for the first
+// frame — eliminates "default view + NO FIX" flashes on screen remount.
+let _lastData:   TelemetryData | null = null;
 
 async function poll() {
   if (!currentIP) return;
@@ -27,6 +32,7 @@ async function poll() {
     clearTimeout(timer);
     if (res.ok) {
       const data: TelemetryData = await res.json();
+      _lastData  = data;
       _connected = true;
       listeners.forEach((fn) => fn(data));
     } else {
@@ -40,6 +46,7 @@ async function poll() {
 export function connect(ip: string) {
   currentIP  = ip;
   _connected = false;
+  _lastData  = null;
   if (intervalId) clearInterval(intervalId);
   poll();                                          // immediate first poll
   intervalId = setInterval(poll, POLL_MS);
@@ -48,6 +55,7 @@ export function connect(ip: string) {
 export function disconnect() {
   currentIP  = '';
   _connected = false;
+  _lastData  = null;
   if (intervalId) { clearInterval(intervalId); intervalId = null; }
 }
 
@@ -58,4 +66,8 @@ export function subscribe(fn: Listener): () => void {
 
 export function isConnected(): boolean {
   return _connected;
+}
+
+export function getLastData(): TelemetryData | null {
+  return _lastData;
 }

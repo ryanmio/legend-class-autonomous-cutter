@@ -128,10 +128,15 @@ export default function TelemetryScreen({ navigation }: Props) {
               {data.course    != null && <Row label="Course" value={`${data.course}°`} />}
 
               <Section label="WAYPOINT" />
-              <Row label="Set"      value={data.wp_set   ? '✓ ARMED'    : 'none'} />
-              <Row label="Captured" value={data.captured ? '✓ CAPTURED' : data.wp_set ? 'pending' : '—'} />
-              {data.wp_dist_m  != null && <Row label="Distance" value={`${data.wp_dist_m} m`} />}
-              {data.wp_bearing != null && <Row label="Bearing"  value={`${data.wp_bearing}°`} />}
+              {data.wp_set ? (
+                <>
+                  <Row label="Captured" value={data.captured ? 'true' : 'false'} />
+                  {data.wp_dist_m  != null && <Row label="Distance" value={`${data.wp_dist_m} m`} />}
+                  {data.wp_bearing != null && <Row label="Bearing"  value={`${data.wp_bearing}°`} />}
+                </>
+              ) : (
+                <Text style={styles.sectionEmpty}>no waypoint set</Text>
+              )}
 
               <Section label="PID" />
               {data.pid_kp != null && <Row label="Kp" value={data.pid_kp} />}
@@ -244,10 +249,11 @@ const styles = StyleSheet.create({
   sectionHeaderRule: { flex: 1, height: 1, backgroundColor: Colors.surface },
   sectionHeaderText: { color: Colors.accent, fontSize: 10, letterSpacing: 4, fontFamily: 'monospace', fontWeight: '800', marginHorizontal: 12 },
 
-  row:    { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
-  label:  { color: Colors.textSecondary, fontSize: 13, fontFamily: 'monospace' },
-  value:  { color: Colors.textPrimary, fontSize: 13, fontWeight: '700', fontFamily: 'monospace' },
-  empty:  { color: Colors.textSecondary, textAlign: 'center', marginTop: 24, fontStyle: 'italic', fontFamily: 'monospace', fontSize: 12 },
+  row:           { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
+  label:         { color: Colors.textSecondary, fontSize: 13, fontFamily: 'monospace' },
+  value:         { color: Colors.textPrimary, fontSize: 13, fontWeight: '700', fontFamily: 'monospace' },
+  empty:         { color: Colors.textSecondary, textAlign: 'center', marginTop: 24, fontStyle: 'italic', fontFamily: 'monospace', fontSize: 12 },
+  sectionEmpty:  { color: Colors.textSecondary, fontStyle: 'italic', fontFamily: 'monospace', fontSize: 12, paddingVertical: 6 },
 
   // Log bar
   logBar:           { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 10, marginTop: 4, borderTopWidth: 1, borderTopColor: Colors.surface },

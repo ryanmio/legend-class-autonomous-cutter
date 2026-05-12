@@ -4,10 +4,13 @@
 
 import { useState, useEffect } from 'react';
 import { TelemetryData } from '../types';
-import { subscribe, isConnected } from '../services/websocketService';
+import { subscribe, isConnected, getLastData } from '../services/websocketService';
 
 export function useTelemetry(): { data: TelemetryData | null; connected: boolean } {
-  const [data, setData]           = useState<TelemetryData | null>(null);
+  // Initialize from the websocket-service cache so screens that remount
+  // (e.g. Helm ↔ Map) don't briefly show empty state while waiting for
+  // the next poll. The next poll still arrives within ~1s and overrides.
+  const [data, setData]           = useState<TelemetryData | null>(getLastData());
   const [connected, setConnected] = useState(isConnected());
 
   useEffect(() => {

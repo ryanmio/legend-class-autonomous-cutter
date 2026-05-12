@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useKeepAwake } from 'expo-keep-awake';
 import { RootStackParamList } from '../../App';
@@ -18,6 +18,14 @@ const LIGHTS: { key: LightKey; label: string }[] = [
   { key: 'nav',    label: 'NAV'    },
   { key: 'bridge', label: 'BRIDGE' },
   { key: 'deck',   label: 'DECK'   },
+];
+
+// Placeholder sound tracks. No firmware audio endpoint yet — tapping
+// confirms then no-ops. Wire to /audio when the DF1201S port lands.
+const SOUNDS: { key: string; label: string; prompt: string }[] = [
+  { key: 'horn',  label: 'HORN',  prompt: 'Play HORN?'  },
+  { key: 'board', label: 'BOARD', prompt: 'Play BOARD hail?' },
+  { key: 'gun',   label: 'GUN',   prompt: 'Play GUN?'   },
 ];
 
 const NAV: { screen: 'Map' | 'Telemetry' | 'Systems'; label: string }[] = [
@@ -108,6 +116,17 @@ export default function HelmScreen({ route, navigation }: Props) {
       return { ...prev, [key]: next };
     });
   }, [ip]);
+
+  const playSound = useCallback((label: string, prompt: string) => {
+    Alert.alert(
+      prompt,
+      'Audio firmware not yet wired — this is a placeholder.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Play',   onPress: () => { /* no-op until /audio lands */ } },
+      ]
+    );
+  }, []);
 
   return (
     <Screen>
@@ -241,6 +260,21 @@ export default function HelmScreen({ route, navigation }: Props) {
           })}
         </View>
 
+        {/* ── SOUND ─────────────────────────────────────────────────── */}
+        <Text style={[styles.sectionLabel, styles.sectionLabelGap]}>SOUND</Text>
+        <View style={styles.lightsRow}>
+          {SOUNDS.map(({ key, label, prompt }) => (
+            <TouchableOpacity
+              key={key}
+              style={styles.lightBtn}
+              onPress={() => playSound(label, prompt)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.lightBtnText}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         {/* spacer — pushes nav bar to bottom */}
         <View style={{ flex: 1 }} />
 
@@ -327,8 +361,9 @@ const styles = StyleSheet.create({
   readoutUnit:     { color: Colors.textPrimary, fontSize: 12, fontWeight: '600', fontFamily: 'monospace', marginLeft: 2, letterSpacing: 1 },
   readoutSub:      { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', marginTop: 2, minHeight: 12 },
 
-  // Section label (shared by AUTOPILOT and LIGHTS)
-  sectionLabel: { color: Colors.textSecondary, fontSize: 10, letterSpacing: 3, fontFamily: 'monospace', fontWeight: '700', marginBottom: 8 },
+  // Section label (shared by AUTOPILOT, LIGHTS, SOUND)
+  sectionLabel:    { color: Colors.textSecondary, fontSize: 10, letterSpacing: 3, fontFamily: 'monospace', fontWeight: '700', marginBottom: 8 },
+  sectionLabelGap: { marginTop: 18 },
 
   // Autopilot — no left-edge bar; chevron is the affordance.
   autopilotRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },

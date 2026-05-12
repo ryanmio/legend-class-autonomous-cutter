@@ -32,10 +32,16 @@ function distanceTo(fromLat: number, fromLon: number, toLat: number, toLon: numb
 }
 
 // ── Leaflet map HTML ──────────────────────────────────────────────────────────
-// All map-side rendering — boat marker, waypoint reticle, path polyline, and
-// the single bottom HUD card with bearing/distance/lat-lon — lives here.
-// zoomControl is disabled (it overlapped the iOS status bar); pinch-to-zoom
-// still works.
+// All map-side rendering lives here: boat marker, waypoint reticle, planned
+// path polyline, and a HUD that has three states:
+//   hidden:  fix is good and no waypoint → boat marker speaks for itself
+//   minimal: no fix → small yellow ⚠ NO GPS FIX line (no card chrome)
+//   card:    waypoint tracking or captured → full bordered card
+// HUD starts hidden so a remount that loads before the first telemetry
+// frame doesn't flash "NO GPS FIX" before we actually know GPS state.
+//
+// Waypoint and path-line use yellow (#ffcc00 — Colors.warning), not green,
+// so they remain readable in bright sunlight on water.
 const MAP_HTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -53,26 +59,33 @@ const MAP_HTML = `<!DOCTYPE html>
       bottom:80px;
       left:50%;
       transform:translateX(-50%);
-      background:rgba(10,15,26,0.92);
-      padding:14px 22px;
-      border-radius:6px;
-      border:1px solid rgba(0,191,255,0.25);
       font-family:monospace;
       text-align:center;
       z-index:1000;
       pointer-events:none;
+    }
+    #hud.hud-hidden  { display:none; }
+    #hud.hud-minimal { padding:5px 12px; }
+    #hud.hud-minimal #hud-primary{
+      font-size:11px; font-weight:700; letter-spacing:1.5px;
+    }
+    #hud.hud-minimal #hud-secondary{ display:none; }
+    #hud.hud-card{
+      background:rgba(10,15,26,0.92);
+      padding:14px 22px;
+      border-radius:6px;
+      border:1px solid rgba(0,191,255,0.25);
       min-width:220px;
       max-width:78%;
     }
-    #hud-primary{
+    #hud.hud-card #hud-primary{
       font-size:22px;
       font-weight:800;
       letter-spacing:1px;
       line-height:1.15;
-      color:#e8f4fd;
       white-space:nowrap;
     }
-    #hud-secondary{
+    #hud.hud-card #hud-secondary{
       font-size:10px;
       color:#6b8fa8;
       letter-spacing:1.5px;
@@ -82,32 +95,32 @@ const MAP_HTML = `<!DOCTYPE html>
 
     .boat{font-size:22px;line-height:1}
 
-    /* Waypoint reticle: outer ring + filled dot. */
+    /* Waypoint reticle — yellow for sun readability. */
     .wp-icon{background:transparent !important;border:none !important}
     .wp-target{position:relative;width:28px;height:28px}
     .wp-ring{
       position:absolute;top:2px;left:2px;
       width:24px;height:24px;
-      border:2px solid #34c759;border-radius:50%;
-      background:rgba(52,199,89,0.18);
-      box-shadow:0 0 6px rgba(52,199,89,0.5);
+      border:2px solid #ffcc00;border-radius:50%;
+      background:rgba(255,204,0,0.18);
+      box-shadow:0 0 6px rgba(255,204,0,0.6);
     }
     .wp-dot{
       position:absolute;top:11px;left:11px;
       width:6px;height:6px;
-      background:#34c759;border-radius:50%;
+      background:#ffcc00;border-radius:50%;
     }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div id="hud">
-    <div id="hud-primary">NO GPS FIX</div>
+  <div id="hud" class="hud-hidden">
+    <div id="hud-primary"></div>
     <div id="hud-secondary"></div>
   </div>
   <script>
-    // zoomControl off — pinch-zoom still works and the in-map buttons
-    // overlapped the iOS status bar at the top.
+    // zoomControl off — pinch-zoom still works; the in-map buttons
+    // overlapped the iOS status bar at the top-left.
     var map = L.map('map', { zoomControl:false }).setView([37.8,-122.4], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution:'© OpenStreetMap contributors', maxZoom:19
@@ -129,15 +142,17 @@ const MAP_HTML = `<!DOCTYPE html>
     var pts      = [];
     var locked   = false;
 
-    function setHud(primary, secondary, color) {
+    function setHud(mode, primary, secondary, color) {
+      var card = document.getElementById('hud');
+      card.className = 'hud-' + mode;
+      if (mode === 'hidden') return;
       var p = document.getElementById('hud-primary');
-      var s = document.getElementById('hud-secondary');
-      p.textContent  = primary;
-      p.style.color  = color || '#e8f4fd';
-      s.textContent  = secondary || '';
+      p.textContent = primary || '';
+      p.style.color = color || '#e8f4fd';
+      document.getElementById('hud-secondary').textContent = secondary || '';
     }
 
-    // Dashed line between boat and waypoint, showing the planned path.
+    // Dashed yellow planned-path line between boat and waypoint.
     function updatePathLine() {
       if (marker && wpMarker) {
         var coords = [marker.getLatLng(), wpMarker.getLatLng()];
@@ -145,7 +160,7 @@ const MAP_HTML = `<!DOCTYPE html>
           pathLine.setLatLngs(coords);
         } else {
           pathLine = L.polyline(coords, {
-            color:'#34c759', weight:2, dashArray:'8, 6', opacity:0.75
+            color:'#ffcc00', weight:2.5, dashArray:'8, 6', opacity:0.85
           }).addTo(map);
         }
       } else if (pathLine) {
@@ -156,7 +171,7 @@ const MAP_HTML = `<!DOCTYPE html>
 
     window.updateBoat = function(lat, lon, hasFix, bearing, distM, captured) {
       if (!hasFix) {
-        setHud('NO GPS FIX', '', '#ffcc00');
+        setHud('minimal', '⚠ NO GPS FIX', '', '#ffcc00');
         return;
       }
       var ll = [lat, lon];
@@ -175,14 +190,15 @@ const MAP_HTML = `<!DOCTYPE html>
       var llStr = lat.toFixed(6) + ', ' + lon.toFixed(6);
 
       if (captured) {
-        setHud('✓ CAPTURED', llStr, '#34c759');
+        setHud('card', '✓ CAPTURED', llStr, '#34c759');
       } else if (bearing != null && distM != null && !isNaN(bearing)) {
         var d = distM >= 1000
           ? (distM / 1000).toFixed(2) + ' km'
           : Math.round(distM) + ' m';
-        setHud('→ ' + bearing.toFixed(0) + '°  ·  ' + d, llStr, '#34c759');
+        setHud('card', '→ ' + bearing.toFixed(0) + '°  ·  ' + d, llStr, '#34c759');
       } else {
-        setHud('POSITION ACQUIRED', llStr, '#00bfff');
+        // Fix but no waypoint — boat marker on the map speaks for itself.
+        setHud('hidden');
       }
     };
 
@@ -240,12 +256,38 @@ export default function MapScreen({ route, navigation }: Props) {
 
   const [waypoint, setWaypoint] = useState<{ lat: number; lon: number } | null>(null);
   const [cruiseModalOpen, setCruiseModalOpen] = useState(false);
+  const [webViewReady, setWebViewReady] = useState(false);
 
-  // Update boat marker and HUD whenever GPS, waypoint, or captured flag
-  // changes. Path-line and bearing/distance are computed in HTML from the
-  // injected args.
+  // Rehydrate the local waypoint from telemetry. The firmware is the source
+  // of truth — if it reports a waypoint armed, we mirror that on the map so
+  // a return-to-Map after navigating away keeps showing the marker.
   useEffect(() => {
-    if (!webViewRef.current || !data) return;
+    if (waypoint != null) return;
+    if (!data?.wp_set) return;
+    if (data.wp_lat == null || data.wp_lon == null) return;
+    const lat = parseFloat(data.wp_lat);
+    const lon = parseFloat(data.wp_lon);
+    if (isNaN(lat) || isNaN(lon)) return;
+    setWaypoint({ lat, lon });
+  }, [data?.wp_set, data?.wp_lat, data?.wp_lon, waypoint]);
+
+  // Reflect the local waypoint state into the WebView.
+  useEffect(() => {
+    if (!webViewReady || !webViewRef.current) return;
+    if (waypoint) {
+      webViewRef.current.injectJavaScript(
+        `window.setWaypointMarker(${waypoint.lat},${waypoint.lon});true;`
+      );
+    } else {
+      webViewRef.current.injectJavaScript('window.clearWaypointMarker();true;');
+    }
+  }, [waypoint, webViewReady]);
+
+  // Inject boat position + HUD state whenever telemetry changes (or after
+  // the WebView finishes loading, so a remount shows the right state
+  // immediately rather than flashing the default view + NO FIX).
+  useEffect(() => {
+    if (!webViewReady || !webViewRef.current || !data) return;
     const lat    = parseFloat(data.lat ?? '');
     const lon    = parseFloat(data.lon ?? '');
     const hasFix = data.gps_fix === true && !isNaN(lat) && !isNaN(lon);
@@ -264,7 +306,7 @@ export default function MapScreen({ route, navigation }: Props) {
       `window.updateBoat(${hasFix ? lat : 0},${hasFix ? lon : 0},${hasFix},` +
       `${bearing ?? 'null'},${dist ?? 'null'},${cap});true;`
     );
-  }, [data?.gps_fix, data?.lat, data?.lon, data?.captured, waypoint]);
+  }, [data?.gps_fix, data?.lat, data?.lon, data?.captured, waypoint, webViewReady]);
 
   // Handle tap-on-map messages from the WebView.
   const handleMapMessage = useCallback((msgData: string) => {
@@ -273,33 +315,13 @@ export default function MapScreen({ route, navigation }: Props) {
       if (msg.type !== 'waypoint') return;
       const wpLat: number = msg.lat;
       const wpLon: number = msg.lon;
-
-      const cur = currentGpsRef.current;
-      const b   = cur ? bearingTo(cur.lat, cur.lon, wpLat, wpLon) : null;
-      const d   = cur ? distanceTo(cur.lat, cur.lon, wpLat, wpLon) : null;
-
       setWaypoint({ lat: wpLat, lon: wpLon });
-
-      webViewRef.current?.injectJavaScript(`window.setWaypointMarker(${wpLat},${wpLon});true;`);
-      if (cur && b !== null && d !== null) {
-        webViewRef.current?.injectJavaScript(
-          `window.updateBoat(${cur.lat},${cur.lon},true,${b.toFixed(2)},${d.toFixed(0)},false);true;`
-        );
-      }
-
       sendWaypoint(ip, wpLat, wpLon).catch(() => {});
     } catch {}
   }, [ip]);
 
   const handleClearWaypoint = useCallback(() => {
     setWaypoint(null);
-    webViewRef.current?.injectJavaScript('window.clearWaypointMarker();true;');
-    const cur = currentGpsRef.current;
-    if (cur) {
-      webViewRef.current?.injectJavaScript(
-        `window.updateBoat(${cur.lat},${cur.lon},true,null,null,false);true;`
-      );
-    }
     sendWaypoint(ip, null, null).catch(() => {});
   }, [ip]);
 
@@ -322,6 +344,7 @@ export default function MapScreen({ route, navigation }: Props) {
         originWhitelist={['*']}
         javaScriptEnabled
         domStorageEnabled
+        onLoadEnd={() => setWebViewReady(true)}
         onMessage={(e) => handleMapMessage(e.nativeEvent.data)}
       />
 
@@ -334,7 +357,7 @@ export default function MapScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* ── Top bar: just BACK + MODE ─────────────────────────────── */}
+      {/* ── Top bar: BACK + MODE ──────────────────────────────────── */}
       <View
         style={[
           styles.topBarRow,
