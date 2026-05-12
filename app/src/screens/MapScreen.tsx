@@ -11,7 +11,7 @@ import { CruiseModal } from '../components/CruiseModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 
-// ── Haversine bearing and distance (used for the local HUD overlay) ───────────
+// ── Haversine bearing and distance (used for the in-map HUD overlay) ──────────
 function bearingTo(fromLat: number, fromLon: number, toLat: number, toLon: number): number {
   const φ1 = fromLat * Math.PI / 180;
   const φ2 = toLat  * Math.PI / 180;
@@ -31,7 +31,11 @@ function distanceTo(fromLat: number, fromLon: number, toLat: number, toLon: numb
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ── Leaflet map HTML (unchanged) ──────────────────────────────────────────────
+// ── Leaflet map HTML ──────────────────────────────────────────────────────────
+// All map-side rendering — boat marker, waypoint reticle, path polyline, and
+// the single bottom HUD card with bearing/distance/lat-lon — lives here.
+// zoomControl is disabled (it overlapped the iOS status bar); pinch-to-zoom
+// still works.
 const MAP_HTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -43,88 +47,173 @@ const MAP_HTML = `<!DOCTYPE html>
     *{margin:0;padding:0;box-sizing:border-box}
     body{background:#0a0f1a}
     #map{width:100vw;height:100vh}
+
     #hud{
-      position:absolute;bottom:20px;left:12px;right:12px;
-      background:rgba(10,15,26,0.88);color:#6b8fa8;
-      padding:7px 14px;border-radius:8px;
-      font:13px/1.6 monospace;z-index:1000;
-      text-align:center;pointer-events:none
+      position:absolute;
+      bottom:80px;
+      left:50%;
+      transform:translateX(-50%);
+      background:rgba(10,15,26,0.92);
+      padding:14px 22px;
+      border-radius:6px;
+      border:1px solid rgba(0,191,255,0.25);
+      font-family:monospace;
+      text-align:center;
+      z-index:1000;
+      pointer-events:none;
+      min-width:220px;
+      max-width:78%;
     }
+    #hud-primary{
+      font-size:22px;
+      font-weight:800;
+      letter-spacing:1px;
+      line-height:1.15;
+      color:#e8f4fd;
+      white-space:nowrap;
+    }
+    #hud-secondary{
+      font-size:10px;
+      color:#6b8fa8;
+      letter-spacing:1.5px;
+      margin-top:8px;
+      font-weight:600;
+    }
+
     .boat{font-size:22px;line-height:1}
+
+    /* Waypoint reticle: outer ring + filled dot. */
+    .wp-icon{background:transparent !important;border:none !important}
+    .wp-target{position:relative;width:28px;height:28px}
+    .wp-ring{
+      position:absolute;top:2px;left:2px;
+      width:24px;height:24px;
+      border:2px solid #34c759;border-radius:50%;
+      background:rgba(52,199,89,0.18);
+      box-shadow:0 0 6px rgba(52,199,89,0.5);
+    }
+    .wp-dot{
+      position:absolute;top:11px;left:11px;
+      width:6px;height:6px;
+      background:#34c759;border-radius:50%;
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div id="hud">Waiting for GPS fix…</div>
+  <div id="hud">
+    <div id="hud-primary">NO GPS FIX</div>
+    <div id="hud-secondary"></div>
+  </div>
   <script>
-    var map = L.map('map',{zoomControl:true}).setView([37.8,-122.4],13);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-      attribution:'© OpenStreetMap contributors',maxZoom:19
+    // zoomControl off — pinch-zoom still works and the in-map buttons
+    // overlapped the iOS status bar at the top.
+    var map = L.map('map', { zoomControl:false }).setView([37.8,-122.4], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution:'© OpenStreetMap contributors', maxZoom:19
     }).addTo(map);
 
     var boatIcon = L.divIcon({
       html:'<div class="boat">⛵</div>',
-      iconSize:[28,28],iconAnchor:[14,14],className:''
+      iconSize:[28,28], iconAnchor:[14,14], className:''
     });
+    var wpIconDef = L.divIcon({
+      html:'<div class="wp-target"><div class="wp-ring"></div><div class="wp-dot"></div></div>',
+      iconSize:[28,28], iconAnchor:[14,14], className:'wp-icon'
+    });
+
     var marker   = null;
     var wpMarker = null;
-    var trail    = L.polyline([],{color:'#00bfff',weight:2.5,opacity:0.8}).addTo(map);
+    var pathLine = null;
+    var trail    = L.polyline([], { color:'#00bfff', weight:2.5, opacity:0.8 }).addTo(map);
     var pts      = [];
     var locked   = false;
 
-    window.updateBoat = function(lat, lon, hasFix, bearing, distM) {
-      var hud = document.getElementById('hud');
-      if (!hasFix) { hud.textContent = 'No GPS fix'; return; }
+    function setHud(primary, secondary, color) {
+      var p = document.getElementById('hud-primary');
+      var s = document.getElementById('hud-secondary');
+      p.textContent  = primary;
+      p.style.color  = color || '#e8f4fd';
+      s.textContent  = secondary || '';
+    }
+
+    // Dashed line between boat and waypoint, showing the planned path.
+    function updatePathLine() {
+      if (marker && wpMarker) {
+        var coords = [marker.getLatLng(), wpMarker.getLatLng()];
+        if (pathLine) {
+          pathLine.setLatLngs(coords);
+        } else {
+          pathLine = L.polyline(coords, {
+            color:'#34c759', weight:2, dashArray:'8, 6', opacity:0.75
+          }).addTo(map);
+        }
+      } else if (pathLine) {
+        map.removeLayer(pathLine);
+        pathLine = null;
+      }
+    }
+
+    window.updateBoat = function(lat, lon, hasFix, bearing, distM, captured) {
+      if (!hasFix) {
+        setHud('NO GPS FIX', '', '#ffcc00');
+        return;
+      }
       var ll = [lat, lon];
       if (!marker) {
-        marker = L.marker(ll,{icon:boatIcon}).addTo(map);
-        map.setView(ll, 16);
+        marker = L.marker(ll, { icon:boatIcon }).addTo(map);
+        map.setView(ll, 18);
       } else {
         marker.setLatLng(ll);
-        if (locked) map.panTo(ll,{animate:true,duration:0.5});
+        if (locked) map.panTo(ll, { animate:true, duration:0.5 });
       }
       pts.push(ll);
       if (pts.length > 800) pts.shift();
       trail.setLatLngs(pts);
-      var posLine = lat.toFixed(6) + ',  ' + lon.toFixed(6);
-      if (bearing != null && !isNaN(bearing)) {
+      updatePathLine();
+
+      var llStr = lat.toFixed(6) + ', ' + lon.toFixed(6);
+
+      if (captured) {
+        setHud('✓ CAPTURED', llStr, '#34c759');
+      } else if (bearing != null && distM != null && !isNaN(bearing)) {
         var d = distM >= 1000
           ? (distM / 1000).toFixed(2) + ' km'
           : Math.round(distM) + ' m';
-        hud.innerHTML = posLine
-          + '<br><span style="color:#00e676">→ WP: '
-          + bearing.toFixed(1) + '° · ' + d + '</span>';
+        setHud('→ ' + bearing.toFixed(0) + '°  ·  ' + d, llStr, '#34c759');
       } else {
-        hud.textContent = posLine;
+        setHud('POSITION ACQUIRED', llStr, '#00bfff');
       }
     };
 
     window.centerOnBoat = function() {
-      if (marker) { map.setView(marker.getLatLng(), map.getZoom()); locked = true; }
+      if (marker) {
+        map.setView(marker.getLatLng(), map.getZoom());
+        locked = true;
+      }
     };
 
     window.setWaypointMarker = function(lat, lon) {
       if (wpMarker) {
         wpMarker.setLatLng([lat, lon]);
       } else {
-        wpMarker = L.circleMarker([lat, lon],{
-          color:'#00e676',fillColor:'#00e676',fillOpacity:0.6,radius:9,weight:2
-        }).addTo(map);
+        wpMarker = L.marker([lat, lon], { icon:wpIconDef }).addTo(map);
       }
+      updatePathLine();
     };
 
     window.clearWaypointMarker = function() {
       if (wpMarker) { map.removeLayer(wpMarker); wpMarker = null; }
+      updatePathLine();
     };
 
     map.on('dragstart', function() { locked = false; });
 
-    // Tap anywhere on the map to drop a waypoint.
     map.on('click', function(e) {
       window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'waypoint',
-        lat: e.latlng.lat,
-        lon: e.latlng.lng
+        type:'waypoint',
+        lat:e.latlng.lat,
+        lon:e.latlng.lng
       }));
     });
   </script>
@@ -144,22 +233,23 @@ function modeColor(mode: string | undefined): string {
 // ── Screen ────────────────────────────────────────────────────────────────────
 export default function MapScreen({ route, navigation }: Props) {
   const { ip } = route.params;
-  const { data, connected } = useTelemetry();
+  const { data } = useTelemetry();
   const webViewRef    = useRef<WebView>(null);
   const insets        = useSafeAreaInsets();
   const currentGpsRef = useRef<{ lat: number; lon: number } | null>(null);
 
-  const [waypoint,  setWaypoint]  = useState<{ lat: number; lon: number } | null>(null);
-  const [wpBearing, setWpBearing] = useState<number | null>(null);
-  const [wpDistM,   setWpDistM]   = useState<number | null>(null);
+  const [waypoint, setWaypoint] = useState<{ lat: number; lon: number } | null>(null);
   const [cruiseModalOpen, setCruiseModalOpen] = useState(false);
 
-  // Update boat marker and bearing HUD whenever GPS or waypoint changes.
+  // Update boat marker and HUD whenever GPS, waypoint, or captured flag
+  // changes. Path-line and bearing/distance are computed in HTML from the
+  // injected args.
   useEffect(() => {
     if (!webViewRef.current || !data) return;
     const lat    = parseFloat(data.lat ?? '');
     const lon    = parseFloat(data.lon ?? '');
     const hasFix = data.gps_fix === true && !isNaN(lat) && !isNaN(lon);
+    const cap    = data.captured === true;
 
     if (hasFix) currentGpsRef.current = { lat, lon };
 
@@ -168,15 +258,13 @@ export default function MapScreen({ route, navigation }: Props) {
     if (hasFix && waypoint) {
       bearing = bearingTo(lat, lon, waypoint.lat, waypoint.lon);
       dist    = distanceTo(lat, lon, waypoint.lat, waypoint.lon);
-      setWpBearing(bearing);
-      setWpDistM(dist);
     }
 
     webViewRef.current.injectJavaScript(
       `window.updateBoat(${hasFix ? lat : 0},${hasFix ? lon : 0},${hasFix},` +
-      `${bearing ?? 'null'},${dist ?? 'null'});true;`
+      `${bearing ?? 'null'},${dist ?? 'null'},${cap});true;`
     );
-  }, [data?.gps_fix, data?.lat, data?.lon, waypoint]);
+  }, [data?.gps_fix, data?.lat, data?.lon, data?.captured, waypoint]);
 
   // Handle tap-on-map messages from the WebView.
   const handleMapMessage = useCallback((msgData: string) => {
@@ -191,13 +279,11 @@ export default function MapScreen({ route, navigation }: Props) {
       const d   = cur ? distanceTo(cur.lat, cur.lon, wpLat, wpLon) : null;
 
       setWaypoint({ lat: wpLat, lon: wpLon });
-      if (b !== null) setWpBearing(b);
-      if (d !== null) setWpDistM(d);
 
       webViewRef.current?.injectJavaScript(`window.setWaypointMarker(${wpLat},${wpLon});true;`);
       if (cur && b !== null && d !== null) {
         webViewRef.current?.injectJavaScript(
-          `window.updateBoat(${cur.lat},${cur.lon},true,${b.toFixed(2)},${d.toFixed(0)});true;`
+          `window.updateBoat(${cur.lat},${cur.lon},true,${b.toFixed(2)},${d.toFixed(0)},false);true;`
         );
       }
 
@@ -207,13 +293,11 @@ export default function MapScreen({ route, navigation }: Props) {
 
   const handleClearWaypoint = useCallback(() => {
     setWaypoint(null);
-    setWpBearing(null);
-    setWpDistM(null);
     webViewRef.current?.injectJavaScript('window.clearWaypointMarker();true;');
     const cur = currentGpsRef.current;
     if (cur) {
       webViewRef.current?.injectJavaScript(
-        `window.updateBoat(${cur.lat},${cur.lon},true,null,null);true;`
+        `window.updateBoat(${cur.lat},${cur.lon},true,null,null,false);true;`
       );
     }
     sendWaypoint(ip, null, null).catch(() => {});
@@ -227,7 +311,6 @@ export default function MapScreen({ route, navigation }: Props) {
   const mode      = data?.mode;
   const failsafe  = mode === 'FAILSAFE';
   const ackNeeded = data?.failsafe_ack === true;
-  const captured  = data?.captured === true;
   const cruiseUs  = data?.cruise_us;
 
   return (
@@ -251,7 +334,7 @@ export default function MapScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* ── Top control bar ───────────────────────────────────────── */}
+      {/* ── Top bar: just BACK + MODE ─────────────────────────────── */}
       <View
         style={[
           styles.topBarRow,
@@ -263,10 +346,7 @@ export default function MapScreen({ route, navigation }: Props) {
           <Text style={styles.chipBackText}>‹ HELM</Text>
         </TouchableOpacity>
 
-        <View style={styles.chip}>
-          <Text style={[styles.chipDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
-          <Text style={styles.chipMuted}>{connected ? 'CONN' : 'OFFLINE'}</Text>
-        </View>
+        <View style={styles.topBarSpacer} />
 
         {mode && (
           <View style={[styles.chip, styles.modeChip, { borderColor: modeColor(mode) }]}>
@@ -274,19 +354,9 @@ export default function MapScreen({ route, navigation }: Props) {
             <Text style={[styles.modeChipText, { color: modeColor(mode) }]}>{mode}</Text>
           </View>
         )}
-
-        <View style={styles.topBarSpacer} />
-
-        <TouchableOpacity
-          style={styles.centerBtn}
-          onPress={() => webViewRef.current?.injectJavaScript('window.centerOnBoat();true;')}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.centerBtnText}>CENTER</Text>
-        </TouchableOpacity>
       </View>
 
-      {/* ── Action bar (cruise + WP) ──────────────────────────────── */}
+      {/* ── Action bar (cruise + clear WP) ────────────────────────── */}
       <View
         style={[
           styles.actionBarRow,
@@ -311,29 +381,14 @@ export default function MapScreen({ route, navigation }: Props) {
         )}
       </View>
 
-      {/* Bearing + captured readout. Captured pill replaces the bearing
-          line when the boat has reached the waypoint. */}
-      {wpBearing !== null && (
-        <View
-          style={[
-            styles.bearingBar,
-            { top: (failsafe ? insets.top + 40 : insets.top) + 96 },
-          ]}
-          pointerEvents="none"
-        >
-          {captured ? (
-            <Text style={styles.capturedText}>✓ CAPTURED</Text>
-          ) : (
-            <Text style={styles.bearingText}>
-              {'→ '}
-              {wpBearing.toFixed(1)}°
-              {wpDistM !== null
-                ? `  ·  ${wpDistM >= 1000 ? (wpDistM / 1000).toFixed(2) + ' km' : Math.round(wpDistM) + ' m'}`
-                : ''}
-            </Text>
-          )}
-        </View>
-      )}
+      {/* ── Center-on-boat FAB (bottom right) ─────────────────────── */}
+      <TouchableOpacity
+        style={[styles.centerFab, { bottom: insets.bottom + 24 }]}
+        onPress={() => webViewRef.current?.injectJavaScript('window.centerOnBoat();true;')}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.centerFabIcon}>⊙</Text>
+      </TouchableOpacity>
 
       <CruiseModal
         visible={cruiseModalOpen}
@@ -360,12 +415,9 @@ const styles = StyleSheet.create({
   topBarSpacer:   { flex: 1 },
   chip:           { flexDirection: 'row', alignItems: 'center', backgroundColor: CHIP_BG, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 4 },
   chipBackText:   { color: Colors.accent, fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
-  chipMuted:      { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', letterSpacing: 1, fontWeight: '700' },
   chipDot:        { fontSize: 9, marginRight: 5 },
   modeChip:       { borderWidth: 1.5, paddingVertical: 5 },
   modeChipText:   { fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
-  centerBtn:      { backgroundColor: Colors.accent, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 4 },
-  centerBtnText:  { color: '#000', fontWeight: '800', fontSize: 11, letterSpacing: 2, fontFamily: 'monospace' },
 
   // Action bar (cruise + clear-wp)
   actionBarRow:      { position: 'absolute', left: 12, right: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -374,12 +426,20 @@ const styles = StyleSheet.create({
   cruisePillValue:   { color: Colors.accent, fontSize: 13, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
   cruisePillChevron: { color: Colors.accent, fontSize: 11, marginLeft: 6 },
 
-  wpClearBtn:       { backgroundColor: 'rgba(255,59,48,0.92)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 4 },
-  wpClearBtnText:   { color: '#fff', fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+  wpClearBtn:     { backgroundColor: 'rgba(255,59,48,0.92)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 4 },
+  wpClearBtnText: { color: '#fff', fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
 
-  // Bearing / captured readouts
-  bearingBar:    { position: 'absolute', left: 16, right: 16, alignItems: 'center' },
-  bearingText:   { backgroundColor: 'rgba(0,230,118,0.15)', color: '#00e676', fontFamily: 'monospace', fontSize: 14, fontWeight: '800', paddingHorizontal: 14, paddingVertical: 5, borderRadius: 4, overflow: 'hidden', letterSpacing: 1 },
-  capturedText:  { backgroundColor: 'rgba(52, 199, 89, 0.25)', color: '#34c759', fontFamily: 'monospace', fontSize: 14, fontWeight: '800', letterSpacing: 3, paddingHorizontal: 14, paddingVertical: 5, borderRadius: 4, overflow: 'hidden' },
+  // Center FAB (bottom-right)
+  centerFab: {
+    position: 'absolute',
+    right: 16,
+    width: 52, height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(10,15,26,0.92)',
+    borderWidth: 1.5, borderColor: Colors.accent,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.4, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4,
+    elevation: 4,
+  },
+  centerFabIcon: { color: Colors.accent, fontSize: 24, fontWeight: '800', lineHeight: 24 },
 });
-

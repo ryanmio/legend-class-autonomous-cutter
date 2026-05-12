@@ -43,28 +43,28 @@ function modeColor(mode: string | undefined): string {
   }
 }
 
-// One-line English summary of what the boat is doing right now. Computed
-// from mode + waypoint state + speed so the operator can glance once
-// instead of synthesising four separate fields.
+// One-line English summary of what the boat is doing right now. Mode
+// (MANUAL/AUTO/FAILSAFE) is conveyed by the colored chip in the header,
+// so this sentence describes the *condition* — never repeats the mode.
 function stateSentence(
   data: TelemetryData | null,
   connected: boolean
 ): { text: string; color: string } {
-  if (!connected)         return { text: 'OFFLINE',      color: Colors.danger        };
-  if (!data)              return { text: 'CONNECTING…',  color: Colors.textSecondary };
+  if (!connected) return { text: 'OFFLINE',     color: Colors.danger        };
+  if (!data)      return { text: 'CONNECTING…', color: Colors.textSecondary };
 
   if (data.mode === 'FAILSAFE') {
     return {
-      text:  data.failsafe_ack ? 'FAILSAFE · ACK_REQUIRED' : 'FAILSAFE',
+      text:  data.failsafe_ack ? 'ACK_REQUIRED · FLIP SwA UP' : 'OUTPUTS NEUTRAL',
       color: Colors.danger,
     };
   }
   if (data.mode === 'AUTO') {
-    if (!data.wp_set)  return { text: 'AUTO · NO WAYPOINT', color: Colors.warning };
-    if (!data.gps_fix) return { text: 'AUTO · NO GPS FIX',  color: Colors.warning };
-    if (data.captured) return { text: 'AUTO · CAPTURED',    color: Colors.success };
+    if (!data.wp_set)  return { text: 'NO WAYPOINT', color: Colors.warning };
+    if (!data.gps_fix) return { text: 'NO GPS FIX',  color: Colors.warning };
+    if (data.captured) return { text: 'CAPTURED',    color: Colors.success };
     const dist = data.wp_dist_m != null ? ` · ${data.wp_dist_m} M` : '';
-    return { text: `AUTO · TRACKING WP${dist}`, color: Colors.success };
+    return { text: `TRACKING WP${dist}`, color: Colors.success };
   }
 
   // MANUAL — speed-aware
@@ -72,7 +72,7 @@ function stateSentence(
   if (!isNaN(sp) && sp > 0.2) {
     return { text: `UNDERWAY · ${sp.toFixed(1)} KTS`, color: Colors.accent };
   }
-  return { text: 'AT REST · MANUAL CONTROL', color: Colors.textSecondary };
+  return { text: 'AT REST', color: Colors.textSecondary };
 }
 
 // ── Screen ─────────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ export default function HelmScreen({ route, navigation }: Props) {
 
         <View style={styles.statusRow}>
           <Text style={[styles.statusDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
-          <Text style={styles.statusLabel}>{connected ? 'CONN' : 'OFFLINE'}</Text>
+          <Text style={styles.statusLabel}>{connected ? 'ONLINE' : 'OFFLINE'}</Text>
           {logging && (
             <>
               <Text style={styles.statusSep}>·</Text>
@@ -178,7 +178,6 @@ export default function HelmScreen({ route, navigation }: Props) {
             value={battV != null ? battV.toFixed(2) : '--'}
             unit={battV != null ? 'V' : undefined}
             color={voltageColor(battV)}
-            sub={data?.batt_a != null ? `${data.batt_a} A` : undefined}
           />
         </View>
 
@@ -198,10 +197,18 @@ export default function HelmScreen({ route, navigation }: Props) {
               {cruiseUs != null ? `${cruiseUs}` : '--'}
               <Text style={styles.apCardUnit}>{cruiseUs != null ? ' µs' : ''}</Text>
             </Text>
+            <Text style={styles.apCardSub}>tap to change</Text>
           </TouchableOpacity>
 
-          <View style={styles.apCard}>
-            <Text style={styles.apCardLabel}>WAYPOINT</Text>
+          <TouchableOpacity
+            style={styles.apCard}
+            onPress={() => navigation.navigate('Map', { ip })}
+            activeOpacity={0.7}
+          >
+            <View style={styles.apCardHead}>
+              <Text style={styles.apCardLabel}>WAYPOINT</Text>
+              <Text style={styles.apCardChevron}>↗</Text>
+            </View>
             <Text style={styles.apCardValue}>
               {wpReady ? `${data!.wp_dist_m}` : '--'}
               <Text style={styles.apCardUnit}>{wpReady ? ' M' : ''}</Text>
@@ -209,9 +216,9 @@ export default function HelmScreen({ route, navigation }: Props) {
             <Text style={styles.apCardSub}>
               {wpReady && data!.wp_bearing != null
                 ? `→ ${data!.wp_bearing}°`
-                : 'no fix or no wp'}
+                : 'tap to set on map'}
             </Text>
-          </View>
+          </TouchableOpacity>
         </View>
 
         {/* ── LIGHTS ────────────────────────────────────────────────── */}
@@ -288,7 +295,7 @@ function Readout({
 
 // ── Styles ─────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  inner: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+  inner: { flex: 1, paddingHorizontal: 16, paddingTop: 20 },
 
   // Header
   header:      { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
@@ -300,8 +307,8 @@ const styles = StyleSheet.create({
   modeDot:     { fontSize: 10, marginRight: 6 },
   modeChipText:{ fontSize: 13, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
 
-  // Status sub-row
-  statusRow:    { flexDirection: 'row', alignItems: 'center', marginTop: 10, marginBottom: 18 },
+  // Status sub-row — generous gaps so it doesn't feel scrunched.
+  statusRow:    { flexDirection: 'row', alignItems: 'center', marginTop: 22, marginBottom: 32 },
   statusDot:    { fontSize: 9, marginRight: 4 },
   statusLabel:  { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', letterSpacing: 1, marginRight: 6 },
   statusSep:    { color: Colors.textSecondary, fontSize: 11, marginRight: 6, opacity: 0.5 },
@@ -312,7 +319,7 @@ const styles = StyleSheet.create({
   alarmText: { color: '#fff', fontWeight: 'bold', textAlign: 'center', fontFamily: 'monospace', letterSpacing: 1, fontSize: 12 },
 
   // Readouts
-  readoutRow:      { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 22 },
+  readoutRow:      { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 28 },
   readout:         { alignItems: 'center', flex: 1 },
   readoutLabel:    { color: Colors.textSecondary, fontSize: 10, letterSpacing: 2, fontFamily: 'monospace' },
   readoutValueRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 4 },
@@ -323,15 +330,15 @@ const styles = StyleSheet.create({
   // Section label (shared by AUTOPILOT and LIGHTS)
   sectionLabel: { color: Colors.textSecondary, fontSize: 10, letterSpacing: 3, fontFamily: 'monospace', fontWeight: '700', marginBottom: 8 },
 
-  // Autopilot
+  // Autopilot — no left-edge bar; chevron is the affordance.
   autopilotRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
-  apCard:       { flex: 1, backgroundColor: Colors.surface, borderRadius: 4, padding: 12, borderLeftWidth: 2, borderLeftColor: Colors.accent },
+  apCard:       { flex: 1, backgroundColor: Colors.surface, borderRadius: 4, padding: 14 },
   apCardHead:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   apCardLabel:  { color: Colors.textSecondary, fontSize: 10, letterSpacing: 2, fontFamily: 'monospace' },
-  apCardChevron:{ color: Colors.accent, fontSize: 12 },
-  apCardValue:  { color: Colors.accent, fontSize: 22, fontWeight: '800', fontFamily: 'monospace', marginTop: 4 },
+  apCardChevron:{ color: Colors.accent, fontSize: 22, lineHeight: 22, fontWeight: '700' },
+  apCardValue:  { color: Colors.accent, fontSize: 22, fontWeight: '800', fontFamily: 'monospace', marginTop: 6 },
   apCardUnit:   { fontSize: 12, fontWeight: '600', letterSpacing: 1 },
-  apCardSub:    { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', marginTop: 2 },
+  apCardSub:    { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', marginTop: 4, letterSpacing: 1 },
 
   // Lights
   lightsRow:      { flexDirection: 'row', gap: 10, marginBottom: 8 },

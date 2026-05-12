@@ -86,9 +86,6 @@ export default function TelemetryScreen({ navigation }: Props) {
             <Text style={styles.battUnit}>{battV != null ? ' V' : ''}</Text>
           </Text>
           <View style={styles.battMetaRow}>
-            {data?.batt_a != null && (
-              <Text style={styles.battMeta}>{data.batt_a} A</Text>
-            )}
             <Text style={styles.battThreshold}>
               warn &lt; {BATT_LOW_V} V   crit &lt; {BATT_CRIT_V} V
             </Text>
@@ -119,7 +116,11 @@ export default function TelemetryScreen({ navigation }: Props) {
               {data.heading   != null && <Row label="Heading" value={`${data.heading}°`} />}
 
               <Section label="GPS" />
-              <Row label="Fix" value={data.gps_fix ? '✓' : '✗'} warn={data.gps_fix === false} />
+              <Row
+                label="Fix"
+                value={data.gps_fix ? '✓ LOCKED' : 'NO FIX'}
+                warn={data.gps_fix === false}
+              />
               {data.gps_simulated && <Row label="Simulated" value="⚠ /sim_gps active" warn />}
               {data.gps_fix && data.lat != null && <Row label="Position" value={`${data.lat}, ${data.lon}`} />}
               {data.sats      != null && <Row label="Sats"   value={`${data.sats}`} />}
@@ -127,8 +128,8 @@ export default function TelemetryScreen({ navigation }: Props) {
               {data.course    != null && <Row label="Course" value={`${data.course}°`} />}
 
               <Section label="WAYPOINT" />
-              <Row label="Set"      value={data.wp_set ? '✓' : '✗'} />
-              <Row label="Captured" value={data.captured ? '✓' : '✗'} />
+              <Row label="Set"      value={data.wp_set   ? '✓ ARMED'    : 'none'} />
+              <Row label="Captured" value={data.captured ? '✓ CAPTURED' : data.wp_set ? 'pending' : '—'} />
               {data.wp_dist_m  != null && <Row label="Distance" value={`${data.wp_dist_m} m`} />}
               {data.wp_bearing != null && <Row label="Bearing"  value={`${data.wp_bearing}°`} />}
 
