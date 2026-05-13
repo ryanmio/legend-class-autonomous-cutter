@@ -49,8 +49,8 @@
 #define WATER_SENSOR_AFT_PIN  33  // Aft bilge
 
 // MOSFET gate outputs
-#define BILGE_PUMP_PIN    12   // Active HIGH → runs bilge pump direct from 4S
-#define RADAR_MOTOR_PIN   13   // Active HIGH → mast radar motor
+#define BILGE_PUMP_PIN    13   // Active HIGH → runs bilge pump direct from 4S
+#define RADAR_MOTOR_PIN   15   // Active HIGH → mast radar motor
 
 // ==================== PCA9685 CHANNEL ASSIGNMENTS ====================
 // All servos and ESCs are driven through the PCA9685 I2C PWM driver.

@@ -46,7 +46,9 @@
  *   CH4 (idx 3)  unused                          down=AUTO)
  *
  * Pool pre-flight (verify these BEFORE getting the boat wet):
- *   - Bilge MOSFET fix verified.
+ *   - Bilge MOSFET fix verified (signal wire 15 → 13; radar 13 → 15;
+ *     2026-05-12). Boat-side check: LED off + pump silent at idle, ESP32
+ *     boots normally. See PLANNING_NOTES.md.
  *   - Hatch waterproofing verified.
  *   - Manual TX control: rudder + throttle work.
  *   - SwA at MANUAL boot position. SwD at up.
@@ -127,6 +129,11 @@ static const uint8_t  GPS_RX_PIN = 17;
 static const uint8_t  GPS_TX_PIN = 4;
 static const uint32_t GPS_BAUD   = 9600;
 
+// ── LED pins ────────────────────────────────────────────────────────────────
+static const uint8_t PIN_NAV    = 18;
+static const uint8_t PIN_BRIDGE = 19;
+static const uint8_t PIN_DECK   = 23;
+
 // ── Capture ─────────────────────────────────────────────────────────────────
 static const float    CAPTURE_RADIUS_M = 3.0f;
 
@@ -181,6 +188,9 @@ static uint32_t guardAboveSinceMs = 0;
 
 // ── Output state ────────────────────────────────────────────────────────────
 static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_US;
+
+// ── LED state ───────────────────────────────────────────────────────────────
+static bool navOn = false, bridgeOn = false, deckOn = false;
 
 // ── IMU / heading hold state ────────────────────────────────────────────────
 static float    fusedHeading    = 0;
@@ -448,6 +458,9 @@ static void handleTelemetry() {
     doc["ch_rudder"]    = ch[IBUS_IDX_RUDDER];
     doc["ch_mode"]      = ch[IBUS_IDX_MODE];
     doc["ch_guard"]     = ch[IBUS_IDX_FAILSAFE_GUARD];
+    doc["nav_on"]       = navOn;
+    doc["bridge_on"]    = bridgeOn;
+    doc["deck_on"]      = deckOn;
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
@@ -608,6 +621,29 @@ static void handlePid() {
     server.send(200, "application/json", out);
 }
 
+static void handleLed() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    StaticJsonDocument<128> req;
+    if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
+
+    const char* light = req["light"] | "";
+    bool        on    = req["state"]  | false;
+    uint8_t     pin   = 0;
+    bool*       state = nullptr;
+
+    if      (strcmp(light, "nav")    == 0) { pin = PIN_NAV;    state = &navOn;    }
+    else if (strcmp(light, "bridge") == 0) { pin = PIN_BRIDGE; state = &bridgeOn; }
+    else if (strcmp(light, "deck")   == 0) { pin = PIN_DECK;   state = &deckOn;   }
+    else { server.send(400, "text/plain", "Unknown light"); return; }
+
+    *state = on;
+    digitalWrite(pin, on ? HIGH : LOW);
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
 static void handleSimGps() {
     addCORS();
     if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
@@ -759,6 +795,10 @@ void setup() {
     Serial.println();
     Serial.println("test_29_pool_integration");
 
+    pinMode(PIN_NAV,    OUTPUT); digitalWrite(PIN_NAV,    LOW);
+    pinMode(PIN_BRIDGE, OUTPUT); digitalWrite(PIN_BRIDGE, LOW);
+    pinMode(PIN_DECK,   OUTPUT); digitalWrite(PIN_DECK,   LOW);
+
     Wire.begin(21, 22);
     Wire.setClock(400000);
 
@@ -811,6 +851,8 @@ void setup() {
     server.on("/pid",       HTTP_OPTIONS, handleOptions);
     server.on("/sim_gps",   HTTP_POST,    handleSimGps);
     server.on("/sim_gps",   HTTP_OPTIONS, handleOptions);
+    server.on("/led",       HTTP_POST,    handleLed);
+    server.on("/led",       HTTP_OPTIONS, handleOptions);
     server.begin();
     Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
     Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",

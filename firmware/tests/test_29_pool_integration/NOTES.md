@@ -55,6 +55,7 @@ Merges:
 | POST   | /waypoint   | `{lat, lon}` or `{lat:null,lon:null}` | arms / clears waypoint |
 | POST   | /pid        | `{kp, kd}` (either or both)    | live tuning |
 | POST   | /sim_gps    | `{lat, lon}`                   | bench-only position injection |
+| POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
 
 ## Telemetry shape
 
@@ -74,6 +75,9 @@ Merges:
   "ch_rudder":    raw iBUS,
   "ch_mode":      raw iBUS,
   "ch_guard":     raw iBUS,
+  "nav_on":       bool,
+  "bridge_on":    bool,
+  "deck_on":      bool,
   "heading":      "0..360",
   "batt_v":       "X.XX"   (if INA219 present, volts),
   "batt_a":       "X.XX"   (if INA219 present, amps),
@@ -97,7 +101,8 @@ Merges:
 
 ## Pre-flight checklist (before getting wet)
 
-- [ ] Bilge MOSFET fix verified.
+- [x] Bilge MOSFET fix verified (signal wire 15 → 13; radar 13 → 15; 2026-05-12).
+  Boat-side check: LED off + pump silent at idle, ESP32 boots normally.
 - [ ] Hatch waterproofing verified.
 - [ ] Manual TX control: rudder + throttle work on the bench.
 - [ ] SwA at MANUAL boot position. SwD at up.

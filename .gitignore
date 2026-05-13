@@ -11,3 +11,7 @@ app/node_modules/
 app/package-lock.json
 package-lock.json
 package.json
+PLANNING_NOTES.md
+handoff prompt.md
+firmware/tests/AUTOPILOT_PLAN.md
+handoff_prompt.md

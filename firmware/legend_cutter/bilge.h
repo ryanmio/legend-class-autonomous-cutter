@@ -1,7 +1,7 @@
 // bilge.h
 // Water intrusion detection and bilge pump control.
 // Two sensors: forward bilge (GPIO 32) and aft bilge (GPIO 33).
-// Pump MOSFET gate driven from GPIO 12 (active HIGH).
+// Pump MOSFET gate driven from GPIO 13 (active HIGH).
 // Pump never runs dry: stops after BILGE_DRY_DELAY_MS of dry readings
 // and has a hard BILGE_MAX_RUN_MS emergency cutoff.
 
