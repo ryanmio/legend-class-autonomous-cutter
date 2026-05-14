@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Haptics from 'expo-haptics';
@@ -7,13 +7,14 @@ import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { BATT_LOW_V, BATT_CRIT_V, TelemetryData } from '../types';
 import { useTelemetry } from '../hooks/useTelemetry';
-import { setLed, setCruise as sendCruise } from '../services/esp32Service';
+import { setLed, setCruise as sendCruise, playAudio } from '../services/esp32Service';
 import { subscribeRunning } from '../services/telemetryLogger';
 import { CruiseModal } from '../components/CruiseModal';
 import Screen from '../components/Screen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Helm'>;
 type LightKey = 'nav' | 'bridge' | 'deck';
+type SoundKey = 'horn' | 'board' | 'gun';
 
 const LIGHTS: { key: LightKey; label: string }[] = [
   { key: 'nav',    label: 'NAV'    },
@@ -21,12 +22,12 @@ const LIGHTS: { key: LightKey; label: string }[] = [
   { key: 'deck',   label: 'DECK'   },
 ];
 
-// Placeholder sound tracks. No firmware audio endpoint yet — tapping
-// confirms then no-ops. Wire to /audio when the DF1201S port lands.
-const SOUNDS: { key: string; label: string; prompt: string }[] = [
-  { key: 'horn',  label: 'HORN',  prompt: 'Play HORN?'  },
-  { key: 'board', label: 'BOARD', prompt: 'Play BOARD hail?' },
-  { key: 'gun',   label: 'GUN',   prompt: 'Play GUN?'   },
+// test_29 plays track 1 for any sound key. Different tracks per key will
+// land in firmware once we decide a mapping.
+const SOUNDS: { key: SoundKey; label: string }[] = [
+  { key: 'horn',  label: 'HORN'  },
+  { key: 'board', label: 'BOARD' },
+  { key: 'gun',   label: 'GUN'   },
 ];
 
 const NAV: { screen: 'Map' | 'Telemetry' | 'Systems'; label: string }[] = [
@@ -119,17 +120,10 @@ export default function HelmScreen({ route, navigation }: Props) {
     });
   }, [ip]);
 
-  const playSound = useCallback((label: string, prompt: string) => {
+  const playSound = useCallback((key: SoundKey) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert(
-      prompt,
-      'Audio firmware not yet wired — this is a placeholder.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Play',   onPress: () => { /* no-op until /audio lands */ } },
-      ]
-    );
-  }, []);
+    playAudio(ip, key).catch(() => {});
+  }, [ip]);
 
   return (
     <Screen>
@@ -266,11 +260,11 @@ export default function HelmScreen({ route, navigation }: Props) {
         {/* ── SOUND ─────────────────────────────────────────────────── */}
         <Text style={[styles.sectionLabel, styles.sectionLabelGap]}>SOUND</Text>
         <View style={styles.lightsRow}>
-          {SOUNDS.map(({ key, label, prompt }) => (
+          {SOUNDS.map(({ key, label }) => (
             <TouchableOpacity
               key={key}
               style={styles.lightBtn}
-              onPress={() => playSound(label, prompt)}
+              onPress={() => playSound(key)}
               activeOpacity={0.7}
             >
               <Text style={styles.lightBtnText}>{label}</Text>

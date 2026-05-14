@@ -70,6 +70,8 @@
 #include <Adafruit_INA219.h>
 #include "ICM_20948.h"
 #include <TinyGPSPlus.h>
+#include <SoftwareSerial.h>
+#include <DFRobot_DF1201S.h>
 #include <math.h>
 #include "secrets.h"
 
@@ -134,6 +136,13 @@ static const uint8_t PIN_NAV    = 18;
 static const uint8_t PIN_BRIDGE = 19;
 static const uint8_t PIN_DECK   = 23;
 
+// ── DF1201S audio (SoftwareSerial, all 3 HW UARTs taken) ────────────────────
+static const uint8_t  DFP_RX_PIN = 25;   // ESP32 RX ← DF1201S TX
+static const uint8_t  DFP_TX_PIN = 26;   // ESP32 TX → DF1201S RX
+static const uint32_t DFP_BAUD   = 115200;
+static const uint8_t  DFP_VOLUME = 20;   // 0..30
+static const int16_t  DFP_TRACK  = 1;    // all 3 app buttons play track 1 for now
+
 // ── Capture ─────────────────────────────────────────────────────────────────
 static const float    CAPTURE_RADIUS_M = 3.0f;
 
@@ -191,6 +200,11 @@ static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_
 
 // ── LED state ───────────────────────────────────────────────────────────────
 static bool navOn = false, bridgeOn = false, deckOn = false;
+
+// ── Audio state ─────────────────────────────────────────────────────────────
+static SoftwareSerial dfSerial(DFP_RX_PIN, DFP_TX_PIN);
+static DFRobot_DF1201S DF1201S;
+static bool audioOK = false;
 
 // ── IMU / heading hold state ────────────────────────────────────────────────
 static float    fusedHeading    = 0;
@@ -644,6 +658,29 @@ static void handleLed() {
     server.send(200, "application/json", "{\"ok\":true}");
 }
 
+static void handleAudio() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    if (!audioOK) {
+        server.send(503, "application/json",
+            "{\"ok\":false,\"err\":\"DF1201S not initialised\"}");
+        return;
+    }
+
+    // Body is accepted but ignored for now — all 3 app buttons play track 1.
+    DF1201S.playFileNum(DFP_TRACK);
+    Serial.printf("[AUDIO] play track %d\n", DFP_TRACK);
+
+    StaticJsonDocument<64> resp;
+    resp["ok"]    = true;
+    resp["track"] = DFP_TRACK;
+    char out[64];
+    serializeJson(resp, out);
+    server.send(200, "application/json", out);
+}
+
 static void handleSimGps() {
     addCORS();
     if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
@@ -837,6 +874,31 @@ void setup() {
     gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
     Serial.printf("GPS on UART2 RX=GPIO%d TX=GPIO%d\n", GPS_RX_PIN, GPS_TX_PIN);
 
+    // DF1201S audio. SoftwareSerial @ 115200 — all 3 HW UARTs are taken
+    // (USB / iBUS / GPS). If begin() fails, /audio returns 503 but
+    // autopilot, GPS, iBUS keep running.
+    dfSerial.begin(DFP_BAUD);
+    delay(1000);
+    {
+        uint32_t startMs = millis();
+        bool ok = false;
+        while (!(ok = DF1201S.begin(dfSerial))) {
+            if (millis() - startMs > 3000) break;
+            delay(250);
+        }
+        if (ok) {
+            DF1201S.setVol(DFP_VOLUME);
+            DF1201S.switchFunction(DF1201S.MUSIC);
+            delay(2000);
+            DF1201S.setPlayMode(DF1201S.SINGLE);
+            DF1201S.enableAMP();
+            audioOK = true;
+            Serial.printf("[AUDIO] DF1201S ready (vol=%u, track=%d).\n", DFP_VOLUME, DFP_TRACK);
+        } else {
+            Serial.println("[AUDIO] WARN: DF1201S did not ACK within 3 s — /audio disabled.");
+        }
+    }
+
     wifiSetup();
 
     server.on("/status",    HTTP_GET,     handleStatus);
@@ -853,6 +915,8 @@ void setup() {
     server.on("/sim_gps",   HTTP_OPTIONS, handleOptions);
     server.on("/led",       HTTP_POST,    handleLed);
     server.on("/led",       HTTP_OPTIONS, handleOptions);
+    server.on("/audio",     HTTP_POST,    handleAudio);
+    server.on("/audio",     HTTP_OPTIONS, handleOptions);
     server.begin();
     Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
     Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",

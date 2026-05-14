@@ -56,6 +56,7 @@ Merges:
 | POST   | /pid        | `{kp, kd}` (either or both)    | live tuning |
 | POST   | /sim_gps    | `{lat, lon}`                   | bench-only position injection |
 | POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
+| POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | plays DF1201S track 1 for any sound (per-sound mapping TBD). 503 if DF1201S didn't ACK at boot. |
 
 ## Telemetry shape
 

@@ -10,11 +10,7 @@
 //
 // Endpoint status as of test_29 (pool integration sketch):
 //   IMPLEMENTED in test_29: /status, /telemetry, /cruise, /waypoint,
-//                           /pid, /sim_gps
-//   PRODUCTION FIRMWARE   : /led  (toggles nav/bridge/deck lights —
-//                                  returns 404 on test_29, lights
-//                                  controls show in HelmScreen anyway
-//                                  for production firmware readiness)
+//                           /pid, /sim_gps, /led, /audio
 
 import { HTTP_PORT } from '../constants';
 import { PIDParams } from '../types';
@@ -74,8 +70,14 @@ export async function setSimGps(ip: string, lat: number, lon: number) {
   return post(ip, '/sim_gps', { lat, lon });
 }
 
-// Toggle hull lights. Returns 404 on test_29 — production firmware will
-// implement /led. HelmScreen catches errors silently until then.
+// Toggle hull lights.
 export async function setLed(ip: string, light: 'nav' | 'bridge' | 'deck', state: boolean) {
   return post(ip, '/led', { light, state });
+}
+
+// Play an audio cue on the DF1201S. test_29 ignores `sound` and plays
+// track 1 for any value; the key still goes over the wire so firmware
+// can branch on it once track mapping is decided.
+export async function playAudio(ip: string, sound: 'horn' | 'board' | 'gun') {
+  return post(ip, '/audio', { sound });
 }
