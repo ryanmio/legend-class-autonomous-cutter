@@ -79,5 +79,13 @@ export async function setLed(ip: string, light: 'nav' | 'bridge' | 'deck', state
 // track 1 for any value; the key still goes over the wire so firmware
 // can branch on it once track mapping is decided.
 export async function playAudio(ip: string, sound: 'horn' | 'board' | 'gun') {
-  return post(ip, '/audio', { sound });
+  console.log(`[audio] POST /audio sound=${sound}`);
+  try {
+    const res = await post(ip, '/audio', { sound });
+    console.log(`[audio] OK`, res);
+    return res;
+  } catch (e: any) {
+    console.warn(`[audio] FAIL sound=${sound}:`, e?.message ?? e);
+    throw e;
+  }
 }

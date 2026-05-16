@@ -1,6 +1,6 @@
 # test_29_pool_integration — Notes
 
-## Status: PENDING (write-time commit)
+## Status: BENCH-VERIFIED 2026-05-16 (GPS + audio + LEDs all working); pool run pending
 
 ## What this sketch is
 
@@ -34,6 +34,32 @@ Merges:
 6. **AUTO without a waypoint = neutral** — test_27's "AUTO holds
    heading at entry, runs cruise" placeholder is replaced. From here,
    AUTO means "drive to the active waypoint" or stay neutral.
+7. **POST /led + /audio** — HelmScreen light toggles (nav / bridge /
+   deck on GPIO 18 / 19 / 23) and the three sound buttons (horn /
+   board / gun, all play DF1201S track 1 for now). Telemetry exposes
+   `nav_on`, `bridge_on`, `deck_on`, `audio_ok` so the app can
+   reconcile its optimistic state and surface "audio dead" without
+   USB.
+
+## Serial architecture (non-obvious)
+
+ESP32 has 3 hardware UARTs and we have 4 serial peripherals (USB
+Serial / iBUS / GPS / DF1201S). Allocation:
+
+| UART | Peripheral | Baud |
+|------|-----------|------|
+| UART0 (USB)       | debug Serial                 | 115200 |
+| UART1 (GPIO 16)   | iBUS RX-only                 | 115200 |
+| UART2 (GPIO 25/26) | **DF1201S audio**           | 115200 |
+| SoftwareSerial (GPIO 17/4) | **GPS BN-220**       | 9600   |
+
+GPS displaced to SoftwareSerial because DF1201S needs 115200 and
+SoftwareSerial-at-115200 is unreliable on ESP32 with WiFi active
+(empirically confirmed 2026-05-16 — begin() always timed out).
+SoftwareSerial-at-9600 is well within library limits and GPS NMEA is
+checksum-protected so dropped bytes just mean dropped sentences, not
+corrupted fixes. **Don't move GPS back to UART2 without moving
+DF1201S off it.** Requires the `EspSoftwareSerial` library.
 
 ## What's deliberately NOT here
 
@@ -79,6 +105,7 @@ Merges:
   "nav_on":       bool,
   "bridge_on":    bool,
   "deck_on":      bool,
+  "audio_ok":     bool,    // true if DF1201S ACKed at boot; /audio returns 503 when false
   "heading":      "0..360",
   "batt_v":       "X.XX"   (if INA219 present, volts),
   "batt_a":       "X.XX"   (if INA219 present, amps),
@@ -112,6 +139,9 @@ Merges:
 - [ ] PID live-set to conservative values (Kp=3.0, Kd=8.0 default is fine).
 - [ ] Cruise set low to start (1660 default; iterate).
 - [ ] Props on, rudder linkage free, hatch sealed.
+- [x] HelmScreen LED toggles confirmed (nav / bridge / deck) — 2026-05-16.
+- [x] HelmScreen sound buttons confirmed (track 1 plays) — 2026-05-16.
+- [x] GPS still gets a fix on SoftwareSerial after the UART swap — 2026-05-16.
 
 ## Pool sequence (per AUTOPILOT_PLAN test_32)
 

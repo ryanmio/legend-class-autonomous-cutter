@@ -136,7 +136,7 @@ static const uint8_t PIN_NAV    = 18;
 static const uint8_t PIN_BRIDGE = 19;
 static const uint8_t PIN_DECK   = 23;
 
-// ── DF1201S audio (SoftwareSerial, all 3 HW UARTs taken) ────────────────────
+// ── DF1201S audio (HardwareSerial(2); GPS displaced to SoftwareSerial) ─────
 static const uint8_t  DFP_RX_PIN = 25;   // ESP32 RX ← DF1201S TX
 static const uint8_t  DFP_TX_PIN = 26;   // ESP32 TX → DF1201S RX
 static const uint32_t DFP_BAUD   = 115200;
@@ -152,7 +152,11 @@ static Adafruit_INA219          ina219(INA219_ADDR);
 static ICM_20948_I2C            myICM;
 static TinyGPSPlus              gps;
 static HardwareSerial           ibusSerial(1);
-static HardwareSerial           gpsSerial(2);
+// GPS on SoftwareSerial @ 9600 (well within SS limits). UART2 is reserved
+// for the DF1201S, which needs 115200 — SoftwareSerial at that rate is
+// unreliable on ESP32 with WiFi active (confirmed empirically, see
+// test_11 NOTES). Same physical pins as before — no rewiring.
+static SoftwareSerial           gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
 static WebServer                server(80);
 static String                   boatIP;
 static bool                     ina219OK = false;
@@ -202,9 +206,10 @@ static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_
 static bool navOn = false, bridgeOn = false, deckOn = false;
 
 // ── Audio state ─────────────────────────────────────────────────────────────
-static SoftwareSerial dfSerial(DFP_RX_PIN, DFP_TX_PIN);
-static DFRobot_DF1201S DF1201S;
-static bool audioOK = false;
+// DF1201S on HardwareSerial(2) @ 115200 — test_11's proven path.
+static HardwareSerial   dfSerial(2);
+static DFRobot_DF1201S  DF1201S;
+static bool             audioOK = false;
 
 // ── IMU / heading hold state ────────────────────────────────────────────────
 static float    fusedHeading    = 0;
@@ -871,13 +876,14 @@ void setup() {
     Serial.printf("iBUS on GPIO%d, mode=CH%d (idx %d).\n",
         IBUS_RX_PIN, IBUS_IDX_MODE + 1, IBUS_IDX_MODE);
 
-    gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-    Serial.printf("GPS on UART2 RX=GPIO%d TX=GPIO%d\n", GPS_RX_PIN, GPS_TX_PIN);
+    gpsSerial.begin(GPS_BAUD);
+    Serial.printf("GPS on SoftwareSerial RX=GPIO%d TX=GPIO%d @ %lu baud\n",
+                  GPS_RX_PIN, GPS_TX_PIN, GPS_BAUD);
 
-    // DF1201S audio. SoftwareSerial @ 115200 — all 3 HW UARTs are taken
-    // (USB / iBUS / GPS). If begin() fails, /audio returns 503 but
+    // DF1201S audio on HardwareSerial(2) — test_11's proven path. If
+    // begin() fails (wiring/power issue), /audio returns 503 but
     // autopilot, GPS, iBUS keep running.
-    dfSerial.begin(DFP_BAUD);
+    dfSerial.begin(DFP_BAUD, SERIAL_8N1, DFP_RX_PIN, DFP_TX_PIN);
     delay(1000);
     {
         uint32_t startMs = millis();
