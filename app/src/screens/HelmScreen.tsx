@@ -125,6 +125,13 @@ export default function HelmScreen({ route, navigation }: Props) {
     playAudio(ip, key).catch(() => {});
   }, [ip]);
 
+  // Bilge summary: count of wet zones (0..3). Drives the helm status
+  // card; full controls live on SystemsScreen.
+  const wetCount =
+    (data?.bilge_fwd  ? 1 : 0) +
+    (data?.bilge_mid  ? 1 : 0) +
+    (data?.bilge_rear ? 1 : 0);
+
   return (
     <Screen>
       <View style={styles.inner}>
@@ -164,11 +171,11 @@ export default function HelmScreen({ route, navigation }: Props) {
           </Text>
         </View>
 
-        {/* ── BILGE ALARM (conditional) ─────────────────────────────── */}
-        {(data?.bilge_fwd || data?.bilge_aft) && (
+        {/* ── BILGE ALARM (conditional, top of screen) ───────────────── */}
+        {(data?.bilge_fwd || data?.bilge_mid || data?.bilge_rear) && (
           <View style={styles.alarm}>
             <Text style={styles.alarmText}>
-              ⚠ BILGE WATER DETECTED — PUMP {data?.pump ? 'ON' : 'OFF'}
+              ⚠ WATER DETECTED — PUMP {data?.pump ? 'ON' : 'OFF'}
             </Text>
           </View>
         )}
@@ -236,6 +243,21 @@ export default function HelmScreen({ route, navigation }: Props) {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── BILGE STATUS (compact; full controls on SystemsScreen) ── */}
+        <TouchableOpacity
+          style={styles.bilgeCard}
+          onPress={() => navigation.navigate('Systems', { ip })}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.bilgeCardLabel, wetCount > 0 && styles.bilgeCardLabelWet]}>
+            BILGE
+          </Text>
+          <Text style={[styles.bilgeCardValue, wetCount > 0 && styles.bilgeCardValueWet]}>
+            {wetCount}/3 {wetCount > 0 ? 'FLOODED' : 'DRY'}
+            {data?.pump ? ' · PUMP ON' : ''}
+          </Text>
+        </TouchableOpacity>
 
         {/* ── LIGHTS ────────────────────────────────────────────────── */}
         <Text style={styles.sectionLabel}>LIGHTS</Text>
@@ -378,6 +400,14 @@ const styles = StyleSheet.create({
   lightBtnOn:     { backgroundColor: Colors.accent, borderColor: Colors.accent },
   lightBtnText:   { color: Colors.textSecondary, fontWeight: '800', fontSize: 12, letterSpacing: 2, fontFamily: 'monospace' },
   lightBtnTextOn: { color: '#000' },
+
+  // Bilge status card — compact one-liner on Helm. Full controls live
+  // on SystemsScreen. Card goes red when any zone wet.
+  bilgeCard:           { backgroundColor: Colors.surface, borderRadius: 4, padding: 12, marginTop: 8, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  bilgeCardLabel:      { color: Colors.textSecondary, fontSize: 10, letterSpacing: 2, fontFamily: 'monospace', fontWeight: '800' },
+  bilgeCardLabelWet:   { color: Colors.danger },
+  bilgeCardValue:      { color: Colors.textPrimary, fontSize: 13, letterSpacing: 1, fontFamily: 'monospace', fontWeight: '700' },
+  bilgeCardValueWet:   { color: Colors.danger },
 
   // Nav bar (bottom)
   navBar:      { flexDirection: 'row', borderTopWidth: 1, borderTopColor: Colors.surface, paddingTop: 10, paddingBottom: 6 },

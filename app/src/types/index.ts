@@ -60,14 +60,21 @@ export interface TelemetryData {
   pid_kp?: string;
   pid_kd?: string;
 
-  // ── Aspirational fields (production firmware — currently absent) ─
-  // Left optional so screens that reference them don't break when
-  // wired against test_29; will populate when production firmware lands.
+  // Bilge / damage-control. Three zones since test_29 (forward
+  // compartment, main bilge at pump, rear compartment). pump reflects
+  // current MOSFET output; pump_manual=true means operator forced via
+  // POST /bilge (auto-clears after 60 s in firmware).
   bilge_fwd?: boolean;
-  bilge_aft?: boolean;
+  bilge_mid?: boolean;
+  bilge_rear?: boolean;
+  bilge_aft?: boolean;        // legacy alias (pre-3-zone telemetry); unused going forward
   pump?: boolean;
+  pump_manual?: boolean;
+
+  // Aspirational — production firmware only.
   depth_m?: string;
   sonar_ok?: boolean;
+
   nav_on?: boolean;
   bridge_on?: boolean;
   deck_on?: boolean;

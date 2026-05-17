@@ -61,6 +61,22 @@ checksum-protected so dropped bytes just mean dropped sentences, not
 corrupted fixes. **Don't move GPS back to UART2 without moving
 DF1201S off it.** Requires the `EspSoftwareSerial` library.
 
+## Bilge pinout
+
+| GPIO | Role | Wiring |
+|------|------|--------|
+| 13 | BILGE_PUMP (MOSFET gate, active HIGH) | signal → MOSFET gate; pump is 14 V from battery |
+| 32 | BILGE_FWD_SENSOR (forward compartment, active LOW) | probe pair: one to GPIO 32, one to GND. Internal pullup. |
+| 33 | BILGE_MID_SENSOR (main bilge at pump, active LOW) | same wiring as fwd |
+| 5  | BILGE_REAR_SENSOR (rear compartment, active LOW) | same wiring as fwd. GPIO 5 is a strapping pin (SDIO slave mode) but only matters for that boot path — safe as a sensor input. |
+
+Pump control loop runs every loop() iteration:
+- `wet = (fwd LOW) || (mid LOW) || (rear LOW)`
+- pump auto-on while wet AND for 5 s after the last wet reading (dry-delay
+  prevents short-cycle on intermittent splash)
+- `POST /bilge {on:true}` forces pump; auto-clears 60 s later (safety
+  against forgotten "on" draining battery)
+
 ## What's deliberately NOT here
 
 - Multi-waypoint missions (pool too small per `project_pool_environment`
@@ -83,6 +99,7 @@ DF1201S off it.** Requires the `EspSoftwareSerial` library.
 | POST   | /sim_gps    | `{lat, lon}`                   | bench-only position injection |
 | POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
 | POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | plays DF1201S track 1 for any sound (per-sound mapping TBD). 503 if DF1201S didn't ACK at boot. |
+| POST   | /bilge      | `{on:bool}` | manual pump override. `on:true` forces pump for up to 60 s (auto-clears); `on:false` releases. Auto-pump-on-leak continues to fire regardless. |
 
 ## Telemetry shape
 
@@ -106,6 +123,11 @@ DF1201S off it.** Requires the `EspSoftwareSerial` library.
   "bridge_on":    bool,
   "deck_on":      bool,
   "audio_ok":     bool,    // true if DF1201S ACKed at boot; /audio returns 503 when false
+  "bilge_fwd":    bool,    // forward compartment sensor wet
+  "bilge_mid":    bool,    // main bilge sensor wet (at pump)
+  "bilge_rear":   bool,    // rear compartment sensor wet
+  "pump":         bool,    // pump MOSFET currently on
+  "pump_manual":  bool,    // operator forced via /bilge (auto-clears 60 s after last on)
   "heading":      "0..360",
   "batt_v":       "X.XX"   (if INA219 present, volts),
   "batt_a":       "X.XX"   (if INA219 present, amps),
@@ -142,6 +164,8 @@ DF1201S off it.** Requires the `EspSoftwareSerial` library.
 - [x] HelmScreen LED toggles confirmed (nav / bridge / deck) — 2026-05-16.
 - [x] HelmScreen sound buttons confirmed (track 1 plays) — 2026-05-16.
 - [x] GPS still gets a fix on SoftwareSerial after the UART swap — 2026-05-16.
+- [ ] All 3 bilge sensors trigger pump on contact with a wet rag at the probe pads. PUMP turns on. Pump stops 5 s after rag removed. Damage-control panel in HelmScreen lights the matching zone red.
+- [ ] Manual PUMP button in HelmScreen turns pump on (PUMP* indicator) for ~60 s, then auto-clears.
 
 ## Pool sequence (per AUTOPILOT_PLAN test_32)
 

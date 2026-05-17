@@ -136,6 +136,21 @@ static const uint8_t PIN_NAV    = 18;
 static const uint8_t PIN_BRIDGE = 19;
 static const uint8_t PIN_DECK   = 23;
 
+// ── Bilge: 3 water sensors + 1 pump MOSFET ──────────────────────────────────
+// Sensor probes: active LOW (commercial water modules and bare probes with
+// internal pullup both pull the GPIO down when wet). Pump is active HIGH
+// via the MOSFET fixed 2026-05-12 (signal wire moved to GPIO 13).
+//   GPIO 5  is a strapping pin but only governs SDIO-slave boot mode (which
+//           we don't use). Safe as a sensor input for normal flash boot.
+//           Internal pullup gives us a defined HIGH=dry state at idle.
+static const uint8_t PIN_BILGE_FWD_SENSOR  = 32;   // forward compartment probe
+static const uint8_t PIN_BILGE_MID_SENSOR  = 33;   // main bilge probe (at pump)
+static const uint8_t PIN_BILGE_REAR_SENSOR = 5;    // rear compartment probe
+static const uint8_t PIN_BILGE_PUMP        = 13;   // MOSFET gate, active HIGH
+
+static const uint32_t BILGE_DRY_DELAY_MS    = 5000;   // keep pumping this long after all sensors read dry
+static const uint32_t BILGE_MANUAL_TIMEOUT_MS = 60000; // manual /bilge {on:true} auto-clears after this
+
 // ── DF1201S audio (HardwareSerial(2); GPS displaced to SoftwareSerial) ─────
 static const uint8_t  DFP_RX_PIN = 25;   // ESP32 RX ← DF1201S TX
 static const uint8_t  DFP_TX_PIN = 26;   // ESP32 TX → DF1201S RX
@@ -204,6 +219,13 @@ static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_
 
 // ── LED state ───────────────────────────────────────────────────────────────
 static bool navOn = false, bridgeOn = false, deckOn = false;
+
+// ── Bilge state ─────────────────────────────────────────────────────────────
+static bool     bilgeFwdWet = false, bilgeMidWet = false, bilgeRearWet = false;
+static bool     pumpOn      = false;   // current pump output state
+static bool     pumpManual  = false;   // operator forced via /bilge
+static uint32_t lastWetMs   = 0;       // last time ANY sensor was wet
+static uint32_t manualUntilMs = 0;     // monotonic deadline for pumpManual auto-clear
 
 // ── Audio state ─────────────────────────────────────────────────────────────
 // DF1201S on HardwareSerial(2) @ 115200 — test_11's proven path.
@@ -389,6 +411,36 @@ static void pollIna219() {
     shuntMa    = ina219.getCurrent_mA();
 }
 
+// ── Bilge: read sensors, run pump on any-wet-OR-manual with dry-delay ──────
+// Active LOW sensors (LOW = wet). Pump auto-runs while any sensor is wet
+// and for BILGE_DRY_DELAY_MS after the last wet reading. /bilge {on:true}
+// forces the pump until either /bilge {on:false} or BILGE_MANUAL_TIMEOUT_MS
+// elapses — prevents a forgotten "on" from draining the battery.
+static void pollBilge() {
+    bilgeFwdWet  = (digitalRead(PIN_BILGE_FWD_SENSOR)  == LOW);
+    bilgeMidWet  = (digitalRead(PIN_BILGE_MID_SENSOR)  == LOW);
+    bilgeRearWet = (digitalRead(PIN_BILGE_REAR_SENSOR) == LOW);
+
+    bool anyWet = bilgeFwdWet || bilgeMidWet || bilgeRearWet;
+    if (anyWet) lastWetMs = millis();
+
+    if (pumpManual && (int32_t)(millis() - manualUntilMs) >= 0) {
+        pumpManual = false;
+        Serial.println("[BILGE] manual override auto-cleared (timeout).");
+    }
+
+    bool autoOn = anyWet || (lastWetMs != 0 && (millis() - lastWetMs) < BILGE_DRY_DELAY_MS);
+    bool wantOn = pumpManual || autoOn;
+
+    if (wantOn != pumpOn) {
+        pumpOn = wantOn;
+        digitalWrite(PIN_BILGE_PUMP, pumpOn ? HIGH : LOW);
+        Serial.printf("[BILGE] pump %s (fwd=%d mid=%d rear=%d manual=%d)\n",
+                      pumpOn ? "ON" : "off",
+                      (int)bilgeFwdWet, (int)bilgeMidWet, (int)bilgeRearWet, (int)pumpManual);
+    }
+}
+
 // ── Position update ────────────────────────────────────────────────────────
 static void updatePosition() {
     while (gpsSerial.available()) gps.encode(gpsSerial.read());
@@ -480,6 +532,12 @@ static void handleTelemetry() {
     doc["nav_on"]       = navOn;
     doc["bridge_on"]    = bridgeOn;
     doc["deck_on"]      = deckOn;
+    doc["audio_ok"]     = audioOK;
+    doc["bilge_fwd"]    = bilgeFwdWet;
+    doc["bilge_mid"]    = bilgeMidWet;
+    doc["bilge_rear"]   = bilgeRearWet;
+    doc["pump"]         = pumpOn;
+    doc["pump_manual"]  = pumpManual;
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
@@ -686,6 +744,33 @@ static void handleAudio() {
     server.send(200, "application/json", out);
 }
 
+static void handleBilge() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    StaticJsonDocument<128> req;
+    if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
+
+    bool on = req["on"] | false;
+    if (on) {
+        pumpManual    = true;
+        manualUntilMs = millis() + BILGE_MANUAL_TIMEOUT_MS;
+        Serial.printf("[BILGE] manual pump ON (auto-clears in %lu ms)\n", BILGE_MANUAL_TIMEOUT_MS);
+    } else {
+        pumpManual = false;
+        Serial.println("[BILGE] manual pump cleared");
+    }
+
+    StaticJsonDocument<128> resp;
+    resp["ok"]            = true;
+    resp["pump_manual"]   = pumpManual;
+    resp["timeout_ms"]    = BILGE_MANUAL_TIMEOUT_MS;
+    char out[128];
+    serializeJson(resp, out);
+    server.send(200, "application/json", out);
+}
+
 static void handleSimGps() {
     addCORS();
     if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
@@ -841,6 +926,11 @@ void setup() {
     pinMode(PIN_BRIDGE, OUTPUT); digitalWrite(PIN_BRIDGE, LOW);
     pinMode(PIN_DECK,   OUTPUT); digitalWrite(PIN_DECK,   LOW);
 
+    pinMode(PIN_BILGE_FWD_SENSOR,  INPUT_PULLUP);
+    pinMode(PIN_BILGE_MID_SENSOR,  INPUT_PULLUP);
+    pinMode(PIN_BILGE_REAR_SENSOR, INPUT_PULLUP);
+    pinMode(PIN_BILGE_PUMP, OUTPUT); digitalWrite(PIN_BILGE_PUMP, LOW);
+
     Wire.begin(21, 22);
     Wire.setClock(400000);
 
@@ -923,6 +1013,8 @@ void setup() {
     server.on("/led",       HTTP_OPTIONS, handleOptions);
     server.on("/audio",     HTTP_POST,    handleAudio);
     server.on("/audio",     HTTP_OPTIONS, handleOptions);
+    server.on("/bilge",     HTTP_POST,    handleBilge);
+    server.on("/bilge",     HTTP_OPTIONS, handleOptions);
     server.begin();
     Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
     Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",
@@ -936,6 +1028,7 @@ void loop() {
     updateImu();
     readIbus();
     pollIna219();
+    pollBilge();
     updatePosition();
     server.handleClient();
 

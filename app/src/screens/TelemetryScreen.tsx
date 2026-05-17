@@ -150,12 +150,13 @@ export default function TelemetryScreen({ navigation }: Props) {
                 <Text style={styles.empty}>(no light state in telemetry)</Text>
               )}
 
-              {(data.bilge_fwd != null || data.bilge_aft != null) && (
+              {(data.bilge_fwd != null || data.bilge_mid != null || data.bilge_rear != null) && (
                 <>
                   <Section label="BILGE" />
-                  {data.bilge_fwd != null && <Row label="Fwd"  value={data.bilge_fwd ? '⚠ WET' : 'dry'} warn={data.bilge_fwd} />}
-                  {data.bilge_aft != null && <Row label="Aft"  value={data.bilge_aft ? '⚠ WET' : 'dry'} warn={data.bilge_aft} />}
-                  {data.pump      != null && <Row label="Pump" value={data.pump ? 'RUNNING' : 'off'} />}
+                  {data.bilge_fwd  != null && <Row label="Fwd"   value={data.bilge_fwd  ? '⚠ WET' : 'dry'} warn={data.bilge_fwd}  />}
+                  {data.bilge_mid  != null && <Row label="Bilge" value={data.bilge_mid  ? '⚠ WET' : 'dry'} warn={data.bilge_mid}  />}
+                  {data.bilge_rear != null && <Row label="Rear"  value={data.bilge_rear ? '⚠ WET' : 'dry'} warn={data.bilge_rear} />}
+                  {data.pump        != null && <Row label="Pump"  value={data.pump ? (data.pump_manual ? 'MANUAL' : 'AUTO') : 'off'} />}
                 </>
               )}
             </>

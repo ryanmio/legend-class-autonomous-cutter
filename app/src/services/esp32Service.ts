@@ -10,7 +10,7 @@
 //
 // Endpoint status as of test_29 (pool integration sketch):
 //   IMPLEMENTED in test_29: /status, /telemetry, /cruise, /waypoint,
-//                           /pid, /sim_gps, /led, /audio
+//                           /pid, /sim_gps, /led, /audio, /bilge
 
 import { HTTP_PORT } from '../constants';
 import { PIDParams } from '../types';
@@ -73,6 +73,13 @@ export async function setSimGps(ip: string, lat: number, lon: number) {
 // Toggle hull lights.
 export async function setLed(ip: string, light: 'nav' | 'bridge' | 'deck', state: boolean) {
   return post(ip, '/led', { light, state });
+}
+
+// Manual bilge-pump override. on=true forces the pump on until on=false
+// or 60 s elapses (firmware auto-clears to prevent forgotten "on" from
+// draining battery). Auto-pump-on-leak still fires regardless.
+export async function postBilge(ip: string, on: boolean) {
+  return post(ip, '/bilge', { on });
 }
 
 // Play an audio cue on the DF1201S. test_29 ignores `sound` and plays

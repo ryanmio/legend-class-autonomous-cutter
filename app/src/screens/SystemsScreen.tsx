@@ -1,27 +1,72 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
+import { useTelemetry } from '../hooks/useTelemetry';
+import { postBilge } from '../services/esp32Service';
 import Screen from '../components/Screen';
+import BoatDamagePanel from '../components/BoatDamagePanel';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Systems'>;
 
-// Consolidated systems page. WEAPONS, SURVEY, SETTINGS as sections in a
-// single scroll. All three are placeholders today — see comments in each
-// section for the gate that has to land before controls go live. When
-// any section grows substantial, it can be broken out into its own page.
-export default function SystemsScreen(_: Props) {
+// Consolidated systems page. BILGE is live; WEAPONS / SURVEY / SETTINGS
+// are placeholders today — see comments in each section for the gate
+// that has to land before controls go live. When any section grows
+// substantial, it can be broken out into its own page.
+export default function SystemsScreen({ route }: Props) {
+  const { ip } = route.params;
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>SYSTEMS</Text>
 
+        <BilgeSection ip={ip} />
         <WeaponsSection />
         <SurveySection />
         <SettingsSection />
       </ScrollView>
     </Screen>
+  );
+}
+
+// ── BILGE ──────────────────────────────────────────────────────────────────────
+// Damage-control panel: side-profile hull silhouette with three vertical
+// thirds that fill red when their bilge sensor is wet. PUMP button below
+// drives /bilge {on:bool}; auto-pump on any wet sensor is firmware-side.
+function BilgeSection({ ip }: { ip: string }) {
+  const { data } = useTelemetry();
+
+  const togglePump = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    postBilge(ip, !(data?.pump_manual ?? false)).catch(() => {});
+  }, [ip, data?.pump_manual]);
+
+  return (
+    <View style={styles.section}>
+      <SectionHeader label="BILGE" />
+
+      <BoatDamagePanel
+        fwdWet={!!data?.bilge_fwd}
+        midWet={!!data?.bilge_mid}
+        rearWet={!!data?.bilge_rear}
+      />
+
+      <TouchableOpacity
+        style={[styles.pumpBtn, data?.pump && styles.pumpBtnOn]}
+        onPress={togglePump}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.pumpBtnText, data?.pump && styles.pumpBtnTextOn]}>
+          PUMP {data?.pump ? 'ON' : 'OFF'}
+          {data?.pump_manual ? ' · MANUAL' : ''}
+        </Text>
+      </TouchableOpacity>
+      <Text style={styles.pumpSub}>
+        Auto fires on any wet sensor. Manual override stays on for 60 s.
+      </Text>
+    </View>
   );
 }
 
@@ -128,4 +173,10 @@ const styles = StyleSheet.create({
   btn:         { backgroundColor: Colors.surfaceLight, padding: 14, borderRadius: 4, alignItems: 'center', marginTop: 8 },
   btnDisabled: { opacity: 0.4 },
   btnText:     { color: Colors.accent, fontWeight: '800', fontSize: 12, letterSpacing: 2, fontFamily: 'monospace' },
+
+  pumpBtn:        { backgroundColor: Colors.surfaceLight, padding: 14, borderRadius: 4, alignItems: 'center' },
+  pumpBtnOn:      { backgroundColor: Colors.success, borderColor: Colors.success },
+  pumpBtnText:    { color: Colors.accent, fontWeight: '800', fontSize: 13, letterSpacing: 2, fontFamily: 'monospace' },
+  pumpBtnTextOn:  { color: '#000' },
+  pumpSub:        { color: Colors.textSecondary, fontSize: 10, letterSpacing: 1, fontFamily: 'monospace', marginTop: 8, fontStyle: 'italic' },
 });
