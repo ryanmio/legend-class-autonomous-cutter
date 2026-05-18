@@ -80,6 +80,7 @@ export interface TelemetryData {
   deck_on?: boolean;
   audio_ok?: boolean;
   radar_on?: boolean;
+  radar_speed?: number;     // 0-100, current PWM duty
 }
 
 export interface PIDParams {

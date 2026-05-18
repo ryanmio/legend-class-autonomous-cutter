@@ -154,16 +154,24 @@ static const uint32_t BILGE_MANUAL_TIMEOUT_MS = 60000; // manual /bilge {on:true
 // ── Radar motor (TRS-3D mast dish) ──────────────────────────────────────────
 // 3V planetary gear motor switched by a 2N2222 NPN on the low side.
 // ESP32 GPIO → 1kΩ → base; motor between 3.3V rail and collector;
-// emitter to GND. digitalWrite HIGH = motor on. No PWM — constant speed.
+// emitter to GND. PWM via LEDC peripheral at 20 kHz (above audible).
 //
 // GPIO 2 chosen because it's the only pin truly unclaimed in config.h
 // AND test_29. It's a boot-mode strapping pin but only matters when
-// GPIO 0 is also LOW (download mode) — normal boot ignores it. Internal
-// pulldown at boot keeps the transistor off until firmware enables it.
+// GPIO 0 is also LOW (download mode) — normal boot ignores it.
 // Side effect: GPIO 2 drives the onboard dev-board blue LED — that LED
-// will track radar state, which is a useful indicator. Supersedes the
-// old PCA9685 ch7 / GPIO 13 MOSFET designs.
-static const uint8_t PIN_RADAR_MOTOR = 2;
+// will track radar PWM, a useful indicator (will appear dim at low duty).
+// Supersedes the old PCA9685 ch7 / GPIO 13 MOSFET designs.
+//
+// NOTE: PWM-driving an inductive load (motor coil) without a flyback
+// diode anti-parallel across the motor will eventually fry the 2N2222
+// from back-EMF spikes. Operator (Ryan) is shipping without a diode for
+// now — add a 1N4148/1N4001 across the motor before sustained use.
+static const uint8_t  PIN_RADAR_MOTOR      = 2;
+static const uint8_t  RADAR_LEDC_CHANNEL   = 0;
+static const uint32_t RADAR_PWM_FREQ_HZ    = 20000;   // above audible
+static const uint8_t  RADAR_PWM_RESOLUTION = 8;       // 0..255 duty range
+static const uint8_t  RADAR_DEFAULT_SPEED  = 25;      // %, matches first app preset
 
 // ── DF1201S audio (HardwareSerial(2); GPS displaced to SoftwareSerial) ─────
 static const uint8_t  DFP_RX_PIN = 25;   // ESP32 RX ← DF1201S TX
@@ -235,7 +243,14 @@ static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_
 static bool navOn = false, bridgeOn = false, deckOn = false;
 
 // ── Radar state ─────────────────────────────────────────────────────────────
-static bool radarOn = false;
+static bool    radarOn    = false;
+static uint8_t radarSpeed = RADAR_DEFAULT_SPEED;   // 0..100
+
+static void applyRadarOutput() {
+    uint32_t maxDuty = (1u << RADAR_PWM_RESOLUTION) - 1u;       // 255 for 8-bit
+    uint32_t duty    = radarOn ? (maxDuty * radarSpeed / 100u) : 0u;
+    ledcWrite(RADAR_LEDC_CHANNEL, duty);
+}
 
 // ── Bilge state ─────────────────────────────────────────────────────────────
 static bool     bilgeFwdWet = false, bilgeMidWet = false, bilgeRearWet = false;
@@ -556,6 +571,7 @@ static void handleTelemetry() {
     doc["pump"]         = pumpOn;
     doc["pump_manual"]  = pumpManual;
     doc["radar_on"]     = radarOn;
+    doc["radar_speed"]  = radarSpeed;
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
@@ -744,13 +760,29 @@ static void handleRadar() {
     if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
     if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
 
-    StaticJsonDocument<64> req;
+    StaticJsonDocument<128> req;
     if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
 
-    radarOn = req["on"] | false;
-    digitalWrite(PIN_RADAR_MOTOR, radarOn ? HIGH : LOW);
-    Serial.printf("[RADAR] %s\n", radarOn ? "ON" : "off");
-    server.send(200, "application/json", radarOn ? "{\"ok\":true,\"on\":true}" : "{\"ok\":true,\"on\":false}");
+    // Both fields optional; only update what was sent.
+    if (req.containsKey("speed")) {
+        int s = req["speed"].as<int>();
+        if (s < 0)   s = 0;
+        if (s > 100) s = 100;
+        radarSpeed = (uint8_t)s;
+    }
+    if (req.containsKey("on")) {
+        radarOn = req["on"].as<bool>();
+    }
+    applyRadarOutput();
+    Serial.printf("[RADAR] %s @ %u%%\n", radarOn ? "ON" : "off", radarSpeed);
+
+    StaticJsonDocument<96> resp;
+    resp["ok"]    = true;
+    resp["on"]    = radarOn;
+    resp["speed"] = radarSpeed;
+    char out[96];
+    serializeJson(resp, out);
+    server.send(200, "application/json", out);
 }
 
 static void handleAudio() {
@@ -962,7 +994,11 @@ void setup() {
     pinMode(PIN_BILGE_MID_SENSOR,  INPUT_PULLUP);
     pinMode(PIN_BILGE_REAR_SENSOR, INPUT_PULLUP);
     pinMode(PIN_BILGE_PUMP,  OUTPUT); digitalWrite(PIN_BILGE_PUMP,  LOW);
-    pinMode(PIN_RADAR_MOTOR, OUTPUT); digitalWrite(PIN_RADAR_MOTOR, LOW);
+
+    // Radar motor: LEDC PWM, off at boot.
+    ledcSetup(RADAR_LEDC_CHANNEL, RADAR_PWM_FREQ_HZ, RADAR_PWM_RESOLUTION);
+    ledcAttachPin(PIN_RADAR_MOTOR, RADAR_LEDC_CHANNEL);
+    ledcWrite(RADAR_LEDC_CHANNEL, 0);
 
     Wire.begin(21, 22);
     Wire.setClock(400000);

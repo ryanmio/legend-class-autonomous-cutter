@@ -73,29 +73,53 @@ function BilgeSection({ ip }: { ip: string }) {
 
 // ── RADAR ──────────────────────────────────────────────────────────────────────
 // Mast-top TRS-3D radar dish. 3 V planetary gear motor switched by an
-// NPN transistor on GPIO 2 (firmware-side). Constant speed when on, off
-// when off. Telemetry's `radar_on` is authoritative.
+// NPN transistor on GPIO 2 (firmware-side, PWM via LEDC). Stepped speed
+// presets matching firmware's accepted range. OFF cuts PWM; any speed
+// preset sets that duty AND turns the radar on.
 function RadarSection({ ip }: { ip: string }) {
   const { data } = useTelemetry();
-  const on = !!data?.radar_on;
+  const on    = !!data?.radar_on;
+  const speed = data?.radar_speed ?? 0;
+  // The "active" preset is OFF when off, otherwise the current speed.
+  const activePreset: number = on ? speed : 0;
 
-  const toggle = useCallback(() => {
+  const pickPreset = useCallback((preset: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setRadar(ip, !on).catch(() => {});
-  }, [ip, on]);
+    if (preset === 0) {
+      setRadar(ip, { on: false }).catch(() => {});
+    } else {
+      setRadar(ip, { on: true, speed: preset }).catch(() => {});
+    }
+  }, [ip]);
+
+  const PRESETS = [
+    { value: 0,   label: 'OFF'  },
+    { value: 25,  label: '25%'  },
+    { value: 50,  label: '50%'  },
+    { value: 75,  label: '75%'  },
+    { value: 100, label: '100%' },
+  ] as const;
 
   return (
     <View style={styles.section}>
       <SectionHeader label="RADAR" />
-      <TouchableOpacity
-        style={[styles.pumpBtn, on && styles.pumpBtnOn]}
-        onPress={toggle}
-        activeOpacity={0.7}
-      >
-        <Text style={[styles.pumpBtnText, on && styles.pumpBtnTextOn]}>
-          RADAR DISH {on ? 'SPINNING' : 'STOPPED'}
-        </Text>
-      </TouchableOpacity>
+      <View style={styles.radarRow}>
+        {PRESETS.map((p) => {
+          const active = p.value === activePreset;
+          return (
+            <TouchableOpacity
+              key={p.value}
+              style={[styles.radarBtn, active && styles.radarBtnActive]}
+              onPress={() => pickPreset(p.value)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.radarBtnText, active && styles.radarBtnTextActive]}>
+                {p.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -209,4 +233,11 @@ const styles = StyleSheet.create({
   pumpBtnText:    { color: Colors.accent, fontWeight: '800', fontSize: 13, letterSpacing: 2, fontFamily: 'monospace' },
   pumpBtnTextOn:  { color: '#000' },
   pumpSub:        { color: Colors.textSecondary, fontSize: 10, letterSpacing: 1, fontFamily: 'monospace', marginTop: 8, fontStyle: 'italic' },
+
+  // Radar preset buttons — 5 across, the active one inverts to accent.
+  radarRow:           { flexDirection: 'row', gap: 6 },
+  radarBtn:           { flex: 1, backgroundColor: Colors.surface, borderRadius: 4, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: Colors.surfaceLight },
+  radarBtnActive:     { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  radarBtnText:       { color: Colors.textSecondary, fontWeight: '800', fontSize: 11, letterSpacing: 1, fontFamily: 'monospace' },
+  radarBtnTextActive: { color: '#000' },
 });

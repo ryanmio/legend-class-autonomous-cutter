@@ -82,9 +82,11 @@ export async function postBilge(ip: string, on: boolean) {
   return post(ip, '/bilge', { on });
 }
 
-// Radar mast motor (TRS-3D dish) on/off. Constant speed when on.
-export async function setRadar(ip: string, on: boolean) {
-  return post(ip, '/radar', { on });
+// Radar mast motor (TRS-3D dish). PWM speed 0-100%. `on:false` cuts
+// output regardless of speed; sending only `speed` updates the stored
+// duty without changing on/off state.
+export async function setRadar(ip: string, args: { on?: boolean; speed?: number }) {
+  return post(ip, '/radar', args);
 }
 
 // Play an audio cue on the DF1201S. test_29 ignores `sound` and plays
