@@ -69,6 +69,7 @@ DF1201S off it.** Requires the `EspSoftwareSerial` library.
 | 32 | BILGE_FWD_SENSOR (forward compartment, active LOW) | probe pair: one to GPIO 32, one to GND. Internal pullup. |
 | 33 | BILGE_MID_SENSOR (main bilge at pump, active LOW) | same wiring as fwd |
 | 5  | BILGE_REAR_SENSOR (rear compartment, active LOW) | same wiring as fwd. GPIO 5 is a strapping pin (SDIO slave mode) but only matters for that boot path — safe as a sensor input. |
+| 2  | RADAR_MOTOR (NPN base, active HIGH) | ESP32 GPIO 2 → 1 kΩ → 2N2222 base; 3.3 V → motor → collector; emitter → GND. Strapping pin (download mode) but only matters when GPIO 0 is LOW. Drives onboard dev-board LED as a side effect — useful radar-on indicator. |
 
 Pump control loop runs every loop() iteration:
 - `wet = (fwd LOW) || (mid LOW) || (rear LOW)`
@@ -100,6 +101,7 @@ Pump control loop runs every loop() iteration:
 | POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
 | POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | plays DF1201S track 1 for any sound (per-sound mapping TBD). 503 if DF1201S didn't ACK at boot. |
 | POST   | /bilge      | `{on:bool}` | manual pump override. `on:true` forces pump for up to 60 s (auto-clears); `on:false` releases. Auto-pump-on-leak continues to fire regardless. |
+| POST   | /radar      | `{on:bool}` | mast radar dish motor on/off (constant speed, no PWM). |
 
 ## Telemetry shape
 
@@ -128,6 +130,7 @@ Pump control loop runs every loop() iteration:
   "bilge_rear":   bool,    // rear compartment sensor wet
   "pump":         bool,    // pump MOSFET currently on
   "pump_manual":  bool,    // operator forced via /bilge (auto-clears 60 s after last on)
+  "radar_on":     bool,    // mast radar dish motor on/off
   "heading":      "0..360",
   "batt_v":       "X.XX"   (if INA219 present, volts),
   "batt_a":       "X.XX"   (if INA219 present, amps),
@@ -164,8 +167,9 @@ Pump control loop runs every loop() iteration:
 - [x] HelmScreen LED toggles confirmed (nav / bridge / deck) — 2026-05-16.
 - [x] HelmScreen sound buttons confirmed (track 1 plays) — 2026-05-16.
 - [x] GPS still gets a fix on SoftwareSerial after the UART swap — 2026-05-16.
-- [ ] All 3 bilge sensors trigger pump on contact with a wet rag at the probe pads. PUMP turns on. Pump stops 5 s after rag removed. Damage-control panel in HelmScreen lights the matching zone red.
-- [ ] Manual PUMP button in HelmScreen turns pump on (PUMP* indicator) for ~60 s, then auto-clears.
+- [ ] All 3 bilge sensors trigger pump on contact with a wet rag at the probe pads. PUMP turns on. Pump stops 5 s after rag removed. Damage-control panel in SystemsScreen lights the matching zone red.
+- [ ] Manual PUMP button in SystemsScreen turns pump on (MANUAL indicator) and then releases on second tap.
+- [ ] Radar toggle in SystemsScreen spins the mast dish on tap, stops on second tap. Onboard ESP32 LED tracks state.
 
 ## Pool sequence (per AUTOPILOT_PLAN test_32)
 

@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import { postBilge } from '../services/esp32Service';
+import { postBilge, setRadar } from '../services/esp32Service';
 import Screen from '../components/Screen';
 import BoatDamagePanel from '../components/BoatDamagePanel';
 
@@ -23,6 +23,7 @@ export default function SystemsScreen({ route }: Props) {
         <Text style={styles.title}>SYSTEMS</Text>
 
         <BilgeSection ip={ip} />
+        <RadarSection ip={ip} />
         <WeaponsSection />
         <SurveySection />
         <SettingsSection />
@@ -66,6 +67,35 @@ function BilgeSection({ ip }: { ip: string }) {
       <Text style={styles.pumpSub}>
         Auto fires on any wet sensor. Manual override stays on for 60 s.
       </Text>
+    </View>
+  );
+}
+
+// ── RADAR ──────────────────────────────────────────────────────────────────────
+// Mast-top TRS-3D radar dish. 3 V planetary gear motor switched by an
+// NPN transistor on GPIO 2 (firmware-side). Constant speed when on, off
+// when off. Telemetry's `radar_on` is authoritative.
+function RadarSection({ ip }: { ip: string }) {
+  const { data } = useTelemetry();
+  const on = !!data?.radar_on;
+
+  const toggle = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setRadar(ip, !on).catch(() => {});
+  }, [ip, on]);
+
+  return (
+    <View style={styles.section}>
+      <SectionHeader label="RADAR" />
+      <TouchableOpacity
+        style={[styles.pumpBtn, on && styles.pumpBtnOn]}
+        onPress={toggle}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.pumpBtnText, on && styles.pumpBtnTextOn]}>
+          RADAR DISH {on ? 'SPINNING' : 'STOPPED'}
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 }

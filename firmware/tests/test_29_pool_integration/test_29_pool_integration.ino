@@ -151,6 +151,20 @@ static const uint8_t PIN_BILGE_PUMP        = 13;   // MOSFET gate, active HIGH
 static const uint32_t BILGE_DRY_DELAY_MS    = 5000;   // keep pumping this long after all sensors read dry
 static const uint32_t BILGE_MANUAL_TIMEOUT_MS = 60000; // manual /bilge {on:true} auto-clears after this
 
+// ── Radar motor (TRS-3D mast dish) ──────────────────────────────────────────
+// 3V planetary gear motor switched by a 2N2222 NPN on the low side.
+// ESP32 GPIO → 1kΩ → base; motor between 3.3V rail and collector;
+// emitter to GND. digitalWrite HIGH = motor on. No PWM — constant speed.
+//
+// GPIO 2 chosen because it's the only pin truly unclaimed in config.h
+// AND test_29. It's a boot-mode strapping pin but only matters when
+// GPIO 0 is also LOW (download mode) — normal boot ignores it. Internal
+// pulldown at boot keeps the transistor off until firmware enables it.
+// Side effect: GPIO 2 drives the onboard dev-board blue LED — that LED
+// will track radar state, which is a useful indicator. Supersedes the
+// old PCA9685 ch7 / GPIO 13 MOSFET designs.
+static const uint8_t PIN_RADAR_MOTOR = 2;
+
 // ── DF1201S audio (HardwareSerial(2); GPS displaced to SoftwareSerial) ─────
 static const uint8_t  DFP_RX_PIN = 25;   // ESP32 RX ← DF1201S TX
 static const uint8_t  DFP_TX_PIN = 26;   // ESP32 TX → DF1201S RX
@@ -219,6 +233,9 @@ static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_
 
 // ── LED state ───────────────────────────────────────────────────────────────
 static bool navOn = false, bridgeOn = false, deckOn = false;
+
+// ── Radar state ─────────────────────────────────────────────────────────────
+static bool radarOn = false;
 
 // ── Bilge state ─────────────────────────────────────────────────────────────
 static bool     bilgeFwdWet = false, bilgeMidWet = false, bilgeRearWet = false;
@@ -538,6 +555,7 @@ static void handleTelemetry() {
     doc["bilge_rear"]   = bilgeRearWet;
     doc["pump"]         = pumpOn;
     doc["pump_manual"]  = pumpManual;
+    doc["radar_on"]     = radarOn;
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
@@ -719,6 +737,20 @@ static void handleLed() {
     *state = on;
     digitalWrite(pin, on ? HIGH : LOW);
     server.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handleRadar() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    StaticJsonDocument<64> req;
+    if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
+
+    radarOn = req["on"] | false;
+    digitalWrite(PIN_RADAR_MOTOR, radarOn ? HIGH : LOW);
+    Serial.printf("[RADAR] %s\n", radarOn ? "ON" : "off");
+    server.send(200, "application/json", radarOn ? "{\"ok\":true,\"on\":true}" : "{\"ok\":true,\"on\":false}");
 }
 
 static void handleAudio() {
@@ -929,7 +961,8 @@ void setup() {
     pinMode(PIN_BILGE_FWD_SENSOR,  INPUT_PULLUP);
     pinMode(PIN_BILGE_MID_SENSOR,  INPUT_PULLUP);
     pinMode(PIN_BILGE_REAR_SENSOR, INPUT_PULLUP);
-    pinMode(PIN_BILGE_PUMP, OUTPUT); digitalWrite(PIN_BILGE_PUMP, LOW);
+    pinMode(PIN_BILGE_PUMP,  OUTPUT); digitalWrite(PIN_BILGE_PUMP,  LOW);
+    pinMode(PIN_RADAR_MOTOR, OUTPUT); digitalWrite(PIN_RADAR_MOTOR, LOW);
 
     Wire.begin(21, 22);
     Wire.setClock(400000);
@@ -1015,6 +1048,8 @@ void setup() {
     server.on("/audio",     HTTP_OPTIONS, handleOptions);
     server.on("/bilge",     HTTP_POST,    handleBilge);
     server.on("/bilge",     HTTP_OPTIONS, handleOptions);
+    server.on("/radar",     HTTP_POST,    handleRadar);
+    server.on("/radar",     HTTP_OPTIONS, handleOptions);
     server.begin();
     Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
     Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",

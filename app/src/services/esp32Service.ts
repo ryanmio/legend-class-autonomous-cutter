@@ -10,7 +10,7 @@
 //
 // Endpoint status as of test_29 (pool integration sketch):
 //   IMPLEMENTED in test_29: /status, /telemetry, /cruise, /waypoint,
-//                           /pid, /sim_gps, /led, /audio, /bilge
+//                           /pid, /sim_gps, /led, /audio, /bilge, /radar
 
 import { HTTP_PORT } from '../constants';
 import { PIDParams } from '../types';
@@ -80,6 +80,11 @@ export async function setLed(ip: string, light: 'nav' | 'bridge' | 'deck', state
 // draining battery). Auto-pump-on-leak still fires regardless.
 export async function postBilge(ip: string, on: boolean) {
   return post(ip, '/bilge', { on });
+}
+
+// Radar mast motor (TRS-3D dish) on/off. Constant speed when on.
+export async function setRadar(ip: string, on: boolean) {
+  return post(ip, '/radar', { on });
 }
 
 // Play an audio cue on the DF1201S. test_29 ignores `sound` and plays

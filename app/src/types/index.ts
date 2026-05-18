@@ -79,6 +79,7 @@ export interface TelemetryData {
   bridge_on?: boolean;
   deck_on?: boolean;
   audio_ok?: boolean;
+  radar_on?: boolean;
 }
 
 export interface PIDParams {
