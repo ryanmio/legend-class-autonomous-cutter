@@ -167,8 +167,10 @@ static const uint32_t BILGE_MANUAL_TIMEOUT_MS = 60000; // manual /bilge {on:true
 // diode anti-parallel across the motor will eventually fry the 2N2222
 // from back-EMF spikes. Operator (Ryan) is shipping without a diode for
 // now — add a 1N4148/1N4001 across the motor before sustained use.
+// LEDC API note: ESP32 Arduino core 3.x uses pin-based ledcAttach() /
+// ledcWrite(pin, ...) — no manual channel allocation. Core 2.x's
+// ledcSetup() + ledcAttachPin() + ledcWrite(channel, ...) is gone.
 static const uint8_t  PIN_RADAR_MOTOR      = 2;
-static const uint8_t  RADAR_LEDC_CHANNEL   = 0;
 static const uint32_t RADAR_PWM_FREQ_HZ    = 20000;   // above audible
 static const uint8_t  RADAR_PWM_RESOLUTION = 8;       // 0..255 duty range
 static const uint8_t  RADAR_DEFAULT_SPEED  = 25;      // %, matches first app preset
@@ -249,7 +251,7 @@ static uint8_t radarSpeed = RADAR_DEFAULT_SPEED;   // 0..100
 static void applyRadarOutput() {
     uint32_t maxDuty = (1u << RADAR_PWM_RESOLUTION) - 1u;       // 255 for 8-bit
     uint32_t duty    = radarOn ? (maxDuty * radarSpeed / 100u) : 0u;
-    ledcWrite(RADAR_LEDC_CHANNEL, duty);
+    ledcWrite(PIN_RADAR_MOTOR, duty);
 }
 
 // ── Bilge state ─────────────────────────────────────────────────────────────
@@ -995,10 +997,9 @@ void setup() {
     pinMode(PIN_BILGE_REAR_SENSOR, INPUT_PULLUP);
     pinMode(PIN_BILGE_PUMP,  OUTPUT); digitalWrite(PIN_BILGE_PUMP,  LOW);
 
-    // Radar motor: LEDC PWM, off at boot.
-    ledcSetup(RADAR_LEDC_CHANNEL, RADAR_PWM_FREQ_HZ, RADAR_PWM_RESOLUTION);
-    ledcAttachPin(PIN_RADAR_MOTOR, RADAR_LEDC_CHANNEL);
-    ledcWrite(RADAR_LEDC_CHANNEL, 0);
+    // Radar motor: LEDC PWM, off at boot. Core 3.x API.
+    ledcAttach(PIN_RADAR_MOTOR, RADAR_PWM_FREQ_HZ, RADAR_PWM_RESOLUTION);
+    ledcWrite(PIN_RADAR_MOTOR, 0);
 
     Wire.begin(21, 22);
     Wire.setClock(400000);
