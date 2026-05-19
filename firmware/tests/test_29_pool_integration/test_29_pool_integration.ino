@@ -171,7 +171,13 @@ static const uint32_t BILGE_MANUAL_TIMEOUT_MS = 60000; // manual /bilge {on:true
 // ledcWrite(pin, ...) — no manual channel allocation. Core 2.x's
 // ledcSetup() + ledcAttachPin() + ledcWrite(channel, ...) is gone.
 static const uint8_t  PIN_RADAR_MOTOR      = 2;
-static const uint32_t RADAR_PWM_FREQ_HZ    = 20000;   // above audible
+// 1 kHz instead of "above audible" because at 20 kHz the motor coil's
+// L/R time constant doesn't have time to let current build per pulse —
+// low duty cycles produce almost no torque. 1 kHz pulses (250 µs ON
+// at 25% duty) let current actually reach steady-state, restoring
+// useful low-speed torque. Tradeoff: 1 kHz is audible as a whine.
+// Acceptable for a cosmetic radar; bump to 5 kHz if the whine annoys.
+static const uint32_t RADAR_PWM_FREQ_HZ    = 1000;
 static const uint8_t  RADAR_PWM_RESOLUTION = 8;       // 0..255 duty range
 static const uint8_t  RADAR_DEFAULT_SPEED  = 25;      // %, matches first app preset
 
