@@ -80,6 +80,7 @@ function RadarSection({ ip }: { ip: string }) {
   const { data } = useTelemetry();
   const on    = !!data?.radar_on;
   const speed = data?.radar_speed ?? 0;
+  const mode  = data?.radar_mode ?? 'smooth';
   // The "active" preset is OFF when off, otherwise the current speed.
   const activePreset: number = on ? speed : 0;
 
@@ -92,6 +93,11 @@ function RadarSection({ ip }: { ip: string }) {
     }
   }, [ip]);
 
+  const pickMode = useCallback((next: 'smooth' | 'burst') => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setRadar(ip, { mode: next }).catch(() => {});
+  }, [ip]);
+
   const PRESETS = [
     { value: 0,   label: 'OFF'  },
     { value: 25,  label: '25%'  },
@@ -99,6 +105,11 @@ function RadarSection({ ip }: { ip: string }) {
     { value: 75,  label: '75%'  },
     { value: 100, label: '100%' },
   ] as const;
+
+  const MODES = [
+    { value: 'smooth' as const, label: 'SMOOTH' },
+    { value: 'burst'  as const, label: 'BURST'  },
+  ];
 
   return (
     <View style={styles.section}>
@@ -120,6 +131,26 @@ function RadarSection({ ip }: { ip: string }) {
           );
         })}
       </View>
+      <View style={[styles.radarRow, styles.radarModeRow]}>
+        {MODES.map((m) => {
+          const active = m.value === mode;
+          return (
+            <TouchableOpacity
+              key={m.value}
+              style={[styles.radarBtn, active && styles.radarBtnActive]}
+              onPress={() => pickMode(m.value)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.radarBtnText, active && styles.radarBtnTextActive]}>
+                {m.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={styles.pumpSub}>
+        BURST pulses 100 ms on / 1500 ms off — fakes slow rotation with a fast motor.
+      </Text>
     </View>
   );
 }
@@ -236,6 +267,7 @@ const styles = StyleSheet.create({
 
   // Radar preset buttons — 5 across, the active one inverts to accent.
   radarRow:           { flexDirection: 'row', gap: 6 },
+  radarModeRow:       { marginTop: 8 },
   radarBtn:           { flex: 1, backgroundColor: Colors.surface, borderRadius: 4, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: Colors.surfaceLight },
   radarBtnActive:     { backgroundColor: Colors.accent, borderColor: Colors.accent },
   radarBtnText:       { color: Colors.textSecondary, fontWeight: '800', fontSize: 11, letterSpacing: 1, fontFamily: 'monospace' },

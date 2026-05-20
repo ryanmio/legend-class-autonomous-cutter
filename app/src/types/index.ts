@@ -81,6 +81,9 @@ export interface TelemetryData {
   audio_ok?: boolean;
   radar_on?: boolean;
   radar_speed?: number;     // 0-100, current PWM duty
+  radar_mode?: 'smooth' | 'burst';
+  radar_burst_ms?: number;  // burst-mode ON phase length
+  radar_pause_ms?: number;  // burst-mode OFF phase length
 }
 
 export interface PIDParams {

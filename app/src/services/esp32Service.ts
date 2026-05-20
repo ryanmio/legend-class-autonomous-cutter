@@ -84,8 +84,18 @@ export async function postBilge(ip: string, on: boolean) {
 
 // Radar mast motor (TRS-3D dish). PWM speed 0-100%. `on:false` cuts
 // output regardless of speed; sending only `speed` updates the stored
-// duty without changing on/off state.
-export async function setRadar(ip: string, args: { on?: boolean; speed?: number }) {
+// duty without changing on/off state. `mode:'burst'` switches to a
+// pulse/pause cycle that fakes slow rotation from a too-fast motor;
+// `mode:'smooth'` is continuous PWM at the given speed. `burst_ms`
+// and `pause_ms` are live-tunable for burst-mode iteration (no
+// reflash).
+export async function setRadar(ip: string, args: {
+  on?: boolean;
+  speed?: number;
+  mode?: 'smooth' | 'burst';
+  burst_ms?: number;
+  pause_ms?: number;
+}) {
   return post(ip, '/radar', args);
 }
 

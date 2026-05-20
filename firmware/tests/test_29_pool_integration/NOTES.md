@@ -101,7 +101,7 @@ Pump control loop runs every loop() iteration:
 | POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
 | POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | plays DF1201S track 1 for any sound (per-sound mapping TBD). 503 if DF1201S didn't ACK at boot. |
 | POST   | /bilge      | `{on:bool}` | manual pump override. `on:true` forces pump for up to 60 s (auto-clears); `on:false` releases. Auto-pump-on-leak continues to fire regardless. |
-| POST   | /radar      | `{on?:bool, speed?:0..100}` | mast radar dish motor. PWM duty via LEDC at 20 kHz. Either field optional — only sent fields update state. `on:false` cuts output regardless of speed. |
+| POST   | /radar      | `{on?:bool, speed?:0..100, mode?:"smooth"\|"burst", burst_ms?:2..5000, pause_ms?:0..60000}` | mast radar dish motor. PWM duty via LEDC at 1 kHz. All fields optional — only sent fields update state. `mode:"smooth"` runs PWM continuously at `speed`. `mode:"burst"` runs at `speed` for `burst_ms` then off for `pause_ms`, repeating — used to fake slow rotation from a too-fast geared motor. Burst defaults: 10 ms / 200 ms (sized for ~150 RPM rated motor). `on:false` cuts output. |
 
 ## Telemetry shape
 
@@ -130,8 +130,11 @@ Pump control loop runs every loop() iteration:
   "bilge_rear":   bool,    // rear compartment sensor wet
   "pump":         bool,    // pump MOSFET currently on
   "pump_manual":  bool,    // operator forced via /bilge (auto-clears 60 s after last on)
-  "radar_on":     bool,    // mast radar dish motor on/off
-  "radar_speed":  int,     // 0..100 current PWM duty (% of full speed)
+  "radar_on":       bool,    // mast radar dish motor on/off
+  "radar_speed":    int,     // 0..100 current PWM duty (% of full speed)
+  "radar_mode":     "smooth" | "burst",
+  "radar_burst_ms": int,     // burst ON phase length (live-tunable)
+  "radar_pause_ms": int,     // burst OFF phase length (live-tunable)
   "heading":      "0..360",
   "batt_v":       "X.XX"   (if INA219 present, volts),
   "batt_a":       "X.XX"   (if INA219 present, amps),

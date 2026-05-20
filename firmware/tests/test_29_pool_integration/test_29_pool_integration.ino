@@ -181,6 +181,20 @@ static const uint32_t RADAR_PWM_FREQ_HZ    = 1000;
 static const uint8_t  RADAR_PWM_RESOLUTION = 8;       // 0..255 duty range
 static const uint8_t  RADAR_DEFAULT_SPEED  = 25;      // %, matches first app preset
 
+// Burst mode: PWM at radarSpeed for radarBurstMs, then off for
+// radarPauseMs, repeating. Used to simulate slow radar-look rotation
+// from a too-fast motor — motor never reaches terminal velocity in a
+// burst, dish covers a small angle per cycle.
+// Defaults sized for a ~150 RPM rated motor: 10 ms burst ≈ 9° step,
+// 200 ms pause = ~5 steps/sec ≈ 45°/sec average ≈ 7 RPM. Tunable live
+// via /radar {burst_ms, pause_ms} — no reflash for tweaks.
+static const uint32_t RADAR_BURST_MS_DEFAULT = 10;
+static const uint32_t RADAR_PAUSE_MS_DEFAULT = 200;
+static const uint32_t RADAR_BURST_MS_MIN     = 2;        // below this, millis() timing is sketchy
+static const uint32_t RADAR_BURST_MS_MAX     = 5000;
+static const uint32_t RADAR_PAUSE_MS_MIN     = 0;        // 0 = continuous (degenerate to smooth)
+static const uint32_t RADAR_PAUSE_MS_MAX     = 60000;
+
 // ── DF1201S audio (HardwareSerial(2); GPS displaced to SoftwareSerial) ─────
 static const uint8_t  DFP_RX_PIN = 25;   // ESP32 RX ← DF1201S TX
 static const uint8_t  DFP_TX_PIN = 26;   // ESP32 TX → DF1201S RX
@@ -251,13 +265,48 @@ static uint16_t outRudder = NEUTRAL_US, outPort = NEUTRAL_US, outStbd = NEUTRAL_
 static bool navOn = false, bridgeOn = false, deckOn = false;
 
 // ── Radar state ─────────────────────────────────────────────────────────────
-static bool    radarOn    = false;
-static uint8_t radarSpeed = RADAR_DEFAULT_SPEED;   // 0..100
+enum RadarMode { RADAR_SMOOTH = 0, RADAR_BURST = 1 };
+static bool       radarOn       = false;
+static uint8_t    radarSpeed    = RADAR_DEFAULT_SPEED;   // 0..100
+static RadarMode  radarMode     = RADAR_SMOOTH;
+static uint32_t   radarBurstMs  = RADAR_BURST_MS_DEFAULT;
+static uint32_t   radarPauseMs  = RADAR_PAUSE_MS_DEFAULT;
 
+// Burst-mode state machine.
+static bool       burstActive       = false;  // true during ON phase, false during pause
+static uint32_t   burstPhaseStartMs = 0;
+
+static void writeRadarDuty(uint8_t pct) {
+    uint32_t maxDuty = (1u << RADAR_PWM_RESOLUTION) - 1u;        // 255 for 8-bit
+    ledcWrite(PIN_RADAR_MOTOR, maxDuty * (uint32_t)pct / 100u);
+}
+
+// Called on every state change (on/off, speed, mode). Resets the burst
+// phase so a mode toggle takes effect immediately.
 static void applyRadarOutput() {
-    uint32_t maxDuty = (1u << RADAR_PWM_RESOLUTION) - 1u;       // 255 for 8-bit
-    uint32_t duty    = radarOn ? (maxDuty * radarSpeed / 100u) : 0u;
-    ledcWrite(PIN_RADAR_MOTOR, duty);
+    if (!radarOn) {
+        writeRadarDuty(0);
+        return;
+    }
+    if (radarMode == RADAR_BURST) {
+        burstActive       = true;          // start in the burn phase
+        burstPhaseStartMs = millis();
+        writeRadarDuty(radarSpeed);
+    } else {
+        writeRadarDuty(radarSpeed);
+    }
+}
+
+// Called every loop. Steps the burst phase timer when in burst mode.
+static void updateRadarBurst() {
+    if (!radarOn || radarMode != RADAR_BURST) return;
+    uint32_t now      = millis();
+    uint32_t phaseLen = burstActive ? radarBurstMs : radarPauseMs;
+    if (now - burstPhaseStartMs >= phaseLen) {
+        burstActive       = !burstActive;
+        burstPhaseStartMs = now;
+        writeRadarDuty(burstActive ? radarSpeed : 0);
+    }
 }
 
 // ── Bilge state ─────────────────────────────────────────────────────────────
@@ -578,8 +627,11 @@ static void handleTelemetry() {
     doc["bilge_rear"]   = bilgeRearWet;
     doc["pump"]         = pumpOn;
     doc["pump_manual"]  = pumpManual;
-    doc["radar_on"]     = radarOn;
-    doc["radar_speed"]  = radarSpeed;
+    doc["radar_on"]       = radarOn;
+    doc["radar_speed"]    = radarSpeed;
+    doc["radar_mode"]     = (radarMode == RADAR_BURST) ? "burst" : "smooth";
+    doc["radar_burst_ms"] = radarBurstMs;
+    doc["radar_pause_ms"] = radarPauseMs;
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
@@ -768,27 +820,50 @@ static void handleRadar() {
     if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
     if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
 
-    StaticJsonDocument<128> req;
+    StaticJsonDocument<192> req;
     if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
 
-    // Both fields optional; only update what was sent.
+    // All fields optional; only update what was sent.
     if (req.containsKey("speed")) {
         int s = req["speed"].as<int>();
         if (s < 0)   s = 0;
         if (s > 100) s = 100;
         radarSpeed = (uint8_t)s;
     }
+    if (req.containsKey("mode")) {
+        const char* m = req["mode"] | "";
+        if      (strcmp(m, "smooth") == 0) radarMode = RADAR_SMOOTH;
+        else if (strcmp(m, "burst")  == 0) radarMode = RADAR_BURST;
+    }
+    if (req.containsKey("burst_ms")) {
+        long b = req["burst_ms"].as<long>();
+        if (b < (long)RADAR_BURST_MS_MIN) b = RADAR_BURST_MS_MIN;
+        if (b > (long)RADAR_BURST_MS_MAX) b = RADAR_BURST_MS_MAX;
+        radarBurstMs = (uint32_t)b;
+    }
+    if (req.containsKey("pause_ms")) {
+        long p = req["pause_ms"].as<long>();
+        if (p < (long)RADAR_PAUSE_MS_MIN) p = RADAR_PAUSE_MS_MIN;
+        if (p > (long)RADAR_PAUSE_MS_MAX) p = RADAR_PAUSE_MS_MAX;
+        radarPauseMs = (uint32_t)p;
+    }
     if (req.containsKey("on")) {
         radarOn = req["on"].as<bool>();
     }
     applyRadarOutput();
-    Serial.printf("[RADAR] %s @ %u%%\n", radarOn ? "ON" : "off", radarSpeed);
+    Serial.printf("[RADAR] %s @ %u%% mode=%s burst=%lums pause=%lums\n",
+                  radarOn ? "ON" : "off", radarSpeed,
+                  radarMode == RADAR_BURST ? "burst" : "smooth",
+                  radarBurstMs, radarPauseMs);
 
-    StaticJsonDocument<96> resp;
-    resp["ok"]    = true;
-    resp["on"]    = radarOn;
-    resp["speed"] = radarSpeed;
-    char out[96];
+    StaticJsonDocument<192> resp;
+    resp["ok"]       = true;
+    resp["on"]       = radarOn;
+    resp["speed"]    = radarSpeed;
+    resp["mode"]     = (radarMode == RADAR_BURST) ? "burst" : "smooth";
+    resp["burst_ms"] = radarBurstMs;
+    resp["pause_ms"] = radarPauseMs;
+    char out[192];
     serializeJson(resp, out);
     server.send(200, "application/json", out);
 }
@@ -1107,6 +1182,7 @@ void loop() {
     readIbus();
     pollIna219();
     pollBilge();
+    updateRadarBurst();
     updatePosition();
     server.handleClient();
 
