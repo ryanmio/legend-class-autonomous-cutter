@@ -101,7 +101,7 @@ Pump control loop runs every loop() iteration:
 | POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
 | POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | plays DF1201S track 1 for any sound (per-sound mapping TBD). 503 if DF1201S didn't ACK at boot. |
 | POST   | /bilge      | `{on:bool}` | manual pump override. `on:true` forces pump for up to 60 s (auto-clears); `on:false` releases. Auto-pump-on-leak continues to fire regardless. |
-| POST   | /radar      | `{on?:bool, speed?:0..100, mode?:"smooth"\|"burst", burst_ms?:2..5000, pause_ms?:0..60000}` | mast radar dish motor. PWM duty via LEDC at 1 kHz. All fields optional — only sent fields update state. `mode:"smooth"` runs PWM continuously at `speed`. `mode:"burst"` runs at `speed` for `burst_ms` then off for `pause_ms`, repeating — used to fake slow rotation from a too-fast geared motor. Burst defaults: 10 ms / 200 ms (sized for ~150 RPM rated motor). `on:false` cuts output. |
+| POST   | /radar      | `{on?:bool, speed?:0..100, burst_ms?:2..5000, pause_ms?:0..60000}` | mast radar dish motor. Burst-only — PWM at `speed` for `burst_ms`, off for `pause_ms`, repeating. Fakes slow rotation from a too-fast geared motor (smooth-PWM mode removed 2026-05-20 because actual motor is ~2000 RPM peak and smooth at any duty looked like a propeller). Defaults: speed=25, burst_ms=3, pause_ms=200 → ~36° step at ~5 steps/sec ≈ radar-look. `on:false` cuts output. |
 
 ## Telemetry shape
 
@@ -131,8 +131,7 @@ Pump control loop runs every loop() iteration:
   "pump":         bool,    // pump MOSFET currently on
   "pump_manual":  bool,    // operator forced via /bilge (auto-clears 60 s after last on)
   "radar_on":       bool,    // mast radar dish motor on/off
-  "radar_speed":    int,     // 0..100 current PWM duty (% of full speed)
-  "radar_mode":     "smooth" | "burst",
+  "radar_speed":    int,     // 0..100 PWM duty during burst phase
   "radar_burst_ms": int,     // burst ON phase length (live-tunable)
   "radar_pause_ms": int,     // burst OFF phase length (live-tunable)
   "heading":      "0..360",

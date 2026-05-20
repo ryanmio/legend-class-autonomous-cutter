@@ -72,56 +72,51 @@ function BilgeSection({ ip }: { ip: string }) {
 }
 
 // ── RADAR ──────────────────────────────────────────────────────────────────────
-// Mast-top TRS-3D radar dish. 3 V planetary gear motor switched by an
-// NPN transistor on GPIO 2 (firmware-side, PWM via LEDC). Stepped speed
-// presets matching firmware's accepted range. OFF cuts PWM; any speed
-// preset sets that duty AND turns the radar on.
+// Mast-top TRS-3D radar dish. 3 V planetary gear motor on GPIO 2,
+// firmware-side burst-PWM (smooth mode removed — produced propeller-
+// speed spin at any duty). Each torque preset is a tested or
+// extrapolated {speed, burst_ms, pause_ms} tuple. 25% is the
+// empirically-tuned good setting (2026-05-20, ~36° step at ~5 steps/sec).
+// Higher torque presets give the motor more authority (overcome
+// stiction better) at the cost of slightly faster apparent rotation.
+type RadarPreset = { label: string; on: boolean; speed?: number; burst_ms?: number; pause_ms?: number };
+const RADAR_PRESETS: RadarPreset[] = [
+  { label: 'OFF',  on: false },
+  { label: '25%',  on: true, speed: 25,  burst_ms: 3, pause_ms: 200 },  // TESTED GOOD
+  { label: '50%',  on: true, speed: 50,  burst_ms: 2, pause_ms: 200 },
+  { label: '75%',  on: true, speed: 75,  burst_ms: 2, pause_ms: 200 },
+  { label: '100%', on: true, speed: 100, burst_ms: 2, pause_ms: 200 },
+];
+
 function RadarSection({ ip }: { ip: string }) {
   const { data } = useTelemetry();
   const on    = !!data?.radar_on;
   const speed = data?.radar_speed ?? 0;
-  const mode  = data?.radar_mode ?? 'smooth';
-  // The "active" preset is OFF when off, otherwise the current speed.
-  const activePreset: number = on ? speed : 0;
+  // The "active" preset is OFF when off, otherwise whichever preset's
+  // speed matches firmware state. Burst/pause params aren't compared —
+  // they're locked to the preset, and any drift means the operator
+  // hand-tweaked via curl (not exposed in the UI).
+  const activeSpeed = on ? speed : 0;
 
-  const pickPreset = useCallback((preset: number) => {
+  const pickPreset = useCallback((preset: RadarPreset) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (preset === 0) {
-      setRadar(ip, { on: false }).catch(() => {});
-    } else {
-      setRadar(ip, { on: true, speed: preset }).catch(() => {});
-    }
+    setRadar(ip, preset.on
+      ? { on: true, speed: preset.speed, burst_ms: preset.burst_ms, pause_ms: preset.pause_ms }
+      : { on: false }
+    ).catch(() => {});
   }, [ip]);
-
-  const pickMode = useCallback((next: 'smooth' | 'burst') => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setRadar(ip, { mode: next }).catch(() => {});
-  }, [ip]);
-
-  const PRESETS = [
-    { value: 0,   label: 'OFF'  },
-    { value: 25,  label: '25%'  },
-    { value: 50,  label: '50%'  },
-    { value: 75,  label: '75%'  },
-    { value: 100, label: '100%' },
-  ] as const;
-
-  const MODES = [
-    { value: 'smooth' as const, label: 'SMOOTH' },
-    { value: 'burst'  as const, label: 'BURST'  },
-  ];
 
   return (
     <View style={styles.section}>
       <SectionHeader label="RADAR" />
       <View style={styles.radarRow}>
-        {PRESETS.map((p) => {
-          const active = p.value === activePreset;
+        {RADAR_PRESETS.map((p) => {
+          const active = p.on ? (p.speed === activeSpeed) : (activeSpeed === 0);
           return (
             <TouchableOpacity
-              key={p.value}
+              key={p.label}
               style={[styles.radarBtn, active && styles.radarBtnActive]}
-              onPress={() => pickPreset(p.value)}
+              onPress={() => pickPreset(p)}
               activeOpacity={0.7}
             >
               <Text style={[styles.radarBtnText, active && styles.radarBtnTextActive]}>
@@ -131,25 +126,8 @@ function RadarSection({ ip }: { ip: string }) {
           );
         })}
       </View>
-      <View style={[styles.radarRow, styles.radarModeRow]}>
-        {MODES.map((m) => {
-          const active = m.value === mode;
-          return (
-            <TouchableOpacity
-              key={m.value}
-              style={[styles.radarBtn, active && styles.radarBtnActive]}
-              onPress={() => pickMode(m.value)}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.radarBtnText, active && styles.radarBtnTextActive]}>
-                {m.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
       <Text style={styles.pumpSub}>
-        BURST pulses 100 ms on / 1500 ms off — fakes slow rotation with a fast motor.
+        Higher % = more torque + slightly faster sweep.
       </Text>
     </View>
   );
@@ -267,7 +245,6 @@ const styles = StyleSheet.create({
 
   // Radar preset buttons — 5 across, the active one inverts to accent.
   radarRow:           { flexDirection: 'row', gap: 6 },
-  radarModeRow:       { marginTop: 8 },
   radarBtn:           { flex: 1, backgroundColor: Colors.surface, borderRadius: 4, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: Colors.surfaceLight },
   radarBtnActive:     { backgroundColor: Colors.accent, borderColor: Colors.accent },
   radarBtnText:       { color: Colors.textSecondary, fontWeight: '800', fontSize: 11, letterSpacing: 1, fontFamily: 'monospace' },

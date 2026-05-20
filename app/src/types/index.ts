@@ -80,10 +80,9 @@ export interface TelemetryData {
   deck_on?: boolean;
   audio_ok?: boolean;
   radar_on?: boolean;
-  radar_speed?: number;     // 0-100, current PWM duty
-  radar_mode?: 'smooth' | 'burst';
-  radar_burst_ms?: number;  // burst-mode ON phase length
-  radar_pause_ms?: number;  // burst-mode OFF phase length
+  radar_speed?: number;     // 0-100, current PWM duty during burst
+  radar_burst_ms?: number;  // burst ON phase length
+  radar_pause_ms?: number;  // burst OFF phase length
 }
 
 export interface PIDParams {
