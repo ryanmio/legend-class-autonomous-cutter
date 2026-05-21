@@ -135,7 +135,7 @@ function RadarSection({ ip }: { ip: string }) {
 }
 
 // ── DEPTH ──────────────────────────────────────────────────────────────────────
-// Bottom-facing JSN-SR04T sonar. RUN polls every 20 s, CHECK fires
+// Bottom-facing RCWL-1655 sonar. RUN polls every 20 s, CHECK fires
 // a single ping, STOP halts + clears the last reading. The last
 // reading persists in firmware across CHECK→RUN transitions; only
 // STOP wipes it.

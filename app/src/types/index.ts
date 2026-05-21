@@ -71,7 +71,7 @@ export interface TelemetryData {
   pump?: boolean;
   pump_manual?: boolean;
 
-  // Depth sonar (JSN-SR04T). Present from test_29 onward.
+  // Depth sonar (RCWL-1655). Present from test_29 onward.
   depth_m?: string;             // metres, 2-decimal string. Absent = no current reading (stop or post-boot).
   depth_mode?: 'off' | 'run';
   depth_age_ms?: number;        // millis since last successful ping

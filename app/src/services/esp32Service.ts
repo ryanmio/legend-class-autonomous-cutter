@@ -83,7 +83,7 @@ export async function postBilge(ip: string, on: boolean) {
   return post(ip, '/bilge', { on });
 }
 
-// Depth sonar (JSN-SR04T). 'run' = ping every 20 s, 'check' = single
+// Depth sonar (RCWL-1655). 'run' = ping every 20 s, 'check' = single
 // ping, 'stop' = halt + clear last reading. Last reading persists in
 // telemetry across mode changes EXCEPT stop, which clears it.
 export async function setDepth(ip: string, mode: 'stop' | 'check' | 'run') {
