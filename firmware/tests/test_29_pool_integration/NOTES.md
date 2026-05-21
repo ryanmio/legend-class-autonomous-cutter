@@ -70,6 +70,8 @@ DF1201S off it.** Requires the `EspSoftwareSerial` library.
 | 33 | BILGE_MID_SENSOR (main bilge at pump, active LOW) | same wiring as fwd |
 | 5  | BILGE_REAR_SENSOR (rear compartment, active LOW) | same wiring as fwd. GPIO 5 is a strapping pin (SDIO slave mode) but only matters for that boot path — safe as a sensor input. |
 | 2  | RADAR_MOTOR (NPN base, PWM via LEDC ch 0 @ 20 kHz) | ESP32 GPIO 2 → 1 kΩ → 2N2222 base; 3.3 V → motor → collector; emitter → GND. Speed 0-100% mapped to 8-bit duty. **No flyback diode currently — back-EMF will eventually degrade the transistor under sustained PWM. Add 1N4148/1N4001 anti-parallel across the motor before extended use.** Strapping pin (download mode) but only matters when GPIO 0 is LOW. Onboard dev-board LED tracks PWM (appears dim at low duty). |
+| 27 | SONAR_TRIG (JSN-SR04T trigger, 10 µs HIGH pulse) | ESP32 GPIO 27 → sonar TRIG. |
+| 14 | SONAR_ECHO (JSN-SR04T echo, pulse-width = distance) | sonar ECHO → ESP32 GPIO 14. JSN-SR04T outputs 5 V; GPIO 14 is generally tolerant but add a 1 kΩ + 2 kΩ divider if you see flaky readings. `pulseIn()` blocks up to 40 ms per ping. |
 
 Pump control loop runs every loop() iteration:
 - `wet = (fwd LOW) || (mid LOW) || (rear LOW)`
@@ -102,6 +104,7 @@ Pump control loop runs every loop() iteration:
 | POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | plays DF1201S track 1 for any sound (per-sound mapping TBD). 503 if DF1201S didn't ACK at boot. |
 | POST   | /bilge      | `{on:bool}` | manual pump override. `on:true` forces pump for up to 60 s (auto-clears); `on:false` releases. Auto-pump-on-leak continues to fire regardless. |
 | POST   | /radar      | `{on?:bool, speed?:0..100, burst_ms?:2..5000, pause_ms?:0..60000}` | mast radar dish motor. Burst-only — PWM at `speed` for `burst_ms`, off for `pause_ms`, repeating. Fakes slow rotation from a too-fast geared motor (smooth-PWM mode removed 2026-05-20 because actual motor is ~2000 RPM peak and smooth at any duty looked like a propeller). Defaults: speed=25, burst_ms=3, pause_ms=200 → ~36° step at ~5 steps/sec ≈ radar-look. `on:false` cuts output. |
+| POST   | /depth      | `{mode:"stop"\|"check"\|"run"}` | JSN-SR04T sonar. `run` pings every 20 s, `check` takes a one-shot reading (mode unchanged), `stop` halts polling AND clears `depth_m` from telemetry. Last reading persists in firmware across CHECK→RUN transitions; only STOP wipes it. |
 
 ## Telemetry shape
 
@@ -134,6 +137,9 @@ Pump control loop runs every loop() iteration:
   "radar_speed":    int,     // 0..100 PWM duty during burst phase
   "radar_burst_ms": int,     // burst ON phase length (live-tunable)
   "radar_pause_ms": int,     // burst OFF phase length (live-tunable)
+  "depth_mode":     "off" | "run",
+  "depth_m":        "X.XX"   (if a reading exists; absent after STOP or pre-first-ping),
+  "depth_age_ms":   int      (ms since last successful ping; absent if never read),
   "heading":      "0..360",
   "batt_v":       "X.XX"   (if INA219 present, volts),
   "batt_a":       "X.XX"   (if INA219 present, amps),
@@ -173,6 +179,7 @@ Pump control loop runs every loop() iteration:
 - [ ] All 3 bilge sensors trigger pump on contact with a wet rag at the probe pads. PUMP turns on. Pump stops 5 s after rag removed. Damage-control panel in SystemsScreen lights the matching zone red.
 - [ ] Manual PUMP button in SystemsScreen turns pump on (MANUAL indicator) and then releases on second tap.
 - [ ] Radar 25/50/75/100 presets in SystemsScreen each set a visibly different dish speed. OFF stops it. Onboard ESP32 LED brightness tracks duty.
+- [ ] DEPTH CHECK in SystemsScreen returns a reasonable reading against the bench (~hold sonar over a known distance). DEPTH RUN polls every 20 s, value also visible on HelmScreen. STOP clears the reading.
 
 ## Pool sequence (per AUTOPILOT_PLAN test_32)
 

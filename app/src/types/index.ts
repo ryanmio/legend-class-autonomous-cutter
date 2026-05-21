@@ -71,9 +71,11 @@ export interface TelemetryData {
   pump?: boolean;
   pump_manual?: boolean;
 
-  // Aspirational — production firmware only.
-  depth_m?: string;
-  sonar_ok?: boolean;
+  // Depth sonar (JSN-SR04T). Present from test_29 onward.
+  depth_m?: string;             // metres, 2-decimal string. Absent = no current reading (stop or post-boot).
+  depth_mode?: 'off' | 'run';
+  depth_age_ms?: number;        // millis since last successful ping
+  sonar_ok?: boolean;           // aspirational — not in test_29
 
   nav_on?: boolean;
   bridge_on?: boolean;

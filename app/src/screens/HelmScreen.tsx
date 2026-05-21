@@ -193,8 +193,8 @@ export default function HelmScreen({ route, navigation }: Props) {
           />
           <Readout
             label="DEPTH"
-            value={data?.sonar_ok && data?.depth_m != null ? `${data.depth_m}` : '--'}
-            unit={data?.sonar_ok && data?.depth_m != null ? 'M' : undefined}
+            value={data?.depth_m != null ? `${data.depth_m}` : '--'}
+            unit={data?.depth_m != null ? 'M' : undefined}
           />
           <Readout
             label="BATT"

@@ -10,7 +10,8 @@
 //
 // Endpoint status as of test_29 (pool integration sketch):
 //   IMPLEMENTED in test_29: /status, /telemetry, /cruise, /waypoint,
-//                           /pid, /sim_gps, /led, /audio, /bilge, /radar
+//                           /pid, /sim_gps, /led, /audio, /bilge,
+//                           /radar, /depth
 
 import { HTTP_PORT } from '../constants';
 import { PIDParams } from '../types';
@@ -80,6 +81,13 @@ export async function setLed(ip: string, light: 'nav' | 'bridge' | 'deck', state
 // draining battery). Auto-pump-on-leak still fires regardless.
 export async function postBilge(ip: string, on: boolean) {
   return post(ip, '/bilge', { on });
+}
+
+// Depth sonar (JSN-SR04T). 'run' = ping every 20 s, 'check' = single
+// ping, 'stop' = halt + clear last reading. Last reading persists in
+// telemetry across mode changes EXCEPT stop, which clears it.
+export async function setDepth(ip: string, mode: 'stop' | 'check' | 'run') {
+  return post(ip, '/depth', { mode });
 }
 
 // Radar mast motor (TRS-3D dish). Burst-only — short PWM bursts with

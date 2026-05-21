@@ -136,6 +136,19 @@ static const uint8_t PIN_NAV    = 18;
 static const uint8_t PIN_BRIDGE = 19;
 static const uint8_t PIN_DECK   = 23;
 
+// ── Depth sonar (JSN-SR04T, bottom-facing) ──────────────────────────────────
+// TRIG on GPIO 27 (ESP32 → sonar, 10 µs pulse). ECHO on GPIO 14 (sonar →
+// ESP32, pulse-width-encoded distance). pulseIn() blocks up to ~40 ms
+// during a ping — at ≤1 ping per 20 s (RUN mode) this is negligible
+// for iBUS / IMU / WiFi.
+//   Range: typically 25 cm to ~7 m. Echo timeout (no return) → reading
+//   is reported as null in telemetry. Operator gets to see "no echo"
+//   instead of a phantom zero.
+static const uint8_t  PIN_SONAR_TRIG       = 27;
+static const uint8_t  PIN_SONAR_ECHO       = 14;
+static const uint32_t DEPTH_PING_TIMEOUT_US = 40000;     // ~7 m max
+static const uint32_t DEPTH_RUN_INTERVAL_MS = 20000;     // 20 s between RUN pings
+
 // ── Bilge: 3 water sensors + 1 pump MOSFET ──────────────────────────────────
 // Sensor probes: active LOW (commercial water modules and bare probes with
 // internal pullup both pull the GPIO down when wet). Pump is active HIGH
@@ -309,6 +322,39 @@ static void updateRadarBurst() {
         burstActive       = !burstActive;
         burstPhaseStartMs = now;
         writeRadarDuty(burstActive ? radarSpeed : 0);
+    }
+}
+
+// ── Depth state ─────────────────────────────────────────────────────────────
+enum DepthMode { DEPTH_OFF = 0, DEPTH_RUN = 1 };
+static DepthMode depthMode       = DEPTH_OFF;
+static float     lastDepthM      = -1.0f;   // -1 = no reading
+static uint32_t  lastDepthReadMs = 0;       // 0 = never read
+
+// Speed of sound 343 m/s → round-trip µs / 5831 = meters.
+// JSN-SR04T trigger: pull TRIG low briefly, then HIGH for 10 µs.
+static void doDepthPing() {
+    digitalWrite(PIN_SONAR_TRIG, LOW);
+    delayMicroseconds(2);
+    digitalWrite(PIN_SONAR_TRIG, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(PIN_SONAR_TRIG, LOW);
+
+    unsigned long dur = pulseIn(PIN_SONAR_ECHO, HIGH, DEPTH_PING_TIMEOUT_US);
+    lastDepthReadMs = millis();
+    if (dur == 0) {
+        lastDepthM = -1.0f;
+        Serial.println("[DEPTH] no echo");
+    } else {
+        lastDepthM = (float)dur / 5831.0f;
+        Serial.printf("[DEPTH] %.2f m\n", lastDepthM);
+    }
+}
+
+static void pollDepth() {
+    if (depthMode != DEPTH_RUN) return;
+    if (millis() - lastDepthReadMs >= DEPTH_RUN_INTERVAL_MS) {
+        doDepthPing();
     }
 }
 
@@ -635,6 +681,16 @@ static void handleTelemetry() {
     doc["radar_burst_ms"] = radarBurstMs;
     doc["radar_pause_ms"] = radarPauseMs;
 
+    doc["depth_mode"] = (depthMode == DEPTH_RUN) ? "run" : "off";
+    if (lastDepthM >= 0.0f) {
+        char dbuf[12];
+        snprintf(dbuf, sizeof(dbuf), "%.2f", lastDepthM);
+        doc["depth_m"] = dbuf;
+    }
+    if (lastDepthReadMs > 0) {
+        doc["depth_age_ms"] = millis() - lastDepthReadMs;
+    }
+
     char buf[24];
     snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
     if (ina219OK) {
@@ -815,6 +871,47 @@ static void handleLed() {
     *state = on;
     digitalWrite(pin, on ? HIGH : LOW);
     server.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handleDepth() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    StaticJsonDocument<96> req;
+    if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
+
+    const char* m = req["mode"] | "";
+    if (strcmp(m, "stop") == 0) {
+        depthMode       = DEPTH_OFF;
+        lastDepthM      = -1.0f;
+        lastDepthReadMs = 0;
+        Serial.println("[DEPTH] stop (cleared)");
+    } else if (strcmp(m, "check") == 0) {
+        // One-shot: take a reading now, leave mode alone (defaults to OFF
+        // after a "stop"; stays in RUN if currently running).
+        doDepthPing();
+    } else if (strcmp(m, "run") == 0) {
+        depthMode = DEPTH_RUN;
+        doDepthPing();                           // immediate first reading
+        Serial.println("[DEPTH] run (20s interval)");
+    } else {
+        server.send(400, "application/json",
+            "{\"ok\":false,\"err\":\"mode must be stop|check|run\"}");
+        return;
+    }
+
+    StaticJsonDocument<128> resp;
+    resp["ok"]   = true;
+    resp["mode"] = (depthMode == DEPTH_RUN) ? "run" : "off";
+    if (lastDepthM >= 0.0f) {
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%.2f", lastDepthM);
+        resp["depth_m"] = buf;
+    }
+    char out[128];
+    serializeJson(resp, out);
+    server.send(200, "application/json", out);
 }
 
 static void handleRadar() {
@@ -1077,6 +1174,10 @@ void setup() {
     ledcAttach(PIN_RADAR_MOTOR, RADAR_PWM_FREQ_HZ, RADAR_PWM_RESOLUTION);
     ledcWrite(PIN_RADAR_MOTOR, 0);
 
+    // Depth sonar (JSN-SR04T).
+    pinMode(PIN_SONAR_TRIG, OUTPUT); digitalWrite(PIN_SONAR_TRIG, LOW);
+    pinMode(PIN_SONAR_ECHO, INPUT);
+
     Wire.begin(21, 22);
     Wire.setClock(400000);
 
@@ -1163,6 +1264,8 @@ void setup() {
     server.on("/bilge",     HTTP_OPTIONS, handleOptions);
     server.on("/radar",     HTTP_POST,    handleRadar);
     server.on("/radar",     HTTP_OPTIONS, handleOptions);
+    server.on("/depth",     HTTP_POST,    handleDepth);
+    server.on("/depth",     HTTP_OPTIONS, handleOptions);
     server.begin();
     Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
     Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",
@@ -1178,6 +1281,7 @@ void loop() {
     pollIna219();
     pollBilge();
     updateRadarBurst();
+    pollDepth();
     updatePosition();
     server.handleClient();
 

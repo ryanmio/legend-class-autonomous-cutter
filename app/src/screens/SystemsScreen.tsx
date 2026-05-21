@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import { postBilge, setRadar } from '../services/esp32Service';
+import { postBilge, setRadar, setDepth } from '../services/esp32Service';
 import Screen from '../components/Screen';
 import BoatDamagePanel from '../components/BoatDamagePanel';
 
@@ -24,6 +24,7 @@ export default function SystemsScreen({ route }: Props) {
 
         <BilgeSection ip={ip} />
         <RadarSection ip={ip} />
+        <DepthSection ip={ip} />
         <WeaponsSection />
         <SurveySection />
         <SettingsSection />
@@ -129,6 +130,68 @@ function RadarSection({ ip }: { ip: string }) {
       <Text style={styles.pumpSub}>
         Higher % = more torque + slightly faster sweep.
       </Text>
+    </View>
+  );
+}
+
+// ── DEPTH ──────────────────────────────────────────────────────────────────────
+// Bottom-facing JSN-SR04T sonar. RUN polls every 20 s, CHECK fires
+// a single ping, STOP halts + clears the last reading. The last
+// reading persists in firmware across CHECK→RUN transitions; only
+// STOP wipes it.
+function DepthSection({ ip }: { ip: string }) {
+  const { data } = useTelemetry();
+  const depthStr = data?.depth_m;
+  const mode     = data?.depth_mode ?? 'off';
+  const ageMs    = data?.depth_age_ms;
+
+  const tap = useCallback((m: 'stop' | 'check' | 'run') => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setDepth(ip, m).catch(() => {});
+  }, [ip]);
+
+  const ageLabel =
+    depthStr == null      ? 'no reading' :
+    ageMs == null         ? '' :
+    ageMs < 2000          ? 'just now' :
+    ageMs < 60000         ? `${Math.round(ageMs / 1000)} s ago` :
+                            `${Math.round(ageMs / 60000)} min ago`;
+
+  return (
+    <View style={styles.section}>
+      <SectionHeader label="DEPTH" />
+      <View style={styles.depthReadoutBlock}>
+        <Text style={styles.depthValue}>
+          {depthStr != null ? depthStr : '--'}
+          <Text style={styles.depthUnit}>{depthStr != null ? ' M' : ''}</Text>
+        </Text>
+        <Text style={styles.depthMeta}>
+          {mode === 'run' ? 'POLLING · ' : ''}{ageLabel}
+        </Text>
+      </View>
+      <View style={styles.depthBtnRow}>
+        <TouchableOpacity
+          style={[styles.depthBtn, mode === 'off' && depthStr == null && styles.depthBtnActive]}
+          onPress={() => tap('stop')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.depthBtnText}>STOP</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.depthBtn}
+          onPress={() => tap('check')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.depthBtnText}>CHECK</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.depthBtn, mode === 'run' && styles.depthBtnActive]}
+          onPress={() => tap('run')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.depthBtnText}>RUN</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -242,6 +305,16 @@ const styles = StyleSheet.create({
   pumpBtnText:    { color: Colors.accent, fontWeight: '800', fontSize: 13, letterSpacing: 2, fontFamily: 'monospace' },
   pumpBtnTextOn:  { color: '#000' },
   pumpSub:        { color: Colors.textSecondary, fontSize: 10, letterSpacing: 1, fontFamily: 'monospace', marginTop: 8, fontStyle: 'italic' },
+
+  // Depth readout + STOP/CHECK/RUN row.
+  depthReadoutBlock:  { backgroundColor: Colors.surface, borderRadius: 4, padding: 14, marginBottom: 8 },
+  depthValue:         { color: Colors.accent, fontSize: 28, fontWeight: '800', fontFamily: 'monospace', letterSpacing: 1 },
+  depthUnit:          { fontSize: 14, fontWeight: '600', letterSpacing: 1 },
+  depthMeta:          { color: Colors.textSecondary, fontSize: 10, letterSpacing: 1, fontFamily: 'monospace', marginTop: 4 },
+  depthBtnRow:        { flexDirection: 'row', gap: 6 },
+  depthBtn:           { flex: 1, backgroundColor: Colors.surface, borderRadius: 4, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: Colors.surfaceLight },
+  depthBtnActive:     { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  depthBtnText:       { color: Colors.textSecondary, fontWeight: '800', fontSize: 12, letterSpacing: 2, fontFamily: 'monospace' },
 
   // Radar preset buttons — 5 across, the active one inverts to accent.
   radarRow:           { flexDirection: 'row', gap: 6 },
