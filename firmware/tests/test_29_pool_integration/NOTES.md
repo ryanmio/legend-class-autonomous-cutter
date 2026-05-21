@@ -133,6 +133,7 @@ Pump control loop runs every loop() iteration:
   "bilge_rear":   bool,    // rear compartment sensor wet
   "pump":         bool,    // pump MOSFET currently on
   "pump_manual":  bool,    // operator forced via /bilge (auto-clears 60 s after last on)
+  "pump_stuck":   bool,    // auto-pump latched off after 60 s continuous run (sensor likely stuck wet)
   "radar_on":       bool,    // mast radar dish motor on/off
   "radar_speed":    int,     // 0..100 PWM duty during burst phase
   "radar_burst_ms": int,     // burst ON phase length (live-tunable)

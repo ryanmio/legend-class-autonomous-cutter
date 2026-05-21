@@ -70,6 +70,7 @@ export interface TelemetryData {
   bilge_aft?: boolean;        // legacy alias (pre-3-zone telemetry); unused going forward
   pump?: boolean;
   pump_manual?: boolean;
+  pump_stuck?: boolean;       // firmware latched auto-pump off — sensor likely stuck wet
 
   // Depth sonar (RCWL-1655). Present from test_29 onward.
   depth_m?: string;             // metres, 2-decimal string. Absent = no current reading (stop or post-boot).

@@ -168,6 +168,13 @@ static const uint8_t PIN_BILGE_PUMP        = 13;   // MOSFET gate, active HIGH
 
 static const uint32_t BILGE_DRY_DELAY_MS    = 5000;   // keep pumping this long after all sensors read dry
 static const uint32_t BILGE_MANUAL_TIMEOUT_MS = 60000; // manual /bilge {on:true} auto-clears after this
+// Run-dry protection: if a sensor is stuck wet (corrosion, broken
+// wire shorted to GND, debris bridging probes), force pump off after
+// this long to save the battery and the pump motor. Matches
+// production firmware's BILGE_MAX_RUN_MS. After cutoff, sensors must
+// actually go dry once before the pump can re-engage automatically —
+// otherwise stuck-wet would just restart the timer in a loop.
+static const uint32_t BILGE_MAX_RUN_MS      = 60000;
 
 // ── Radar motor (TRS-3D mast dish) ──────────────────────────────────────────
 // 3V planetary gear motor switched by a 2N2222 NPN on the low side.
@@ -367,10 +374,15 @@ static void pollDepth() {
 
 // ── Bilge state ─────────────────────────────────────────────────────────────
 static bool     bilgeFwdWet = false, bilgeMidWet = false, bilgeRearWet = false;
-static bool     pumpOn      = false;   // current pump output state
-static bool     pumpManual  = false;   // operator forced via /bilge
-static uint32_t lastWetMs   = 0;       // last time ANY sensor was wet
+static bool     pumpOn        = false; // current pump output state
+static bool     pumpManual    = false; // operator forced via /bilge
+static uint32_t lastWetMs     = 0;     // last time ANY sensor was wet
 static uint32_t manualUntilMs = 0;     // monotonic deadline for pumpManual auto-clear
+static uint32_t pumpOnSinceMs = 0;     // when current pump-on phase began (for MAX_RUN cutoff)
+// Set true when MAX_RUN cutoff fires. Auto-pump won't re-engage until
+// sensors actually go dry once (resets latch). Manual /bilge still
+// works — operator can override if they're sure the leak is real.
+static bool     bilgeStuckLatch = false;
 
 // ── Audio state ─────────────────────────────────────────────────────────────
 // DF1201S on HardwareSerial(2) @ 115200 — test_11's proven path.
@@ -561,24 +573,50 @@ static void pollIna219() {
 // and for BILGE_DRY_DELAY_MS after the last wet reading. /bilge {on:true}
 // forces the pump until either /bilge {on:false} or BILGE_MANUAL_TIMEOUT_MS
 // elapses — prevents a forgotten "on" from draining the battery.
+//
+// Run-dry protection: if the pump runs continuously for BILGE_MAX_RUN_MS
+// without a single dry reading, we conclude a sensor is stuck wet and
+// latch auto-pump off until sensors actually go dry. Manual override
+// still works as an escape hatch.
 static void pollBilge() {
+    uint32_t now = millis();
     bilgeFwdWet  = (digitalRead(PIN_BILGE_FWD_SENSOR)  == LOW);
     bilgeMidWet  = (digitalRead(PIN_BILGE_MID_SENSOR)  == LOW);
     bilgeRearWet = (digitalRead(PIN_BILGE_REAR_SENSOR) == LOW);
 
     bool anyWet = bilgeFwdWet || bilgeMidWet || bilgeRearWet;
-    if (anyWet) lastWetMs = millis();
+    if (anyWet) lastWetMs = now;
+    // A real dry reading clears the stuck-sensor latch.
+    if (!anyWet && bilgeStuckLatch) {
+        bilgeStuckLatch = false;
+        Serial.println("[BILGE] sensors dry — stuck-wet latch cleared, auto-pump re-armed.");
+    }
 
-    if (pumpManual && (int32_t)(millis() - manualUntilMs) >= 0) {
+    if (pumpManual && (int32_t)(now - manualUntilMs) >= 0) {
         pumpManual = false;
         Serial.println("[BILGE] manual override auto-cleared (timeout).");
     }
 
-    bool autoOn = anyWet || (lastWetMs != 0 && (millis() - lastWetMs) < BILGE_DRY_DELAY_MS);
+    bool autoOn = !bilgeStuckLatch
+                  && (anyWet || (lastWetMs != 0 && (now - lastWetMs) < BILGE_DRY_DELAY_MS));
     bool wantOn = pumpManual || autoOn;
+
+    // Run-dry cutoff: only applies when pump is currently running AND has
+    // been running for the full max-run window. Manual override exempts
+    // (operator can keep pumping if they're sure).
+    if (pumpOn && !pumpManual && (now - pumpOnSinceMs) >= BILGE_MAX_RUN_MS) {
+        bilgeStuckLatch = true;
+        wantOn = false;
+        Serial.printf("[BILGE] MAX_RUN cutoff after %lu ms — sensors likely stuck wet "
+                      "(fwd=%d mid=%d rear=%d). Auto-pump LATCHED OFF until sensors go dry. "
+                      "Use /bilge {on:true} to override.\n",
+                      now - pumpOnSinceMs,
+                      (int)bilgeFwdWet, (int)bilgeMidWet, (int)bilgeRearWet);
+    }
 
     if (wantOn != pumpOn) {
         pumpOn = wantOn;
+        if (pumpOn) pumpOnSinceMs = now;
         digitalWrite(PIN_BILGE_PUMP, pumpOn ? HIGH : LOW);
         Serial.printf("[BILGE] pump %s (fwd=%d mid=%d rear=%d manual=%d)\n",
                       pumpOn ? "ON" : "off",
@@ -683,6 +721,7 @@ static void handleTelemetry() {
     doc["bilge_rear"]   = bilgeRearWet;
     doc["pump"]         = pumpOn;
     doc["pump_manual"]  = pumpManual;
+    doc["pump_stuck"]   = bilgeStuckLatch;
     doc["radar_on"]       = radarOn;
     doc["radar_speed"]    = radarSpeed;
     doc["radar_burst_ms"] = radarBurstMs;

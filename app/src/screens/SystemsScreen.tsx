@@ -66,8 +66,13 @@ function BilgeSection({ ip }: { ip: string }) {
         </Text>
       </TouchableOpacity>
       <Text style={styles.pumpSub}>
-        Auto fires on any wet sensor. Manual override stays on for 60 s.
+        Auto fires on any wet sensor (latches off after 60 s continuous run — sensor stuck?). Manual override stays on for 60 s.
       </Text>
+      {data?.pump_stuck && (
+        <Text style={[styles.pumpSub, styles.pumpSubAlarm]}>
+          ⚠ AUTO-PUMP LATCHED OFF — sensor reading wet for &gt;60 s. Use manual PUMP to override; check probe.
+        </Text>
+      )}
     </View>
   );
 }
@@ -305,6 +310,7 @@ const styles = StyleSheet.create({
   pumpBtnText:    { color: Colors.accent, fontWeight: '800', fontSize: 13, letterSpacing: 2, fontFamily: 'monospace' },
   pumpBtnTextOn:  { color: '#000' },
   pumpSub:        { color: Colors.textSecondary, fontSize: 10, letterSpacing: 1, fontFamily: 'monospace', marginTop: 8, fontStyle: 'italic' },
+  pumpSubAlarm:   { color: Colors.danger, fontWeight: '700' },
 
   // Depth readout + STOP/CHECK/RUN row.
   depthReadoutBlock:  { backgroundColor: Colors.surface, borderRadius: 4, padding: 14, marginBottom: 8 },
