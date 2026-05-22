@@ -282,6 +282,11 @@ static bool    captured      = false;
 static bool    startValid    = false;
 static float   startLat      = 0.0f;
 static float   startLon      = 0.0f;
+// Which trigger fired the most-recent capture. Surfaced in telemetry
+// so the CSV log can replay which mechanism ended each leg — pool
+// has no serial console.
+enum CapturedBy { CAPTURED_BY_NONE = 0, CAPTURED_BY_DISTANCE, CAPTURED_BY_CROSSING };
+static CapturedBy capturedBy = CAPTURED_BY_NONE;
 // 1 degree of latitude ≈ 111,111 m anywhere on earth. Longitude scales
 // by cos(lat). Flat-earth approximation is plenty accurate over the
 // few-meter scale of a pool waypoint leg.
@@ -695,12 +700,14 @@ static void updateWaypointGeometry() {
     if (captured) return;
 
     if (wpDistM < CAPTURE_RADIUS_M) {
-        captured = true;
+        captured   = true;
+        capturedBy = CAPTURED_BY_DISTANCE;
         Serial.printf("[WP] captured by DISTANCE (dist=%.1f m). Outputs neutral.\n", wpDistM);
         return;
     }
     if (hasCrossedTarget()) {
-        captured = true;
+        captured   = true;
+        capturedBy = CAPTURED_BY_CROSSING;
         Serial.printf("[WP] captured by CROSSING (dist=%.1f m, missed radius). Outputs neutral.\n", wpDistM);
         return;
     }
@@ -813,8 +820,11 @@ static void handleTelemetry() {
     }
 
     // Waypoint
-    doc["wp_set"]   = wpSet;
-    doc["captured"] = captured;
+    doc["wp_set"]      = wpSet;
+    doc["captured"]    = captured;
+    doc["captured_by"] = (capturedBy == CAPTURED_BY_DISTANCE) ? "distance"
+                       : (capturedBy == CAPTURED_BY_CROSSING) ? "crossing"
+                       : "none";
     if (wpSet) {
         snprintf(buf, sizeof(buf), "%.6f", wpLat);     doc["wp_lat"]     = buf;
         snprintf(buf, sizeof(buf), "%.6f", wpLon);     doc["wp_lon"]     = buf;
@@ -897,6 +907,7 @@ static void handleWaypoint() {
     if (req["lat"].isNull() || req["lon"].isNull()) {
         wpSet      = false;
         captured   = false;
+        capturedBy = CAPTURED_BY_NONE;
         startValid = false;
         wpDistM    = 0.0f;
         wpBearing  = 0.0f;
@@ -912,6 +923,7 @@ static void handleWaypoint() {
     wpLon      = req["lon"].as<float>();
     wpSet      = true;
     captured   = false;     // a new waypoint always reopens the run
+    capturedBy = CAPTURED_BY_NONE;
     startValid = false;     // re-record leg start on next GPS update
     Serial.printf("[WP] set lat=%.6f lon=%.6f\n", wpLat, wpLon);
 

@@ -164,6 +164,7 @@ Pump control loop runs every loop() iteration:
   "wp_bearing":   "X.X"      (if wp_set + gps_fix),
   "wp_start_lat": "X.XXXXXX" (if wp_set + leg-start recorded),
   "wp_start_lon": "X.XXXXXX" (if wp_set + leg-start recorded),
+  "captured_by":  "none" | "distance" | "crossing",   // which trigger fired
   "pid_kp":       "X.XX",
   "pid_kd":       "X.XX"
 }

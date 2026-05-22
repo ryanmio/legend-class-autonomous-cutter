@@ -48,6 +48,7 @@ export interface TelemetryData {
   // ── Waypoint / autopilot ──────────────────────────────────────
   wp_set?: boolean;
   captured?: boolean;     // sticky once distance OR crossing trigger fires
+  captured_by?: 'none' | 'distance' | 'crossing';  // which trigger fired
   wp_lat?: string;
   wp_lon?: string;
   wp_dist_m?: string;     // string in test_29; some legacy code may
