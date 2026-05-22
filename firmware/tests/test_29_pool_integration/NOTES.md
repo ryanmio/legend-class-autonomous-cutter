@@ -19,10 +19,15 @@ Merges:
 
 1. **POST /waypoint** — `{lat, lon}` arms a single waypoint; `{lat:null,
    lon:null}` clears. Already wired in `app/src/screens/MapScreen.tsx`.
-2. **Capture detection** — when `wp_dist < 3 m`, the sticky `captured`
-   flag fires; ESCs + rudder forced neutral until the operator clears
-   or moves the waypoint. Equivalent to "mission complete" for a
-   single-leg run.
+2. **Capture detection** — sticky `captured` flag fires on EITHER:
+   - **DISTANCE:** `wp_dist < 3 m` (the existing trigger).
+   - **CROSSING:** boat passes the perpendicular line through the
+     waypoint, perpendicular to the leg from start→waypoint. Start
+     point = boat position on the first GPS fix after `/waypoint` was
+     POSTed. Stops the boat circling forever when GPS noise (~2-3 m)
+     is close to the capture radius (3 m). Whichever fires first wins.
+   ESCs + rudder forced neutral on capture. Serial logs which trigger
+   fired (`captured by DISTANCE` vs `captured by CROSSING`).
 3. **POST /pid {kp, kd}** — live heading-hold tuning during the run.
    Defaults Kp=3.0, Kd=8.0 (test_27/test_28 baseline). Ki=0 — pool
    tuning is P+D only.
@@ -97,7 +102,7 @@ Pump control loop runs every loop() iteration:
 | GET    | /status     |                                | `{ok, v, ip}` |
 | GET    | /telemetry  |                                | full JSON (see below) |
 | POST   | /cruise     | `{us:1660}` or `{pct:50}`      | sets AUTO cruise µs |
-| POST   | /waypoint   | `{lat, lon}` or `{lat:null,lon:null}` | arms / clears waypoint |
+| POST   | /waypoint   | `{lat, lon}` or `{lat:null,lon:null}` | arms / clears waypoint. On set: records `captured=false` and clears the leg-start latch; firmware re-records the leg-start position on the next valid GPS fix. |
 | POST   | /pid        | `{kp, kd}` (either or both)    | live tuning |
 | POST   | /sim_gps    | `{lat, lon}`                   | bench-only position injection |
 | POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
@@ -157,6 +162,8 @@ Pump control loop runs every loop() iteration:
   "wp_lon":       "X.XXXXXX" (if wp_set),
   "wp_dist_m":    "X.X"      (if wp_set + gps_fix),
   "wp_bearing":   "X.X"      (if wp_set + gps_fix),
+  "wp_start_lat": "X.XXXXXX" (if wp_set + leg-start recorded),
+  "wp_start_lon": "X.XXXXXX" (if wp_set + leg-start recorded),
   "pid_kp":       "X.XX",
   "pid_kd":       "X.XX"
 }

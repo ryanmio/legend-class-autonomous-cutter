@@ -267,10 +267,26 @@ static float   wpLat         = 0.0f;
 static float   wpLon         = 0.0f;
 static float   wpDistM       = 0.0f;
 static float   wpBearing     = 0.0f;
-// `captured` is sticky once wp_dist < CAPTURE_RADIUS_M. Cleared when the
-// operator POSTs a new /waypoint or clears it. Prevents the boat from
-// re-engaging cruise after hovering across the radius.
+// `captured` is sticky once EITHER the distance trigger (wp_dist <
+// CAPTURE_RADIUS_M) OR the perpendicular-crossing trigger fires.
+// Cleared when the operator POSTs a new /waypoint or clears it.
+// Prevents the boat from re-engaging cruise after hovering across.
 static bool    captured      = false;
+
+// Crossing-trigger state: when a waypoint is set, we record the boat's
+// position on the first GPS fix we see and treat that as the "start"
+// of the leg. The capture fires if the boat passes the perpendicular
+// line through the waypoint (perpendicular to start→waypoint). This
+// prevents endless circling when GPS noise (~2-3 m) is close to the
+// capture radius (3 m).
+static bool    startValid    = false;
+static float   startLat      = 0.0f;
+static float   startLon      = 0.0f;
+// 1 degree of latitude ≈ 111,111 m anywhere on earth. Longitude scales
+// by cos(lat). Flat-earth approximation is plenty accurate over the
+// few-meter scale of a pool waypoint leg.
+static const float METERS_PER_DEG_LAT = 111111.0f;
+static const float MIN_LEG_M2         = 1.0f;   // skip crossing check on legs < 1 m
 
 // ── Position state ──────────────────────────────────────────────────────────
 // gpsSimulated is sticky: once /sim_gps is POSTed in this session, real
@@ -637,7 +653,27 @@ static void updatePosition() {
 
 // ── Waypoint geometry update ───────────────────────────────────────────────
 // Refreshes wp_dist_m / wp_bearing every loop for telemetry, and trips the
-// sticky `captured` flag the first time we cross the capture radius.
+// sticky `captured` flag fires on EITHER trigger:
+//   (1) distance: wp_dist < CAPTURE_RADIUS_M (existing behavior)
+//   (2) crossing: boat passes the perpendicular line at the waypoint,
+//       perpendicular to start→waypoint. Prevents endless circling.
+//
+// Whichever fires first wins. The crossing trigger uses a flat-earth
+// projection (boat - start) · (waypoint - start), captured fires when
+// the dot product ≥ |waypoint - start|² (i.e. boat is at or past the
+// waypoint along the leg axis).
+static bool hasCrossedTarget() {
+    if (!startValid) return false;
+    const float cosLat = cosf(startLat * DEG_TO_RAD);
+    const float ax = (wpLon   - startLon) * METERS_PER_DEG_LAT * cosLat;
+    const float ay = (wpLat   - startLat) * METERS_PER_DEG_LAT;
+    const float legMag2 = ax * ax + ay * ay;
+    if (legMag2 < MIN_LEG_M2) return false;   // degenerate leg, skip
+    const float px = (boatLon - startLon) * METERS_PER_DEG_LAT * cosLat;
+    const float py = (boatLat - startLat) * METERS_PER_DEG_LAT;
+    return (px * ax + py * ay) >= legMag2;
+}
+
 static void updateWaypointGeometry() {
     if (!wpSet || !gpsValid) {
         wpDistM   = 0.0f;
@@ -646,9 +682,27 @@ static void updateWaypointGeometry() {
     }
     wpDistM   = haversineDistM(boatLat, boatLon, wpLat, wpLon);
     wpBearing = haversineBearing(boatLat, boatLon, wpLat, wpLon);
-    if (!captured && wpDistM < CAPTURE_RADIUS_M) {
+
+    // Record leg-start position on the first GPS fix after /waypoint.
+    if (!startValid) {
+        startLat   = boatLat;
+        startLon   = boatLon;
+        startValid = true;
+        Serial.printf("[WP] leg start recorded: %.6f, %.6f → %.6f, %.6f\n",
+                      startLat, startLon, wpLat, wpLon);
+    }
+
+    if (captured) return;
+
+    if (wpDistM < CAPTURE_RADIUS_M) {
         captured = true;
-        Serial.printf("[WP] captured (dist=%.1f m). Outputs neutral.\n", wpDistM);
+        Serial.printf("[WP] captured by DISTANCE (dist=%.1f m). Outputs neutral.\n", wpDistM);
+        return;
+    }
+    if (hasCrossedTarget()) {
+        captured = true;
+        Serial.printf("[WP] captured by CROSSING (dist=%.1f m, missed radius). Outputs neutral.\n", wpDistM);
+        return;
     }
 }
 
@@ -768,6 +822,13 @@ static void handleTelemetry() {
             snprintf(buf, sizeof(buf), "%.1f", wpDistM);   doc["wp_dist_m"]  = buf;
             snprintf(buf, sizeof(buf), "%.1f", wpBearing); doc["wp_bearing"] = buf;
         }
+        // Leg start (recorded on first GPS fix after /waypoint). Lets
+        // the app draw the leg line + perpendicular capture line at
+        // the waypoint for visualisation.
+        if (startValid) {
+            snprintf(buf, sizeof(buf), "%.6f", startLat); doc["wp_start_lat"] = buf;
+            snprintf(buf, sizeof(buf), "%.6f", startLon); doc["wp_start_lon"] = buf;
+        }
     }
 
     // PID (current live values)
@@ -834,10 +895,11 @@ static void handleWaypoint() {
     }
     // {"lat":null,"lon":null} → clear waypoint and reset capture latch.
     if (req["lat"].isNull() || req["lon"].isNull()) {
-        wpSet     = false;
-        captured  = false;
-        wpDistM   = 0.0f;
-        wpBearing = 0.0f;
+        wpSet      = false;
+        captured   = false;
+        startValid = false;
+        wpDistM    = 0.0f;
+        wpBearing  = 0.0f;
         Serial.println("[WP] cleared");
         server.send(200, "application/json", "{\"ok\":true,\"cleared\":true}");
         return;
@@ -846,10 +908,11 @@ static void handleWaypoint() {
         server.send(400, "text/plain", "Need lat and lon");
         return;
     }
-    wpLat    = req["lat"].as<float>();
-    wpLon    = req["lon"].as<float>();
-    wpSet    = true;
-    captured = false;       // a new waypoint always reopens the run
+    wpLat      = req["lat"].as<float>();
+    wpLon      = req["lon"].as<float>();
+    wpSet      = true;
+    captured   = false;     // a new waypoint always reopens the run
+    startValid = false;     // re-record leg start on next GPS update
     Serial.printf("[WP] set lat=%.6f lon=%.6f\n", wpLat, wpLon);
 
     StaticJsonDocument<128> resp;

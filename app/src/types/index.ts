@@ -47,12 +47,16 @@ export interface TelemetryData {
 
   // ── Waypoint / autopilot ──────────────────────────────────────
   wp_set?: boolean;
-  captured?: boolean;     // sticky once wp_dist < CAPTURE_RADIUS_M
+  captured?: boolean;     // sticky once distance OR crossing trigger fires
   wp_lat?: string;
   wp_lon?: string;
   wp_dist_m?: string;     // string in test_29; some legacy code may
                           //   read as number — see telemetryFormat.ts
   wp_bearing?: string;
+  // Leg start = boat position recorded on first GPS fix after /waypoint
+  // was POSTed. App can draw the leg line + perpendicular capture line.
+  wp_start_lat?: string;
+  wp_start_lon?: string;
   heading_target?: string; // legacy from test_25; superseded by wp_*
   heading_error?: string;
 
