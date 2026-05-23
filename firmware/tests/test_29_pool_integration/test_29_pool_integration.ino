@@ -1152,6 +1152,11 @@ static void handleAudio() {
     else if (!strcmp(sound, "board")) track = DFP_BOARD_INDEX;
 
     if (track > 0) {
+        // EF commit 54dc3ca: playFileNum() while a previous track is
+        // still playing gets dropped by the DF1201S. Pause first so
+        // rapid button presses always retrigger.
+        DF1201S.pause();
+        delay(50);
         DF1201S.playFileNum(track);
         resp["track"] = track;
         Serial.printf("[AUDIO] play %s (index %d)\n", sound, track);
