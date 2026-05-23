@@ -1,3 +1,0 @@
--- confirm the hotspot works
--- balance ballast
--- seal boat

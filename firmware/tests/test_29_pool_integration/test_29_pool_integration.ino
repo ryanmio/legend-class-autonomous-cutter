@@ -774,13 +774,17 @@ static bool tryConnect(const char* ssid, const char* pass, int timeoutSecs) {
 }
 
 static void wifiSetup() {
+    // Home WiFi first (bench), then iPhone hotspot (water). No AP
+    // fallback by design — if neither connects, the boat operates
+    // without telemetry/HTTP. Autopilot + RC failsafe still work
+    // (iBUS is independent of WiFi). ESP32's WiFi stack will keep
+    // trying to reconnect to the last attempted network in the
+    // background; if your hotspot comes up after boot, just wait
+    // ~10 s and SCAN from the app.
     WiFi.mode(WIFI_STA);
     if (tryConnect(SECRET_HOME_SSID,    SECRET_HOME_PASS,    10)) return;
     if (tryConnect(SECRET_HOTSPOT_SSID, SECRET_HOTSPOT_PASS, 10)) return;
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP("LegendCutter", "coastguard");
-    boatIP = WiFi.softAPIP().toString();
-    Serial.printf("[WiFi] AP fallback  IP: %s\n", boatIP.c_str());
+    Serial.println("[WiFi] no network — operating without HTTP. RC + autopilot still active.");
 }
 
 // ── HTTP handlers ──────────────────────────────────────────────────────────
