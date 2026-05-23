@@ -233,10 +233,9 @@ static const uint8_t  DFP_VOLUME = 20;   // 0..30
 // Path-based playback (playSpecFile → AT+PLAYFILE) — order-independent, so
 // the DF1201S USB mass-storage can be loaded with a plain Finder/cp drop.
 // Repo source-of-truth: audio-assets/dfplayer/.
-static const char     DFP_HORN_PATH[] = "/cutter-horn.mp3";
-static const char     DFP_GUN_PATH[]  = "/deck-gun.mp3";
-// TODO: no boarding-party clip yet — falls back to internal-flash track 1.
-static const int16_t  DFP_BOARD_TRACK_FALLBACK = 1;
+static const char     DFP_HORN_PATH[]  = "/cutter-horn.mp3";
+static const char     DFP_GUN_PATH[]   = "/deck-gun.mp3";
+static const char     DFP_BOARD_PATH[] = "/board.mp3";
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 static const float    CAPTURE_RADIUS_M = 3.0f;
@@ -1115,9 +1114,9 @@ static void handleAudio() {
         resp["path"] = DFP_GUN_PATH;
         Serial.printf("[AUDIO] play %s\n", DFP_GUN_PATH);
     } else if (!strcmp(sound, "board")) {
-        DF1201S.playFileNum(DFP_BOARD_TRACK_FALLBACK);
-        resp["track"] = DFP_BOARD_TRACK_FALLBACK;
-        Serial.printf("[AUDIO] play board (fallback track %d)\n", DFP_BOARD_TRACK_FALLBACK);
+        DF1201S.playSpecFile(DFP_BOARD_PATH);
+        resp["path"] = DFP_BOARD_PATH;
+        Serial.printf("[AUDIO] play %s\n", DFP_BOARD_PATH);
     } else {
         server.send(400, "application/json",
             "{\"ok\":false,\"err\":\"unknown sound\"}");
@@ -1384,7 +1383,8 @@ void setup() {
             DF1201S.setPlayMode(DF1201S.SINGLE);
             DF1201S.enableAMP();
             audioOK = true;
-            Serial.printf("[AUDIO] DF1201S ready (vol=%u, paths: horn=%s gun=%s).\n", DFP_VOLUME, DFP_HORN_PATH, DFP_GUN_PATH);
+            Serial.printf("[AUDIO] DF1201S ready (vol=%u, paths: horn=%s gun=%s board=%s).\n",
+                          DFP_VOLUME, DFP_HORN_PATH, DFP_GUN_PATH, DFP_BOARD_PATH);
         } else {
             Serial.println("[AUDIO] WARN: DF1201S did not ACK within 3 s — /audio disabled.");
         }
