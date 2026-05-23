@@ -39,7 +39,13 @@ Merges:
 6. **AUTO without a waypoint = neutral** — test_27's "AUTO holds
    heading at entry, runs cruise" placeholder is replaced. From here,
    AUTO means "drive to the active waypoint" or stay neutral.
-7. **POST /led + /audio** — HelmScreen light toggles (nav / bridge /
+7. **MANUAL reverse** (CH2, ported from test_17). Throttle stick at
+   idle + right-stick V pulled down past the deadband → ESCs run
+   reverse, capped at MIN_REV_US=1200 (~60% reverse). Forward throttle
+   always wins — the interlock blocks reverse while the left stick is
+   above THROTTLE_IDLE_MAX, so you can't slam forward→reverse instantly.
+   AUTO mode never asks for reverse. Telemetry exposes `ch_reverse`.
+8. **POST /led + /audio** — HelmScreen light toggles (nav / bridge /
    deck on GPIO 18 / 19 / 23) and the three sound buttons. Audio
    plays by **index** via `playFileNum()` (AT+PLAYNUM under the
    hood); path-based playback (`playSpecFile`/AT+PLAYFILE) is broken

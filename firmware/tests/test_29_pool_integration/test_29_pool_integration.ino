@@ -85,6 +85,11 @@ static const uint16_t RUDDER_MIN_US = 1330;
 static const uint16_t RUDDER_MAX_US = 1670;
 static const uint16_t NEUTRAL_US    = 1500;
 static const uint16_t MAX_FWD_US    = 1800;
+// Reverse cap, ported from test_17. MIN_REV_US=1200 ≈ 60% reverse.
+// AUTO mode never asks for reverse (cruise is always ≥ NEUTRAL_US);
+// the setEscs() floor is widened to this only so MANUAL reverse can
+// reach the ESCs.
+static const uint16_t MIN_REV_US    = 1200;
 
 // ── AUTO cruise selection (no floor; cap only) ─────────────────────────────
 // cruise=NEUTRAL_US is valid for static heading-hold (AUTOPILOT_PLAN
@@ -94,10 +99,15 @@ static const uint16_t DEFAULT_CRUISE_US  = 1660;
 
 // ── iBUS channel indices (locked 2026-05-10) ────────────────────────────────
 static const uint8_t  IBUS_IDX_RUDDER         = 0;
+static const uint8_t  IBUS_IDX_REVERSE        = 1;   // CH2 right-stick V, down = reverse
 static const uint8_t  IBUS_IDX_THROTTLE       = 2;
 static const uint8_t  IBUS_IDX_FAILSAFE_GUARD = 5;
 static const uint8_t  IBUS_IDX_MODE           = 6;
 static const uint8_t  IBUS_RX_PIN             = 16;
+// Reverse-interlock deadband (test_17 pattern). Right-stick V below
+// (1500 - REVERSE_DEADBAND_US) AND throttle stick at idle → reverse
+// engages. Throttle stick above idle → reverse blocked regardless.
+static const uint16_t REVERSE_DEADBAND_US     = 30;
 
 // ── SwA hysteresis ──────────────────────────────────────────────────────────
 static const uint16_t MODE_MAN_BELOW_US  = 1450;
@@ -444,17 +454,39 @@ static void setRudder(uint16_t us) {
     writePCA(CH_RUDDER, us);
 }
 static void setEscs(uint16_t us) {
-    if (us < NEUTRAL_US) us = NEUTRAL_US;
+    // Floor widened to MIN_REV_US so MANUAL reverse can reach the ESCs.
+    // Callers in AUTO / FAILSAFE must pass values ≥ NEUTRAL_US (they do).
+    if (us < MIN_REV_US) us = MIN_REV_US;
     if (us > MAX_FWD_US) us = MAX_FWD_US;
     outPort = outStbd = us;
     writePCA(CH_ESC_PORT, us);
     writePCA(CH_ESC_STBD, us);
 }
 
-static uint16_t mapThrottleStickToEsc(uint16_t stickUs) {
-    if (stickUs <= THROTTLE_IDLE_MAX) return NEUTRAL_US;
-    if (stickUs >= 2000) return MAX_FWD_US;
-    return (uint16_t)map(stickUs, THROTTLE_IDLE_MAX, 2000, NEUTRAL_US, MAX_FWD_US);
+// Reverse-interlock pattern from test_17: forward throttle (left stick
+// above idle) ALWAYS wins. Reverse (right-stick V down past deadband)
+// only engages when the throttle stick is at idle. This prevents
+// slamming forward→reverse instantly.
+static bool throttleAtIdle(uint16_t leftStickUs) {
+    return leftStickUs <= THROTTLE_IDLE_MAX;
+}
+static bool rightStickCommandingReverse(uint16_t rightStickVUs) {
+    return rightStickVUs < (uint16_t)(NEUTRAL_US - REVERSE_DEADBAND_US);
+}
+static uint16_t computeThrottleUs(uint16_t leftStickUs, uint16_t rightStickVUs) {
+    if (!throttleAtIdle(leftStickUs)) {
+        // Forward: scale [THROTTLE_IDLE_MAX..2000] → [NEUTRAL_US..MAX_FWD_US].
+        if (leftStickUs >= 2000) return MAX_FWD_US;
+        return (uint16_t)map(leftStickUs, THROTTLE_IDLE_MAX, 2000, NEUTRAL_US, MAX_FWD_US);
+    }
+    // Throttle idle — right stick V controls reverse (interlock satisfied).
+    if (rightStickCommandingReverse(rightStickVUs)) {
+        uint16_t rev = rightStickVUs;
+        if (rev < MIN_REV_US) rev = MIN_REV_US;
+        if (rev > NEUTRAL_US) rev = NEUTRAL_US;
+        return rev;
+    }
+    return NEUTRAL_US;
 }
 static uint16_t mapRudderStickToServo(uint16_t stickUs) {
     if (stickUs < 1000) stickUs = 1000;
@@ -780,6 +812,7 @@ static void handleTelemetry() {
     doc["esc_us"]       = outPort;
     doc["ch_throttle"]  = ch[IBUS_IDX_THROTTLE];
     doc["ch_rudder"]    = ch[IBUS_IDX_RUDDER];
+    doc["ch_reverse"]   = ch[IBUS_IDX_REVERSE];
     doc["ch_mode"]      = ch[IBUS_IDX_MODE];
     doc["ch_guard"]     = ch[IBUS_IDX_FAILSAFE_GUARD];
     doc["nav_on"]       = navOn;
@@ -1279,7 +1312,7 @@ static void applyOutputs() {
     switch (mode) {
       case MODE_MANUAL:
         setRudder(mapRudderStickToServo(ch[IBUS_IDX_RUDDER]));
-        setEscs  (mapThrottleStickToEsc(ch[IBUS_IDX_THROTTLE]));
+        setEscs  (computeThrottleUs(ch[IBUS_IDX_THROTTLE], ch[IBUS_IDX_REVERSE]));
         break;
       case MODE_AUTO: {
         if (wpSet && gpsValid && !captured) {
