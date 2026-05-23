@@ -230,7 +230,13 @@ static const uint8_t  DFP_RX_PIN = 25;   // ESP32 RX ← DF1201S TX
 static const uint8_t  DFP_TX_PIN = 26;   // ESP32 TX → DF1201S RX
 static const uint32_t DFP_BAUD   = 115200;
 static const uint8_t  DFP_VOLUME = 20;   // 0..30
-static const int16_t  DFP_TRACK  = 1;    // all 3 app buttons play track 1 for now
+// Path-based playback (playSpecFile → AT+PLAYFILE) — order-independent, so
+// the DF1201S USB mass-storage can be loaded with a plain Finder/cp drop.
+// Repo source-of-truth: audio-assets/dfplayer/.
+static const char     DFP_HORN_PATH[] = "/cutter-horn.mp3";
+static const char     DFP_GUN_PATH[]  = "/deck-gun.mp3";
+// TODO: no boarding-party clip yet — falls back to internal-flash track 1.
+static const int16_t  DFP_BOARD_TRACK_FALLBACK = 1;
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 static const float    CAPTURE_RADIUS_M = 3.0f;
@@ -1092,14 +1098,33 @@ static void handleAudio() {
         return;
     }
 
-    // Body is accepted but ignored for now — all 3 app buttons play track 1.
-    DF1201S.playFileNum(DFP_TRACK);
-    Serial.printf("[AUDIO] play track %d\n", DFP_TRACK);
+    StaticJsonDocument<96> req;
+    if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
+    const char* sound = req["sound"] | "";
 
-    StaticJsonDocument<64> resp;
+    StaticJsonDocument<96> resp;
     resp["ok"]    = true;
-    resp["track"] = DFP_TRACK;
-    char out[64];
+    resp["sound"] = sound;
+
+    if (!strcmp(sound, "horn")) {
+        DF1201S.playSpecFile(DFP_HORN_PATH);
+        resp["path"] = DFP_HORN_PATH;
+        Serial.printf("[AUDIO] play %s\n", DFP_HORN_PATH);
+    } else if (!strcmp(sound, "gun")) {
+        DF1201S.playSpecFile(DFP_GUN_PATH);
+        resp["path"] = DFP_GUN_PATH;
+        Serial.printf("[AUDIO] play %s\n", DFP_GUN_PATH);
+    } else if (!strcmp(sound, "board")) {
+        DF1201S.playFileNum(DFP_BOARD_TRACK_FALLBACK);
+        resp["track"] = DFP_BOARD_TRACK_FALLBACK;
+        Serial.printf("[AUDIO] play board (fallback track %d)\n", DFP_BOARD_TRACK_FALLBACK);
+    } else {
+        server.send(400, "application/json",
+            "{\"ok\":false,\"err\":\"unknown sound\"}");
+        return;
+    }
+
+    char out[96];
     serializeJson(resp, out);
     server.send(200, "application/json", out);
 }
@@ -1359,7 +1384,7 @@ void setup() {
             DF1201S.setPlayMode(DF1201S.SINGLE);
             DF1201S.enableAMP();
             audioOK = true;
-            Serial.printf("[AUDIO] DF1201S ready (vol=%u, track=%d).\n", DFP_VOLUME, DFP_TRACK);
+            Serial.printf("[AUDIO] DF1201S ready (vol=%u, paths: horn=%s gun=%s).\n", DFP_VOLUME, DFP_HORN_PATH, DFP_GUN_PATH);
         } else {
             Serial.println("[AUDIO] WARN: DF1201S did not ACK within 3 s — /audio disabled.");
         }
