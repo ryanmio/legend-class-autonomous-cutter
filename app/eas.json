@@ -6,6 +6,9 @@
     "production": {
       "ios": {
         "distribution": "store"
+      },
+      "env": {
+        "EXPO_MONOREPO_APP_ROOT": "app"
       }
     }
   },
