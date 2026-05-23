@@ -1142,7 +1142,7 @@ static void handleAudio() {
     if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
     const char* sound = req["sound"] | "";
 
-    StaticJsonDocument<96> resp;
+    StaticJsonDocument<192> resp;
     resp["ok"]    = true;
     resp["sound"] = sound;
 
@@ -1152,21 +1152,79 @@ static void handleAudio() {
     else if (!strcmp(sound, "board")) track = DFP_BOARD_INDEX;
 
     if (track > 0) {
-        // EF commit 54dc3ca: playFileNum() while a previous track is
-        // still playing gets dropped by the DF1201S. Pause first so
-        // rapid button presses always retrigger.
+        // EF commit 54dc3ca: pause before play, prevents the
+        // "second-press dropped while previous still playing" race.
         DF1201S.pause();
         delay(50);
         DF1201S.playFileNum(track);
-        resp["track"] = track;
-        Serial.printf("[AUDIO] play %s (index %d)\n", sound, track);
+        delay(200);                                   // let the chip register the command (EF commit 6353ed9)
+        uint16_t actualNum  = DF1201S.getCurFileNumber();
+        String   actualName = DF1201S.getFileName();
+        resp["track"]       = track;
+        resp["actual_num"]  = actualNum;
+        resp["actual_name"] = actualName;
+        Serial.printf("[AUDIO] req sound=%s index=%d  ->  chip reports num=%u name=%s\n",
+                      sound, track, actualNum, actualName.c_str());
     } else {
         server.send(400, "application/json",
             "{\"ok\":false,\"err\":\"unknown sound\"}");
         return;
     }
 
-    char out[96];
+    char out[192];
+    serializeJson(resp, out);
+    server.send(200, "application/json", out);
+}
+
+// ── Diagnostic: probe the DF1201S's actual index→filename mapping. ──────────
+// One-shot GET /audio_diag. For each index 1..AUDIO_DIAG_MAX_INDEX, force
+// SINGLE play mode (per EF commit 6353ed9), call playFileNum, give the chip
+// 200ms to register the command, then ask it what file it actually selected
+// (getCurFileNumber + getFileName + getTotalTime). Returns the truth as JSON.
+// REMOVE THIS HANDLER once the index map is verified — diagnostic only.
+static const int AUDIO_DIAG_MAX_INDEX = 8;
+static void handleAudioDiag() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (!audioOK) {
+        server.send(503, "application/json",
+            "{\"ok\":false,\"err\":\"DF1201S not initialised\"}");
+        return;
+    }
+
+    // 1024 is comfortable for 8 probes; bump if AUDIO_DIAG_MAX_INDEX grows.
+    StaticJsonDocument<1024> resp;
+    resp["ok"]          = true;
+    resp["total_files"] = DF1201S.getTotalFile();
+    JsonArray probes = resp.createNestedArray("probes");
+
+    Serial.println("[AUDIO_DIAG] probing indices...");
+    for (int i = 1; i <= AUDIO_DIAG_MAX_INDEX; i++) {
+        DF1201S.pause();
+        delay(50);
+        DF1201S.setPlayMode(DF1201S.SINGLE);          // EF: force SINGLE before each play
+        delay(50);
+        DF1201S.playFileNum(i);
+        delay(200);                                   // let the chip register / load
+        uint16_t curNum    = DF1201S.getCurFileNumber();
+        String   curName   = DF1201S.getFileName();
+        uint16_t totalTime = DF1201S.getTotalTime();
+        // Stop audio immediately — diagnostic only, don't play through.
+        DF1201S.pause();
+        delay(50);
+
+        JsonObject probe = probes.createNestedObject();
+        probe["req"]       = i;
+        probe["num"]       = curNum;
+        probe["name"]      = curName;
+        probe["total_sec"] = totalTime;
+
+        Serial.printf("[AUDIO_DIAG]  req=%d  ->  num=%u  name=%s  total=%us\n",
+                      i, curNum, curName.c_str(), totalTime);
+    }
+    Serial.println("[AUDIO_DIAG] done.");
+
+    String out;
     serializeJson(resp, out);
     server.send(200, "application/json", out);
 }
@@ -1449,8 +1507,10 @@ void setup() {
     server.on("/sim_gps",   HTTP_OPTIONS, handleOptions);
     server.on("/led",       HTTP_POST,    handleLed);
     server.on("/led",       HTTP_OPTIONS, handleOptions);
-    server.on("/audio",     HTTP_POST,    handleAudio);
-    server.on("/audio",     HTTP_OPTIONS, handleOptions);
+    server.on("/audio",      HTTP_POST,    handleAudio);
+    server.on("/audio",      HTTP_OPTIONS, handleOptions);
+    server.on("/audio_diag", HTTP_GET,     handleAudioDiag);  // TEMP: remove once index map verified
+    server.on("/audio_diag", HTTP_OPTIONS, handleOptions);
     server.on("/bilge",     HTTP_POST,    handleBilge);
     server.on("/bilge",     HTTP_OPTIONS, handleOptions);
     server.on("/radar",     HTTP_POST,    handleRadar);
