@@ -247,9 +247,14 @@ static const uint8_t  DFP_VOLUME = 20;   // 0..30
 // Indices reflect FAT write order, which is fixed deterministically by
 // audio-assets/dfplayer/load.sh — keep this map and that script's
 // TRACKS list in sync.
-static const int16_t  DFP_HORN_INDEX  = 1;   // load.sh writes HORN.MP3 first
-static const int16_t  DFP_GUN_INDEX   = 2;   // ...then GUN.MP3
-static const int16_t  DFP_BOARD_INDEX = 3;   // ...then BOARD.MP3
+// Indices verified by /audio_diag on 2026-05-23: every even slot on the
+// current device holds a hidden macOS resource-fork companion (._HORN.MP3
+// etc.) created by Finder when the user dragged the files. So our real
+// files live at 1, 3, 5. After the device is wiped + reloaded cleanly
+// these should go back to 1, 2, 3.
+static const int16_t  DFP_HORN_INDEX  = 1;   // HORN.MP3
+static const int16_t  DFP_GUN_INDEX   = 3;   // GUN.MP3  (index 2 = ._HORN.MP3)
+static const int16_t  DFP_BOARD_INDEX = 5;   // BOARD.MP3 (index 4 = ._GUN.MP3)
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 static const float    CAPTURE_RADIUS_M = 3.0f;
