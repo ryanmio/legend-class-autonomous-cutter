@@ -184,7 +184,7 @@ export default function HelmScreen({ route, navigation }: Props) {
         <View style={styles.readoutRow}>
           <Readout
             label="HEADING"
-            value={data?.heading != null ? `${data.heading}°` : '--'}
+            value={data?.heading != null ? `${Math.round(data.heading)}°` : '--'}
           />
           <Readout
             label="SPEED"
