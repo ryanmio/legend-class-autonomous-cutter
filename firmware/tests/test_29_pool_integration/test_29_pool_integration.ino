@@ -230,16 +230,16 @@ static const uint8_t  DFP_RX_PIN = 25;   // ESP32 RX ← DF1201S TX
 static const uint8_t  DFP_TX_PIN = 26;   // ESP32 TX → DF1201S RX
 static const uint32_t DFP_BAUD   = 115200;
 static const uint8_t  DFP_VOLUME = 20;   // 0..30
-// Path-based playback (playSpecFile → AT+PLAYFILE) — order-independent, so
-// the DF1201S USB mass-storage can be loaded with a plain Finder drop.
-// Paths match the EF easter-egg pattern (/SFX/<8.3-name>.MP3): subfolder +
-// uppercase 8.3 is the only path format that's actually been observed to
-// resolve on this firmware. Long filenames at root resolve unreliably
-// (cutter-horn.mp3 silently misdirected to BOARD on first water test).
-// Repo source-of-truth: audio-assets/dfplayer/SFX/.
-static const char     DFP_HORN_PATH[]  = "/SFX/HORN.MP3";
-static const char     DFP_GUN_PATH[]   = "/SFX/GUN.MP3";
-static const char     DFP_BOARD_PATH[] = "/SFX/BOARD.MP3";
+// Index-based playback via playFileNum (AT+PLAYNUM). Path-based
+// (AT+PLAYFILE) has known firmware bugs on this module — DFRobot Issue
+// #5 documents the chip silently falling back to "file 1" on any path
+// mis-resolution, which is exactly what bit us on the first water test.
+// Indices reflect FAT write order, which is fixed deterministically by
+// audio-assets/dfplayer/load.sh — keep this map and that script's
+// TRACKS list in sync.
+static const int16_t  DFP_HORN_INDEX  = 1;   // load.sh writes HORN.MP3 first
+static const int16_t  DFP_GUN_INDEX   = 2;   // ...then GUN.MP3
+static const int16_t  DFP_BOARD_INDEX = 3;   // ...then BOARD.MP3
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 static const float    CAPTURE_RADIUS_M = 3.0f;
@@ -1109,18 +1109,15 @@ static void handleAudio() {
     resp["ok"]    = true;
     resp["sound"] = sound;
 
-    if (!strcmp(sound, "horn")) {
-        DF1201S.playSpecFile(DFP_HORN_PATH);
-        resp["path"] = DFP_HORN_PATH;
-        Serial.printf("[AUDIO] play %s\n", DFP_HORN_PATH);
-    } else if (!strcmp(sound, "gun")) {
-        DF1201S.playSpecFile(DFP_GUN_PATH);
-        resp["path"] = DFP_GUN_PATH;
-        Serial.printf("[AUDIO] play %s\n", DFP_GUN_PATH);
-    } else if (!strcmp(sound, "board")) {
-        DF1201S.playSpecFile(DFP_BOARD_PATH);
-        resp["path"] = DFP_BOARD_PATH;
-        Serial.printf("[AUDIO] play %s\n", DFP_BOARD_PATH);
+    int16_t track = 0;
+    if      (!strcmp(sound, "horn"))  track = DFP_HORN_INDEX;
+    else if (!strcmp(sound, "gun"))   track = DFP_GUN_INDEX;
+    else if (!strcmp(sound, "board")) track = DFP_BOARD_INDEX;
+
+    if (track > 0) {
+        DF1201S.playFileNum(track);
+        resp["track"] = track;
+        Serial.printf("[AUDIO] play %s (index %d)\n", sound, track);
     } else {
         server.send(400, "application/json",
             "{\"ok\":false,\"err\":\"unknown sound\"}");
@@ -1387,8 +1384,8 @@ void setup() {
             DF1201S.setPlayMode(DF1201S.SINGLE);
             DF1201S.enableAMP();
             audioOK = true;
-            Serial.printf("[AUDIO] DF1201S ready (vol=%u, paths: horn=%s gun=%s board=%s).\n",
-                          DFP_VOLUME, DFP_HORN_PATH, DFP_GUN_PATH, DFP_BOARD_PATH);
+            Serial.printf("[AUDIO] DF1201S ready (vol=%u, indices: horn=%d gun=%d board=%d).\n",
+                          DFP_VOLUME, DFP_HORN_INDEX, DFP_GUN_INDEX, DFP_BOARD_INDEX);
         } else {
             Serial.println("[AUDIO] WARN: DF1201S did not ACK within 3 s — /audio disabled.");
         }

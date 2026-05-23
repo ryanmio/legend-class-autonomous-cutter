@@ -41,16 +41,17 @@ Merges:
    AUTO means "drive to the active waypoint" or stay neutral.
 7. **POST /led + /audio** — HelmScreen light toggles (nav / bridge /
    deck on GPIO 18 / 19 / 23) and the three sound buttons. Audio
-   plays by **path** via `playSpecFile()` (AT+PLAYFILE under the
-   hood) — order-independent, so the DF1201S USB mass-storage can be
-   loaded with a plain Finder drop. Mapping (uppercase 8.3 names in
-   `/SFX/`, matching the EF easter-egg pattern — long filenames at
-   root resolve unreliably): horn → `/SFX/HORN.MP3`, gun →
-   `/SFX/GUN.MP3`, board → `/SFX/BOARD.MP3`. Repo source-of-truth:
-   `audio-assets/dfplayer/SFX/`. Telemetry exposes
-   `nav_on`, `bridge_on`, `deck_on`, `audio_ok` so the app can
-   reconcile its optimistic state and surface "audio dead" without
-   USB.
+   plays by **index** via `playFileNum()` (AT+PLAYNUM under the
+   hood); path-based playback (`playSpecFile`/AT+PLAYFILE) is broken
+   in DFRobot firmware ([Issue #5](https://github.com/DFRobot/DFRobot_DF1201S/issues/5):
+   chip silently falls back to file 1 on any mis-resolution, exactly
+   what we hit on the first water test). Index map: horn → 1, gun →
+   2, board → 3. Indices reflect FAT **write order**, which is fixed
+   deterministically by `audio-assets/dfplayer/load.sh` — run that
+   script once after plugging the DF1201S in via USB to load the
+   tracks in the canonical order. Telemetry exposes `nav_on`,
+   `bridge_on`, `deck_on`, `audio_ok` so the app can reconcile its
+   optimistic state and surface "audio dead" without USB.
 
 ## Serial architecture (non-obvious)
 
@@ -112,7 +113,7 @@ Pump control loop runs every loop() iteration:
 | POST   | /pid        | `{kp, kd}` (either or both)    | live tuning |
 | POST   | /sim_gps    | `{lat, lon}`                   | bench-only position injection |
 | POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
-| POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | horn → `/SFX/HORN.MP3`, gun → `/SFX/GUN.MP3`, board → `/SFX/BOARD.MP3` (path-based via `playSpecFile`). 400 on unknown sound, 503 if DF1201S didn't ACK at boot. |
+| POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | horn → `playFileNum(1)`, gun → `playFileNum(2)`, board → `playFileNum(3)`. Index map depends on FAT write order — set by `audio-assets/dfplayer/load.sh`. 400 on unknown sound, 503 if DF1201S didn't ACK at boot. |
 | POST   | /bilge      | `{on:bool}` | manual pump override. `on:true` forces pump for up to 60 s (auto-clears); `on:false` releases. Auto-pump-on-leak continues to fire regardless. |
 | POST   | /radar      | `{on?:bool, speed?:0..100, burst_ms?:2..5000, pause_ms?:0..60000}` | mast radar dish motor. Burst-only — PWM at `speed` for `burst_ms`, off for `pause_ms`, repeating. Fakes slow rotation from a too-fast geared motor (smooth-PWM mode removed 2026-05-20 because actual motor is ~2000 RPM peak and smooth at any duty looked like a propeller). Defaults: speed=25, burst_ms=3, pause_ms=200 → ~36° step at ~5 steps/sec ≈ radar-look. `on:false` cuts output. |
 | POST   | /depth      | `{mode:"stop"\|"check"\|"run"}` | RCWL-1655 sonar. `run` pings every 20 s, `check` takes a one-shot reading (mode unchanged), `stop` halts polling AND clears `depth_m` from telemetry. Last reading persists in firmware across CHECK→RUN transitions; only STOP wipes it. Conversion uses freshwater sound speed (13.4 µs/cm). **Bench tests in air read ~4.3× too large** (sound is slower in air) — sanity-check accordingly. |
