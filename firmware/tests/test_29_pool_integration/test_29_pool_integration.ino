@@ -231,11 +231,15 @@ static const uint8_t  DFP_TX_PIN = 26;   // ESP32 TX → DF1201S RX
 static const uint32_t DFP_BAUD   = 115200;
 static const uint8_t  DFP_VOLUME = 20;   // 0..30
 // Path-based playback (playSpecFile → AT+PLAYFILE) — order-independent, so
-// the DF1201S USB mass-storage can be loaded with a plain Finder/cp drop.
-// Repo source-of-truth: audio-assets/dfplayer/.
-static const char     DFP_HORN_PATH[]  = "/cutter-horn.mp3";
-static const char     DFP_GUN_PATH[]   = "/deck-gun.mp3";
-static const char     DFP_BOARD_PATH[] = "/board.mp3";
+// the DF1201S USB mass-storage can be loaded with a plain Finder drop.
+// Paths match the EF easter-egg pattern (/SFX/<8.3-name>.MP3): subfolder +
+// uppercase 8.3 is the only path format that's actually been observed to
+// resolve on this firmware. Long filenames at root resolve unreliably
+// (cutter-horn.mp3 silently misdirected to BOARD on first water test).
+// Repo source-of-truth: audio-assets/dfplayer/SFX/.
+static const char     DFP_HORN_PATH[]  = "/SFX/HORN.MP3";
+static const char     DFP_GUN_PATH[]   = "/SFX/GUN.MP3";
+static const char     DFP_BOARD_PATH[] = "/SFX/BOARD.MP3";
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 static const float    CAPTURE_RADIUS_M = 3.0f;
