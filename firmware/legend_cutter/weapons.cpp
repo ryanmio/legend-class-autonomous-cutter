@@ -1,128 +1,47 @@
 // weapons.cpp
-// Weapon system animation state machines.
-// All servo positions expressed in degrees from mechanical centre; clamped to limits.
-// Servo microsecond conversion: PWM_NEUTRAL ± (deg / GUN_PAN_RANGE) * GUN_PAN_US_RANGE
+// Deck gun pan from test_18 (positional 9g micro on PCA ch8). Knob CH5
+// maps directly to servo angle, with a ±15 µs center deadband to filter
+// TX jitter and an optional reverse for this build's linkage direction.
 
 #include "weapons.h"
 #include "config.h"
-#include "motors.h"
-#include "audio.h"
-#include <Arduino.h>
+#include "ibus.h"
+#include "motors.h"   // pcaWriteUs()
 
-// ---- Mechanical limits (degrees from centre) ----
-#define GUN_PAN_LIMIT    90.0f    // ±90° pan
-#define GUN_TILT_UP       15.0f   // +15° up
-#define GUN_TILT_DOWN     20.0f   // -20° depression
-#define CIWS_PAN_LIMIT   150.0f   // ±150° pan
+static uint16_t panUs = NEUTRAL_US;
 
-// ---- Servo degree → microsecond mapping ----
-// Assumes 1000 µs = -90°, 1500 µs = 0°, 2000 µs = +90° (standard)
-static uint16_t degToUs(float deg, float limitPos, float limitNeg) {
-  deg = constrain(deg, -limitNeg, limitPos);
-  return (uint16_t)(PWM_NEUTRAL + (deg / 90.0f) * 500.0f);
+static uint16_t clampPan(uint16_t rawUs) {
+    if (rawUs < 1000) rawUs = 1000;
+    if (rawUs > 2000) rawUs = 2000;
+    if (GUN_PAN_REVERSE) rawUs = 3000 - rawUs;
+    int d = (int)rawUs - 1500;
+    if (d < 0) d = -d;
+    if (d <= (int)GUN_PAN_DEADBAND_US) return 1500;
+    if (rawUs < GUN_PAN_MIN_US) rawUs = GUN_PAN_MIN_US;
+    if (rawUs > GUN_PAN_MAX_US) rawUs = GUN_PAN_MAX_US;
+    return rawUs;
 }
 
-// ---- Current positions ----
-static float gunPanDeg  = 0;
-static float gunTiltDeg = 0;
-static float ciwsPanDeg = 0;
-
-// ---- Animation state ----
-static AnimMode animMode        = ANIM_NONE;
-static float    trackBearingDeg = 0.0f;
-static unsigned long animPhaseMs = 0;
-static int8_t   animDir         = 1;  // Sweep direction
-
 void weaponsBegin() {
-  // Centre everything on init
-  setGunPan(PWM_NEUTRAL);
-  setGunTilt(PWM_NEUTRAL);
-  setCIWSPan(PWM_NEUTRAL);
-  setCIWSSpin(false);
+    panUs = NEUTRAL_US;
+    pcaWriteUs(CH_GUN_PAN, panUs);
 }
 
 void weaponsUpdate() {
-  unsigned long now = millis();
-
-  switch (animMode) {
-    case ANIM_NONE: break;
-
-    case ANIM_PATROL_SCAN: {
-      // Sweep gun pan ±60° at 20°/sec; Phalanx does opposing sweep
-      float elapsed = (float)(now - animPhaseMs) / 1000.0f;
-      gunPanDeg  = 60.0f * sin(elapsed * 0.33f * PI);
-      ciwsPanDeg = -gunPanDeg;
-      setCIWSSpin((now / 2000) % 2 == 0);  // Spin on/off every 2 sec
-      setGunPan(degToUs(gunPanDeg,  GUN_PAN_LIMIT, GUN_PAN_LIMIT));
-      setCIWSPan(degToUs(ciwsPanDeg, CIWS_PAN_LIMIT, CIWS_PAN_LIMIT));
-      break;
+    // No RC = freeze at neutral. The mode-FSM in the .ino handles full
+    // failsafe; here we just track the knob whenever RC is alive.
+    if (!ibusEverGood()) {
+        if (panUs != NEUTRAL_US) {
+            panUs = NEUTRAL_US;
+            pcaWriteUs(CH_GUN_PAN, panUs);
+        }
+        return;
     }
-
-    case ANIM_TRACK_TARGET: {
-      // Slew gun and CIWS toward trackBearingDeg at 60°/sec (realistic)
-      // TODO: translate absolute bearing to servo-relative angle using boat heading
-      float delta = trackBearingDeg - gunPanDeg;
-      float step  = constrain(delta, -1.0f, 1.0f);  // ~60°/sec at 60 Hz loop
-      gunPanDeg  += step;
-      ciwsPanDeg += step;
-      setGunPan(degToUs(gunPanDeg, GUN_PAN_LIMIT, GUN_PAN_LIMIT));
-      setCIWSPan(degToUs(ciwsPanDeg, CIWS_PAN_LIMIT, CIWS_PAN_LIMIT));
-      break;
+    uint16_t next = clampPan(ibusChannel(IBUS_IDX_GUN_PAN));
+    if (next != panUs) {
+        panUs = next;
+        pcaWriteUs(CH_GUN_PAN, panUs);
     }
-
-    case ANIM_COMBAT_DEMO: {
-      // Choreographed multi-phase sequence
-      // TODO: implement timed phases with audioPlay() calls
-      break;
-    }
-
-    case ANIM_RANDOM_ALERT: {
-      // Randomly slew to new bearing every 3–8 seconds
-      static unsigned long nextTargetMs = 0;
-      static float randTarget = 0;
-      if (now >= nextTargetMs) {
-        randTarget   = (float)(random(-80, 80));
-        nextTargetMs = now + random(3000, 8000);
-      }
-      float delta = randTarget - gunPanDeg;
-      gunPanDeg += constrain(delta, -0.5f, 0.5f);
-      setGunPan(degToUs(gunPanDeg, GUN_PAN_LIMIT, GUN_PAN_LIMIT));
-      break;
-    }
-
-    case ANIM_LRAD_HAIL: {
-      static bool started = false;
-      if (!started) { audioPlay(AUDIO_LRAD_HAIL_1); started = true; }
-      // LRAD hail completes when DFPlayer finishes track; reset on mode change
-      break;
-    }
-  }
 }
 
-void weaponsSetGunPan(float deg) {
-  gunPanDeg = deg;
-  setGunPan(degToUs(deg, GUN_PAN_LIMIT, GUN_PAN_LIMIT));
-}
-
-void weaponsSetGunTilt(float deg) {
-  gunTiltDeg = deg;
-  setGunTilt(degToUs(deg, GUN_TILT_UP, GUN_TILT_DOWN));
-}
-
-void weaponsSetCIWSPan(float deg) {
-  ciwsPanDeg = deg;
-  setCIWSPan(degToUs(deg, CIWS_PAN_LIMIT, CIWS_PAN_LIMIT));
-}
-
-void weaponsSetCIWSSpin(bool on) { setCIWSSpin(on); }
-
-void weaponsSetAnimMode(AnimMode mode) {
-  if (mode != animMode) {
-    setCIWSSpin(false);       // Safe stop on mode change
-    animMode    = mode;
-    animPhaseMs = millis();
-  }
-}
-
-void weaponsSetTrackBearing(float deg) { trackBearingDeg = deg; }
-AnimMode weaponsGetAnimMode()          { return animMode; }
+uint16_t weaponsGunPanUs() { return panUs; }

@@ -1,94 +1,110 @@
 // motors.cpp
-// PCA9685-based motor and servo control.
-//
-// Differential thrust mixing:
-//   When the rudder is deflected, the inside motor is slowed and the outside
-//   motor is sped up by DIFF_THRUST_FACTOR × rudder_deflection.
-//   This supplements the mechanical rudder for tighter low-speed turns.
-//
-// Twin screws are counter-rotating — port CW, starboard CCW.
-// Both ESCs use standard servo PWM: 1000 µs = full reverse, 1500 = stop, 2000 = full fwd.
-// ESCs must be armed with throttle at 1500 µs on power-up.
+// PCA9685 @ 50 Hz drives ESCs (ch0/1) and rudder (ch2). Throttle / rudder
+// mixing per test_17 (reverse interlock) and test_29 AUTO (differential
+// thrust factor 0.3).
 
 #include "motors.h"
 #include "config.h"
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
 
-static Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(PCA9685_ADDR);
+static Adafruit_PWMServoDriver pca(PCA9685_ADDR);
+static uint16_t outRudder = NEUTRAL_US;
+static uint16_t outPort   = NEUTRAL_US;
+static uint16_t outStbd   = NEUTRAL_US;
 
-// Convert microseconds to PCA9685 tick count (12-bit, 0–4095 at PCA9685_FREQ Hz)
-static uint16_t usToPCA(uint16_t us) {
-  // Period in µs = 1,000,000 / freq
-  float periodUs = 1000000.0f / PCA9685_FREQ;
-  return (uint16_t)((us / periodUs) * 4096);
+static uint16_t usToTicks(uint16_t us) {
+    return (uint16_t)((us / 20000.0f) * 4096);
 }
 
-void motorsBegin() {
-  pca.begin();
-  pca.setOscillatorFrequency(27000000);  // Trim if needed
-  pca.setPWMFreq(PCA9685_FREQ);
-  delay(10);
-  motorsKill();  // Safe state on boot
+void pcaWriteUs(uint8_t channel, uint16_t us) {
+    pca.setPWM(channel, 0, usToTicks(us));
 }
 
-void pcaSetMicros(uint8_t channel, uint16_t us) {
-  us = constrain(us, PWM_MIN, PWM_MAX);
-  pca.setPWM(channel, 0, usToPCA(us));
+bool motorsBegin() {
+    // Wire is brought up in legend_cutter.ino setup() before any module init.
+    pca.begin();
+    pca.setOscillatorFrequency(27000000);
+    pca.setPWMFreq(PCA9685_FREQ_HZ);
+    Wire.beginTransmission(PCA9685_ADDR);
+    if (Wire.endTransmission() != 0) return false;
+
+    setRudder(NEUTRAL_US);
+    setEscs(NEUTRAL_US);
+    return true;
 }
 
-void motorsKill() {
-  pcaSetMicros(CH_ESC_PORT, PWM_NEUTRAL);
-  pcaSetMicros(CH_ESC_STBD, PWM_NEUTRAL);
-  pcaSetMicros(CH_RUDDER,   PWM_NEUTRAL);
+void setRudder(uint16_t us) {
+    if (us < RUDDER_MIN_US) us = RUDDER_MIN_US;
+    if (us > RUDDER_MAX_US) us = RUDDER_MAX_US;
+    outRudder = us;
+    pcaWriteUs(CH_RUDDER, us);
 }
 
-void motorsSetManual(uint16_t throttleUs, uint16_t rudderUs) {
-  // Rudder deflection as fraction (-1.0 to +1.0)
-  float rudderDelta = (float)(rudderUs - PWM_NEUTRAL) / (float)(PWM_MAX - PWM_NEUTRAL);
-
-  // Differential thrust adjustment (µs)
-  float diffUs = rudderDelta * DIFF_THRUST_FACTOR * (throttleUs - PWM_NEUTRAL);
-
-  uint16_t portUs  = constrain((int)throttleUs + (int)diffUs,  PWM_MIN, PWM_MAX);
-  uint16_t stbdUs  = constrain((int)throttleUs - (int)diffUs,  PWM_MIN, PWM_MAX);
-
-  pcaSetMicros(CH_ESC_PORT, portUs);
-  pcaSetMicros(CH_ESC_STBD, stbdUs);
-  pcaSetMicros(CH_RUDDER,   rudderUs);
+void setEscs(uint16_t us) {
+    if (us < MIN_REV_US) us = MIN_REV_US;
+    if (us > MAX_FWD_US) us = MAX_FWD_US;
+    outPort = outStbd = us;
+    pcaWriteUs(CH_ESC_PORT, us);
+    pcaWriteUs(CH_ESC_STBD, us);
 }
 
-void motorsSetAuto(float headingError, float throttleUs) {
-  // TODO (Phase 3): Heading-hold PID drives rudder and differential thrust.
-  // headingError: degrees, positive = need to turn right.
-  // Placeholder: pass through without modification.
-  motorsSetManual((uint16_t)throttleUs, PWM_NEUTRAL);
+void setEscsPortStbd(uint16_t portUs, uint16_t stbdUs) {
+    if (portUs < MIN_REV_US) portUs = MIN_REV_US;
+    if (portUs > MAX_FWD_US) portUs = MAX_FWD_US;
+    if (stbdUs < MIN_REV_US) stbdUs = MIN_REV_US;
+    if (stbdUs > MAX_FWD_US) stbdUs = MAX_FWD_US;
+    outPort = portUs;
+    outStbd = stbdUs;
+    pcaWriteUs(CH_ESC_PORT, portUs);
+    pcaWriteUs(CH_ESC_STBD, stbdUs);
 }
 
-// ---- Weapons / accessories ----
-
-void setGunPan(uint16_t us)  { pcaSetMicros(CH_GUN_PAN,  us); }
-void setGunTilt(uint16_t us) { pcaSetMicros(CH_GUN_TILT, us); }
-void setCIWSPan(uint16_t us) { pcaSetMicros(CH_CIWS_PAN, us); }
-
-void setCIWSSpin(bool run) {
-  // L9110S motor driver: full PWM on = spin, neutral = stop
-  pcaSetMicros(CH_CIWS_SPIN, run ? PWM_MAX : PWM_NEUTRAL);
+void computePortStbd(uint16_t throttleUs, uint16_t rudderUs,
+                     uint16_t& portUs, uint16_t& stbdUs) {
+    float rudderDelta = (float)((int)rudderUs - 1500) / 500.0f;
+    float diffUs = rudderDelta * DIFF_THRUST_FACTOR * ((int)throttleUs - 1500);
+    int port = (int)throttleUs + (int)diffUs;
+    int stbd = (int)throttleUs - (int)diffUs;
+    if (port < MIN_REV_US) port = MIN_REV_US;
+    if (port > MAX_FWD_US) port = MAX_FWD_US;
+    if (stbd < MIN_REV_US) stbd = MIN_REV_US;
+    if (stbd > MAX_FWD_US) stbd = MAX_FWD_US;
+    portUs = (uint16_t)port;
+    stbdUs = (uint16_t)stbd;
 }
 
-void setRadar(bool run) {
-  // Simple on/off via MOSFET gate on RADAR_MOTOR_PIN (not PCA9685)
-  digitalWrite(RADAR_MOTOR_PIN, run ? HIGH : LOW);
+// Reverse-interlock pattern from test_17: forward throttle (left stick
+// above idle) always wins. Reverse (right-stick V down past deadband)
+// only engages when the throttle stick is at idle.
+static bool throttleAtIdle(uint16_t leftStickUs) {
+    return leftStickUs <= THROTTLE_IDLE_MAX;
+}
+static bool rightStickCommandingReverse(uint16_t rightStickVUs) {
+    return rightStickVUs < (uint16_t)(NEUTRAL_US - REVERSE_DEADBAND_US);
 }
 
-void setBayDoor(uint8_t side, int8_t dir) {
-  uint8_t ch = (side == 0) ? CH_BAY_DOOR_PORT : CH_BAY_DOOR_STBD;
-  uint16_t us = (dir > 0) ? 1600 : (dir < 0) ? 1400 : PWM_NEUTRAL;
-  pcaSetMicros(ch, us);
+uint16_t computeThrottleUs(uint16_t leftStickUs, uint16_t rightStickVUs) {
+    if (!throttleAtIdle(leftStickUs)) {
+        if (leftStickUs >= 2000) return MAX_FWD_US;
+        return (uint16_t)map(leftStickUs, THROTTLE_IDLE_MAX, 2000, NEUTRAL_US, MAX_FWD_US);
+    }
+    if (rightStickCommandingReverse(rightStickVUs)) {
+        uint16_t rev = rightStickVUs;
+        if (rev < MIN_REV_US) rev = MIN_REV_US;
+        if (rev > NEUTRAL_US) rev = NEUTRAL_US;
+        return rev;
+    }
+    return NEUTRAL_US;
 }
 
-void setAnchor(uint8_t which, int8_t dir) {
-  uint8_t ch = (which == 0) ? CH_ANCHOR_FWD : CH_ANCHOR_AFT;
-  uint16_t us = (dir > 0) ? 1600 : (dir < 0) ? 1400 : PWM_NEUTRAL;
-  pcaSetMicros(ch, us);
+uint16_t mapRudderStickToServo(uint16_t stickUs) {
+    if (stickUs < 1000) stickUs = 1000;
+    if (stickUs > 2000) stickUs = 2000;
+    if (stickUs <= 1500) return (uint16_t)map(stickUs, 1000, 1500, RUDDER_MIN_US, NEUTRAL_US);
+    return                       (uint16_t)map(stickUs, 1500, 2000, NEUTRAL_US, RUDDER_MAX_US);
 }
+
+uint16_t motorsRudderUs() { return outRudder; }
+uint16_t motorsPortUs()   { return outPort;   }
+uint16_t motorsStbdUs()   { return outStbd;   }

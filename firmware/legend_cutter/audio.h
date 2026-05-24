@@ -1,14 +1,19 @@
 // audio.h
-// DFPlayer Mini MP3 player control via software serial.
-// Track numbers match AUDIO_* constants in config.h.
-// Engine rumble volume tracks throttle level (call audioSetThrottle each loop).
+// DFRobot DF1201S (DFPlayer Pro) — NOT the DFPlayer Mini. AT-protocol at
+// 115200 over HardwareSerial2. Index-based playback only (path-based has
+// a known firmware bug — DFRobot Issue #5 — that silently falls back to
+// "file 1" on any path mis-resolution).
 
 #pragma once
+
 #include <Arduino.h>
 
-void audioBegin();
-void audioUpdate();                    // Call every loop() for non-blocking polling
-void audioPlay(uint8_t track);        // Play a specific track (stops current)
-void audioStop();
-void audioSetVolume(uint8_t vol);     // 0–30
-void audioSetThrottle(float throttle); // 0.0–1.0; adjusts engine rumble volume
+enum AudioClip {
+    AUDIO_HORN  = 0,
+    AUDIO_GUN   = 1,
+    AUDIO_BOARD = 2,
+};
+
+bool audioBegin();         // false if DF1201S did not ACK within ~3 s
+bool audioAvailable();
+void audioPlay(AudioClip clip);

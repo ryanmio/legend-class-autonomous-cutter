@@ -1,27 +1,23 @@
 // imu.h
-// ICM-20948 9-DOF IMU (I2C, SparkFun library).
-// Provides compass heading (magnetometer + gyro fusion), roll, and pitch.
-// Mounted in mast ~30–40 cm above steel ballast to minimise magnetic interference.
-// Magnetometer requires one-time spin calibration; offsets stored in NVS flash.
+// ICM-20948 9-DOF + complementary-filter heading + PD heading-hold.
+//
+// Axis remap (confirmed water-test): chip X=up, Y=port, Z=stern →
+//   ar_x = ay, ar_y = az, ar_z = ax  (accel)
+//   mr_x = -mz, mr_y = -my, mr_z = -mx  (mag)
 
 #pragma once
+
 #include <Arduino.h>
 
-struct ImuData {
-  float heading;    // Fused compass heading, degrees 0–360 (0 = true/magnetic north)
-  float roll;       // Degrees, positive = starboard down
-  float pitch;      // Degrees, positive = bow up
-  float yawRate;    // Degrees/sec from gyro (for heading-hold PID derivative)
-  bool  calibrated; // true = magnetometer calibration offsets loaded
-};
+bool  imuBegin();           // returns false if ICM-20948 not detected
+void  imuUpdate();          // call every loop()
+float imuHeading();         // 0..360°, fused
+bool  imuHeadingReady();    // true once first sample fused
 
-void imuBegin();
-void imuUpdate();              // Call every loop(); applies complementary filter
-const ImuData& imuGet();
+// Heading-hold rudder (in µs), clamped to [RUDDER_MIN_US, RUDDER_MAX_US].
+// Uses the live PID gains; tune via setPidGains().
+uint16_t imuHeadingHoldUs(float targetHeading);
 
-// Trigger interactive spin calibration (rotates 360°, records min/max).
-// Saves offsets to NVS. Call from app Settings → "Calibrate Compass".
-void imuCalibrateMag();
-
-// Load magnetometer offsets from NVS flash
-void imuLoadCalibration();
+void  setPidGains(float kp, float kd);
+float pidKp();
+float pidKd();

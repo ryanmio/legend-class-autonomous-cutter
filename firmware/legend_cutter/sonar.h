@@ -1,18 +1,24 @@
 // sonar.h
-// JSN-SR04T V3 waterproof ultrasonic transducer — hull-mounted depth sonar.
-// Uses trigger/echo on GPIO 27/14.
-// Speed of sound corrected for freshwater (SONAR_SOUND_SPEED_US_CM ≈ 13.4 µs/cm).
-// Non-blocking: ping is issued via timer; echo captured via interrupt.
+// RCWL-1655 depth sonar (NOT JSN-SR04T). Bottom-facing.
+//   Range: 2..~450 cm.
+//   Modes: off (default), run (auto-pings every DEPTH_RUN_INTERVAL_MS),
+//   plus a one-shot check that takes a single ping without changing mode.
 
 #pragma once
+
 #include <Arduino.h>
 
-struct SonarData {
-  float   depthM;         // Depth in metres (0 if no echo / out of range)
-  bool    valid;          // true if last ping returned a valid echo
-  unsigned long lastPingMs;
+enum DepthMode {
+    DEPTH_OFF = 0,
+    DEPTH_RUN = 1,
 };
 
 void sonarBegin();
-void sonarUpdate();          // Issue ping on ~100 ms interval; call every loop()
-const SonarData& sonarGet();
+void sonarUpdate();
+
+void sonarSetMode(DepthMode m);
+void sonarPingNow();          // one-shot reading
+
+DepthMode sonarMode();
+float     sonarLastDepthM();  // -1 if no reading / no echo
+uint32_t  sonarLastReadMs();  // 0 if never

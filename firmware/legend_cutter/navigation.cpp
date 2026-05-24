@@ -1,142 +1,126 @@
 // navigation.cpp
-// Autonomous navigation engine.
-// Heading error drives rudder + differential thrust via PID controller.
-// Waypoint sequencer advances when within WAYPOINT_CAPTURE_M of current target.
-// PID gains and home waypoint stored in NVS.
+// Single-waypoint AUTO geometry. `captured` is sticky once EITHER trigger
+// fires:
+//   (1) distance: wp_dist < CAPTURE_RADIUS_M
+//   (2) crossing: boat passes the perpendicular line at the waypoint
+//       (prevents endless circling when GPS noise is close to the
+//        capture radius).
+// Cleared on a new /waypoint.
 
 #include "navigation.h"
 #include "config.h"
 #include "gps.h"
-#include "imu.h"
-#include "motors.h"
-#include <Preferences.h>
+#include <math.h>
 
-static NavMode      navMode       = NAV_IDLE;
-static float        targetHeading = 0.0f;
-static Waypoint     waypoints[32];
-static uint8_t      waypointCount = 0;
-static uint8_t      waypointIdx   = 0;
-static Waypoint     homeWpt       = {0, 0};
-static bool         homeSet       = false;
-static Preferences  prefs;
+static bool       wpSet      = false;
+static float      wpLat      = 0.0f;
+static float      wpLon      = 0.0f;
+static float      wpDistM    = 0.0f;
+static float      wpBearing  = 0.0f;
+static bool       captured   = false;
+static CapturedBy capBy      = CAPTURED_BY_NONE;
 
-// PID state
-static float pidKp = PID_KP_DEFAULT;
-static float pidKi = PID_KI_DEFAULT;
-static float pidKd = PID_KD_DEFAULT;
-static float pidIntegral    = 0.0f;
-static float pidPrevError   = 0.0f;
-static unsigned long pidLastMs = 0;
+// Leg-start (first GPS fix after /waypoint). Used for crossing trigger
+// and exposed for app visualisation.
+static bool  startValid = false;
+static float startLat   = 0.0f;
+static float startLon   = 0.0f;
 
-void navigationBegin() {
-  prefs.begin("nav", true);
-  pidKp     = prefs.getFloat("kp", PID_KP_DEFAULT);
-  pidKi     = prefs.getFloat("ki", PID_KI_DEFAULT);
-  pidKd     = prefs.getFloat("kd", PID_KD_DEFAULT);
-  homeWpt.lat = prefs.getDouble("homeLat", 0.0);
-  homeWpt.lon = prefs.getDouble("homeLon", 0.0);
-  homeSet   = prefs.isKey("homeLat");
-  prefs.end();
+// 1 deg of latitude ≈ 111,111 m anywhere on earth. Longitude scales by
+// cos(lat). Flat-earth is plenty accurate over a single pool leg.
+static const float METERS_PER_DEG_LAT = 111111.0f;
+static const float MIN_LEG_M2         = 1.0f;
+
+static float haversineBearing(float fromLat, float fromLon, float toLat, float toLon) {
+    float p1 = fromLat * DEG_TO_RAD;
+    float p2 = toLat   * DEG_TO_RAD;
+    float dl = (toLon - fromLon) * DEG_TO_RAD;
+    float y  = sinf(dl) * cosf(p2);
+    float x  = cosf(p1) * sinf(p2) - sinf(p1) * cosf(p2) * cosf(dl);
+    float b  = atan2f(y, x) * RAD_TO_DEG;
+    return fmodf(b + 360.0f, 360.0f);
 }
 
-// Wrap angle to -180 to +180 (shortest heading error)
-static float wrapError(float err) {
-  while (err >  180.0f) err -= 360.0f;
-  while (err < -180.0f) err += 360.0f;
-  return err;
+static float haversineDistM(float fromLat, float fromLon, float toLat, float toLon) {
+    const float R = 6371000.0f;
+    float p1 = fromLat * DEG_TO_RAD;
+    float p2 = toLat   * DEG_TO_RAD;
+    float dp = (toLat  - fromLat) * DEG_TO_RAD;
+    float dl = (toLon  - fromLon) * DEG_TO_RAD;
+    float a  = sinf(dp / 2) * sinf(dp / 2)
+             + cosf(p1) * cosf(p2) * sinf(dl / 2) * sinf(dl / 2);
+    return R * 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
 }
 
-static float computePID(float error) {
-  unsigned long now = millis();
-  float dt = (now - pidLastMs) / 1000.0f;
-  if (dt <= 0.0f || dt > 1.0f) { pidLastMs = now; return 0.0f; }
-  pidLastMs = now;
-
-  pidIntegral += error * dt;
-  pidIntegral = constrain(pidIntegral, -50.0f, 50.0f);  // Wind-up guard
-
-  float derivative = (error - pidPrevError) / dt;
-  pidPrevError = error;
-
-  return pidKp * error + pidKi * pidIntegral + pidKd * derivative;
+static bool hasCrossedTarget() {
+    if (!startValid) return false;
+    const float boatLat = gpsLat();
+    const float boatLon = gpsLon();
+    const float cosLat = cosf(startLat * DEG_TO_RAD);
+    const float ax = (wpLon   - startLon) * METERS_PER_DEG_LAT * cosLat;
+    const float ay = (wpLat   - startLat) * METERS_PER_DEG_LAT;
+    const float legMag2 = ax * ax + ay * ay;
+    if (legMag2 < MIN_LEG_M2) return false;
+    const float px = (boatLon - startLon) * METERS_PER_DEG_LAT * cosLat;
+    const float py = (boatLat - startLat) * METERS_PER_DEG_LAT;
+    return (px * ax + py * ay) >= legMag2;
 }
 
-void navigationUpdate() {
-  if (navMode == NAV_IDLE) return;
+void navSetWaypoint(float lat, float lon) {
+    wpLat      = lat;
+    wpLon      = lon;
+    wpSet      = true;
+    captured   = false;
+    capBy      = CAPTURED_BY_NONE;
+    startValid = false;   // re-record leg start on next GPS update
+}
 
-  const GpsData& gps = gpsGet();
-  const ImuData& imu = imuGet();
+void navClearWaypoint() {
+    wpSet      = false;
+    captured   = false;
+    capBy      = CAPTURED_BY_NONE;
+    startValid = false;
+    wpDistM    = 0.0f;
+    wpBearing  = 0.0f;
+}
 
-  // Determine target heading for current mode
-  float target = targetHeading;
-
-  if (navMode == NAV_WAYPOINT || navMode == NAV_RTH || navMode == NAV_SURVEY) {
-    Waypoint* dest = nullptr;
-    if (navMode == NAV_RTH && homeSet) {
-      dest = &homeWpt;
-    } else if (waypointCount > 0 && waypointIdx < waypointCount) {
-      dest = &waypoints[waypointIdx];
+void navUpdate() {
+    if (!wpSet || !gpsValid()) {
+        wpDistM   = 0.0f;
+        wpBearing = 0.0f;
+        return;
     }
 
-    if (dest && gps.fix) {
-      float dist = gpsDistanceM(gps.lat, gps.lon, dest->lat, dest->lon);
-      if (dist < WAYPOINT_CAPTURE_M) {
-        if (navMode == NAV_RTH) { navSetMode(NAV_IDLE); return; }
-        waypointIdx++;
-        if (waypointIdx >= waypointCount) { navSetMode(NAV_IDLE); return; }
-        dest = &waypoints[waypointIdx];
-      }
-      target = gpsBearingDeg(gps.lat, gps.lon, dest->lat, dest->lon);
+    const float boatLat = gpsLat();
+    const float boatLon = gpsLon();
+    wpDistM   = haversineDistM(boatLat, boatLon, wpLat, wpLon);
+    wpBearing = haversineBearing(boatLat, boatLon, wpLat, wpLon);
+
+    if (!startValid) {
+        startLat   = boatLat;
+        startLon   = boatLon;
+        startValid = true;
     }
-  }
 
-  float error   = wrapError(target - imu.heading);
-  float pidOut  = computePID(error);
-
-  // Map PID output to rudder pulse (centre ± max deflection)
-  uint16_t rudderUs = constrain(PWM_NEUTRAL + (int)pidOut * 5, PWM_MIN, PWM_MAX);
-  motorsSetAuto(error, PWM_NEUTRAL + 200);  // Fixed cruise throttle for now
+    if (captured) return;
+    if (wpDistM < CAPTURE_RADIUS_M) {
+        captured = true;
+        capBy    = CAPTURED_BY_DISTANCE;
+        return;
+    }
+    if (hasCrossedTarget()) {
+        captured = true;
+        capBy    = CAPTURED_BY_CROSSING;
+    }
 }
 
-void navSetMode(NavMode mode) {
-  navMode = mode;
-  pidIntegral  = 0.0f;
-  pidPrevError = 0.0f;
-  pidLastMs    = millis();
-}
-
-NavMode navGetMode() { return navMode; }
-
-void navSetTargetHeading(float deg) { targetHeading = fmod(deg + 360.0f, 360.0f); }
-
-void navSetWaypoints(const Waypoint* pts, uint8_t count) {
-  count = min(count, (uint8_t)32);
-  memcpy(waypoints, pts, count * sizeof(Waypoint));
-  waypointCount = count;
-  waypointIdx   = 0;
-}
-
-void navClearWaypoints() { waypointCount = 0; waypointIdx = 0; }
-
-void navSetHome(double lat, double lon) {
-  homeWpt.lat = lat;
-  homeWpt.lon = lon;
-  homeSet     = true;
-  prefs.begin("nav", false);
-  prefs.putDouble("homeLat", lat);
-  prefs.putDouble("homeLon", lon);
-  prefs.end();
-}
-
-void navTriggerRTH() {
-  if (homeSet) navSetMode(NAV_RTH);
-}
-
-void navSetPID(float kp, float ki, float kd) {
-  pidKp = kp; pidKi = ki; pidKd = kd;
-  prefs.begin("nav", false);
-  prefs.putFloat("kp", kp);
-  prefs.putFloat("ki", ki);
-  prefs.putFloat("kd", kd);
-  prefs.end();
-}
+bool       navWpSet()        { return wpSet; }
+float      navWpLat()        { return wpLat; }
+float      navWpLon()        { return wpLon; }
+float      navWpDistM()      { return wpDistM; }
+float      navWpBearing()    { return wpBearing; }
+bool       navCaptured()     { return captured; }
+CapturedBy navCapturedBy()   { return capBy; }
+bool       navStartValid()   { return startValid; }
+float      navStartLat()     { return startLat; }
+float      navStartLon()     { return startLon; }

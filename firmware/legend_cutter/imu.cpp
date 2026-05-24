@@ -1,115 +1,107 @@
 // imu.cpp
-// ICM-20948 integration using SparkFun ICM-20948 Arduino library.
-// Complementary filter fuses magnetometer heading with gyro yaw rate
-// to give a stable, drift-corrected compass heading.
-//
-// Calibration: magnetometer hard-iron offsets (min/max per axis) are stored
-// in NVS under namespace "imu_cal". Call imuCalibrateMag() once on the water.
+// ICM-20948 9-DOF + complementary filter + PD heading-hold.
+// Source of truth: test_29 (and the test_22 mag calibration constants).
 
 #include "imu.h"
 #include "config.h"
-#include <ICM_20948.h>
-#include <Preferences.h>
+#include <Wire.h>
+#include "ICM_20948.h"
+#include <math.h>
 
-static ICM_20948_I2C icm;
-static ImuData       imuData;
-static Preferences   prefs;
-static unsigned long lastUpdateMs = 0;
+static ICM_20948_I2C myICM;
 
-// Magnetometer calibration offsets (hard-iron)
-static float magOffX = 0, magOffY = 0, magOffZ = 0;
+static float fusedHeading   = 0.0f;
+static float prevHeadingForD = 0.0f;
+static unsigned long lastImuUs = 0;
+static uint32_t lastImuPollMs  = 0;
+static uint32_t lastDtUs       = 0;
+static bool   headingInit      = false;
 
-// Complementary filter coefficient (higher = more gyro trust)
-#define COMP_ALPHA  0.98f
+static float livePidKp = DEFAULT_KP;
+static float livePidKd = DEFAULT_KD;
 
-void imuLoadCalibration() {
-  prefs.begin("imu_cal", true);  // read-only
-  magOffX = prefs.getFloat("magOffX", 0.0f);
-  magOffY = prefs.getFloat("magOffY", 0.0f);
-  magOffZ = prefs.getFloat("magOffZ", 0.0f);
-  imuData.calibrated = prefs.isKey("magOffX");
-  prefs.end();
+static float shortestPathError(float t, float c) {
+    float e = t - c;
+    while (e >  180.0f) e -= 360.0f;
+    while (e < -180.0f) e += 360.0f;
+    return e;
 }
 
-void imuBegin() {
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  Wire.setClock(I2C_FREQ);
-
-  bool ok = false;
-  for (int tries = 0; tries < 5; tries++) {
-    icm.begin(Wire, 0);  // AD0 = 0 → address 0x68
-    if (icm.status == ICM_20948_Stat_Ok) { ok = true; break; }
-    delay(200);
-  }
-  if (!ok) {
-    Serial.println("[IMU] ICM-20948 not found — check wiring");
-    return;
-  }
-
-  // Enable DMP for sensor fusion (or use raw + complementary filter below)
-  icm.initializeDMP();
-  icm.enableDMPSensor(INV_ICM20948_SENSOR_GAME_ROTATION_VECTOR);
-  icm.setDMPODRrate(DMP_ODR_Reg_Quat6, 0);  // Maximum rate
-  icm.enableFIFO();
-  icm.enableDMP();
-  icm.resetDMP();
-  icm.resetFIFO();
-
-  imuLoadCalibration();
-  memset(&imuData, 0, sizeof(imuData));
+bool imuBegin() {
+    for (int i = 0; i < 3; i++) {
+        myICM.begin(Wire, 0);
+        if (myICM.status == ICM_20948_Stat_Ok) return true;
+        delay(500);
+    }
+    return false;
 }
 
 void imuUpdate() {
-  unsigned long now = millis();
-  float dt = (now - lastUpdateMs) / 1000.0f;
-  if (dt < 0.01f) return;  // Cap at 100 Hz
-  lastUpdateMs = now;
+    if (millis() - lastImuPollMs < IMU_UPDATE_INTERVAL_MS) return;
+    if (!myICM.dataReady()) return;
+    lastImuPollMs = millis();
+    myICM.getAGMT();
 
-  icm_20948_DMP_data_t data;
-  icm.readDMPdataFromFIFO(&data);
+    float ax = myICM.accX(), ay = myICM.accY(), az = myICM.accZ();
+    float gx = myICM.gyrX(), gy = myICM.gyrY(), gz = myICM.gyrZ();
+    float mx = myICM.magX() - MAG_OFFSET_X;
+    float my = myICM.magY() - MAG_OFFSET_Y;
+    float mz = myICM.magZ() - MAG_OFFSET_Z;
 
-  if ((icm.status == ICM_20948_Stat_Ok) || (icm.status == ICM_20948_Stat_FIFOMoreDataAvail)) {
-    if ((data.header & DMP_header_bitmap_Quat6) > 0) {
-      // Quaternion from DMP game-rotation vector → roll/pitch
-      double q1 = ((double)data.Quat6.Data.Q1) / 1073741824.0;
-      double q2 = ((double)data.Quat6.Data.Q2) / 1073741824.0;
-      double q3 = ((double)data.Quat6.Data.Q3) / 1073741824.0;
-      double q0 = sqrt(1.0 - q1*q1 - q2*q2 - q3*q3);
+    float ar_x = ay, ar_y = az, ar_z = ax;
+    float mr_x = -mz, mr_y = -my, mr_z = -mx;
+    float roll  = atan2f(ar_y, ar_z);
+    float pitch = atan2f(-ar_x, sqrtf(ar_y*ar_y + ar_z*ar_z));
+    float Bx = mr_x*cosf(pitch) + mr_y*sinf(roll)*sinf(pitch) + mr_z*cosf(roll)*sinf(pitch);
+    float By = mr_y*cosf(roll) - mr_z*sinf(roll);
+    float magH = atan2f(-By, Bx) * 180.0f / PI;
+    if (magH < 0) magH += 360.0f;
+    float accelMag = sqrtf(ax*ax + ay*ay + az*az);
 
-      imuData.roll  = degrees(atan2(2*(q0*q1 + q2*q3), 1 - 2*(q1*q1 + q2*q2)));
-      imuData.pitch = degrees(asin(2*(q0*q2 - q3*q1)));
+    unsigned long nowUs = micros();
+    float dt = (lastImuUs == 0) ? 0.0f : (nowUs - lastImuUs) * 1e-6f;
+    lastImuUs = nowUs;
+
+    if (!headingInit) {
+        fusedHeading    = magH;
+        prevHeadingForD = magH;
+        headingInit     = true;
+    } else {
+        // Yaw rate projected onto gravity vector (avoids needing tilt comp on gyro).
+        float yawRate = (accelMag > 100.0f) ? (ax*gx + ay*gy + az*gz)/accelMag : 0.0f;
+        float gyroH = fusedHeading + yawRate * dt;
+        while (gyroH <   0.0f) gyroH += 360.0f;
+        while (gyroH >= 360.0f) gyroH -= 360.0f;
+        float diff = magH - gyroH;
+        if (diff >  180.0f) diff -= 360.0f;
+        if (diff < -180.0f) diff += 360.0f;
+        fusedHeading = gyroH + (1.0f - IMU_FILTER_ALPHA) * diff;
+        if (fusedHeading <   0.0f) fusedHeading += 360.0f;
+        if (fusedHeading >= 360.0f) fusedHeading -= 360.0f;
     }
-  }
-
-  // TODO (Phase 2): Add magnetometer read + hard-iron correction → heading
-  // TODO (Phase 2): Complementary filter to fuse mag heading with gyro yaw rate
 }
 
-const ImuData& imuGet() { return imuData; }
+float imuHeading()      { return fusedHeading; }
+bool  imuHeadingReady() { return headingInit; }
 
-void imuCalibrateMag() {
-  // Rotate the vessel 360°; record min/max on each axis.
-  Serial.println("[IMU] Starting magnetometer calibration. Rotate vessel 360°...");
-  float minX = 1e9, maxX = -1e9;
-  float minY = 1e9, maxY = -1e9;
-  float minZ = 1e9, maxZ = -1e9;
-  unsigned long endMs = millis() + 30000;  // 30 second window
-
-  while (millis() < endMs) {
-    // TODO: read raw magnetometer and update min/max
-    delay(50);
-  }
-
-  magOffX = (maxX + minX) / 2.0f;
-  magOffY = (maxY + minY) / 2.0f;
-  magOffZ = (maxZ + minZ) / 2.0f;
-
-  prefs.begin("imu_cal", false);
-  prefs.putFloat("magOffX", magOffX);
-  prefs.putFloat("magOffY", magOffY);
-  prefs.putFloat("magOffZ", magOffZ);
-  prefs.end();
-
-  imuData.calibrated = true;
-  Serial.println("[IMU] Calibration saved to NVS.");
+uint16_t imuHeadingHoldUs(float target) {
+    if (!headingInit) return NEUTRAL_US;
+    float err = shortestPathError(target, fusedHeading);
+    uint32_t nowUs = micros();
+    float dt = (lastDtUs == 0) ? 0.0f : (nowUs - lastDtUs) * 1e-6f;
+    lastDtUs = nowUs;
+    float dErr = 0.0f;
+    if (dt > 0.0f && dt < 0.5f) {
+        float dH = shortestPathError(fusedHeading, prevHeadingForD);
+        dErr = -dH / dt;
+    }
+    prevHeadingForD = fusedHeading;
+    int v = (int)(NEUTRAL_US + livePidKp * err + livePidKd * dErr);
+    if (v < RUDDER_MIN_US) v = RUDDER_MIN_US;
+    if (v > RUDDER_MAX_US) v = RUDDER_MAX_US;
+    return (uint16_t)v;
 }
+
+void  setPidGains(float kp, float kd) { livePidKp = kp; livePidKd = kd; }
+float pidKp() { return livePidKp; }
+float pidKd() { return livePidKd; }

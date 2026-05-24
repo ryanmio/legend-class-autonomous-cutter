@@ -1,164 +1,194 @@
 /*
  * legend_cutter.ino
  * Legend Class Autonomous Cutter — ESP32 firmware
- * Firmware version: see FIRMWARE_VERSION in config.h
  *
- * Architecture: non-blocking state machine
- *   States: IDLE → MANUAL → AUTONOMOUS → FAILSAFE | ESTOP | CALIBRATION
- *   iBUS signal from Flysky receiver is parsed every loop().
- *   Mode switch (CH5) transitions between MANUAL and AUTONOMOUS.
- *   iBUS signal loss → FAILSAFE (throttle off, rudder centre).
- *   App e-stop command → ESTOP.
+ * Direct port of tests/test_29_pool_integration (water-tested). The mode
+ * FSM (MANUAL/AUTO/FAILSAFE) and the loop wiring live here; everything
+ * else is owned by a single-purpose module.
  *
- * OTA: connect to AP, use Arduino IDE → Sketch → Upload via OTA → "legend-cutter"
+ * Mode FSM:
+ *   - MANUAL    : rudder + ESCs follow CH1/CH2/CH3.
+ *   - AUTO      : if waypoint+GPS valid and not captured, hold heading on
+ *                 the haversine bearing with differential thrust; else
+ *                 outputs neutral.
+ *   - FAILSAFE  : SwD (CH6) sustained > 1500 µs for 500 ms, OR no iBUS
+ *                 frames for 3 s. Outputs neutral. Cleared by flipping
+ *                 SwA (CH7) to MANUAL position after RC returns.
  *
- * Modules:
- *   ibus      — Flysky iBUS serial parser (UART1)
- *   motors    — PCA9685 ESC + servo control, differential thrust
- *   battery   — INA219 voltage/current
- *   bilge     — water sensors + pump state machine
- *   gps       — BN-220 NMEA parser (UART2)
- *   imu       — ICM-20948 9-DOF sensor fusion
- *   sonar     — JSN-SR04T depth sonar
- *   audio     — DFPlayer Mini MP3 playback
- *   telemetry — WiFi AP + WebSocket + HTTP API
- *   navigation — heading-hold PID, waypoints, RTH
- *   weapons   — deck gun, Phalanx, animation state machines
+ * Safety: AUTO cruise cap 1750 µs; ESC hard floor MIN_REV_US / cap MAX_FWD_US
+ * in motors.cpp. Captured waypoint freezes at neutral until operator
+ * POSTs a new waypoint.
  */
 
+#include <Wire.h>
 #include "config.h"
 #include "ibus.h"
 #include "motors.h"
+#include "imu.h"
+#include "gps.h"
+#include "navigation.h"
 #include "battery.h"
 #include "bilge.h"
-#include "gps.h"
-#include "imu.h"
 #include "sonar.h"
 #include "audio.h"
-#include "telemetry.h"
-#include "navigation.h"
+#include "radar.h"
+#include "lights.h"
 #include "weapons.h"
+#include "telemetry.h"
 
-// ==================== VESSEL STATE MACHINE ====================
-enum VesselState {
-  STATE_IDLE,
-  STATE_MANUAL,
-  STATE_AUTONOMOUS,
-  STATE_FAILSAFE,
-  STATE_ESTOP,
-  STATE_CALIBRATION,
-};
+enum VesselMode { MODE_MANUAL, MODE_AUTO, MODE_FAILSAFE };
+static VesselMode mode                = MODE_MANUAL;
+static bool       failsafeAckRequired = false;
+static uint32_t   guardAboveSinceMs   = 0;
 
-static VesselState state    = STATE_IDLE;
-static bool        eStopReq = false;  // Set by telemetry HTTP /estop handler
+const char* vesselModeName() {
+    switch (mode) {
+      case MODE_MANUAL:   return "MANUAL";
+      case MODE_AUTO:     return "AUTO";
+      case MODE_FAILSAFE: return "FAILSAFE";
+    }
+    return "?";
+}
 
-// ==================== SETUP ====================
+static bool swcInManual() { return ibusChannel(IBUS_IDX_MODE) < MODE_MAN_BELOW_US; }
+static bool swcInAuto()   { return ibusChannel(IBUS_IDX_MODE) > MODE_AUTO_ABOVE_US; }
+
+static void updateMode() {
+    if (!ibusEverGood()) {
+        mode = MODE_MANUAL;
+        guardAboveSinceMs = 0;
+        return;
+    }
+
+    // SwD failsafe guard.
+    uint16_t guard = ibusChannel(IBUS_IDX_FAILSAFE_GUARD);
+    if (guard > FAILSAFE_GUARD_THRESHOLD) {
+        if (guardAboveSinceMs == 0) guardAboveSinceMs = millis();
+        if (millis() - guardAboveSinceMs >= FAILSAFE_DETECT_MS) {
+            if (mode != MODE_FAILSAFE) {
+                mode = MODE_FAILSAFE;
+                failsafeAckRequired = true;
+                Serial.println("[FAILSAFE] guard tripped — flip SwA UP (MANUAL) to ACK.");
+            }
+            return;
+        }
+    } else {
+        guardAboveSinceMs = 0;
+    }
+
+    // No-frame failsafe.
+    if (millis() - ibusLastFrameMs() >= FAILSAFE_NO_FRAME_MS) {
+        if (mode != MODE_FAILSAFE) {
+            mode = MODE_FAILSAFE;
+            failsafeAckRequired = true;
+            Serial.println("[FAILSAFE] no iBUS frames — flip SwA UP (MANUAL) to ACK after RC returns.");
+        }
+        return;
+    }
+
+    if (failsafeAckRequired) {
+        if (swcInManual()) {
+            failsafeAckRequired = false;
+            mode = MODE_MANUAL;
+            Serial.println("[FAILSAFE] cleared (ACK via SwA=MANUAL)");
+        }
+        return;
+    }
+
+    // SwA hysteresis: deadband holds current mode.
+    if      (swcInManual()) mode = MODE_MANUAL;
+    else if (swcInAuto())   mode = MODE_AUTO;
+}
+
+static void applyOutputs() {
+    if (!ibusEverGood()) {
+        setRudder(NEUTRAL_US);
+        setEscs(NEUTRAL_US);
+        return;
+    }
+    switch (mode) {
+      case MODE_MANUAL:
+        setRudder(mapRudderStickToServo(ibusChannel(IBUS_IDX_RUDDER)));
+        setEscs(computeThrottleUs(ibusChannel(IBUS_IDX_THROTTLE),
+                                  ibusChannel(IBUS_IDX_REVERSE)));
+        break;
+
+      case MODE_AUTO: {
+        if (navWpSet() && gpsValid() && !navCaptured()) {
+            uint16_t cruise   = telemetryCruiseUs();
+            uint16_t engageUs = (cruise > AUTO_CRUISE_CAP_US) ? AUTO_CRUISE_CAP_US : cruise;
+            uint16_t rudderUs = imuHeadingHoldUs(navWpBearing());
+            uint16_t portUs, stbdUs;
+            computePortStbd(engageUs, rudderUs, portUs, stbdUs);
+            setRudder(rudderUs);
+            setEscsPortStbd(portUs, stbdUs);
+        } else {
+            setRudder(NEUTRAL_US);
+            setEscs(NEUTRAL_US);
+        }
+        break;
+      }
+
+      case MODE_FAILSAFE:
+        setRudder(NEUTRAL_US);
+        setEscs(NEUTRAL_US);
+        break;
+    }
+}
+
 void setup() {
-  Serial.begin(115200);
-  Serial.printf("\n[BOOT] %s firmware v%s\n", VESSEL_NAME, FIRMWARE_VERSION);
+    Serial.begin(115200);
+    delay(500);
+    Serial.printf("\n[BOOT] %s firmware v%s\n", VESSEL_NAME, FIRMWARE_VERSION);
 
-  // MOSFET outputs
-  pinMode(BILGE_PUMP_PIN,  OUTPUT);
-  pinMode(RADAR_MOTOR_PIN, OUTPUT);
-  digitalWrite(BILGE_PUMP_PIN,  LOW);
-  digitalWrite(RADAR_MOTOR_PIN, LOW);
+    lightsBegin();
+    bilgeBegin();
+    radarBegin();
+    sonarBegin();
 
-  // Module init — order matters (Wire must come up before I2C devices)
-  motorsBegin();      // PCA9685 init + ESC arm (sends 1500 µs to all channels)
-  ibusBegin();        // UART1 for iBUS
-  batteryBegin();     // INA219 over I2C
-  bilgeBegin();       // Water sensor GPIO + pump pin
-  gpsBegin();         // UART2 for GPS
-  imuBegin();         // ICM-20948 over I2C (Wire already started by motorsBegin)
-  sonarBegin();       // Trigger/echo GPIOs
-  audioBegin();       // DFPlayer Mini via SoftwareSerial
-  navigationBegin();  // Load PID gains + home waypoint from NVS
-  weaponsBegin();     // Centre servos
-  telemetryBegin();   // WiFi AP + WebSocket + HTTP server (blocks until AP up)
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+    Wire.setClock(I2C_FREQ_HZ);
 
-  state = STATE_IDLE;
-  Serial.println("[BOOT] Ready");
+    if (!motorsBegin()) { Serial.println("FAIL: PCA9685 not at 0x40"); while (true) delay(1000); }
+    if (!imuBegin())    { Serial.println("FAIL: ICM-20948 not at 0x68"); while (true) delay(1000); }
+
+    if (batteryBegin()) Serial.printf("[I2C] INA219 detected at 0x%02X\n", INA219_ADDR);
+    else                Serial.printf("[I2C] WARN: INA219 not at 0x%02X — voltage telemetry disabled\n", INA219_ADDR);
+
+    weaponsBegin();
+
+    setRudder(NEUTRAL_US);
+    setEscs(NEUTRAL_US);
+    Serial.println("Arming ESCs (3 s @ 1500 µs)...");
+    delay(3000);
+
+    ibusBegin();
+    gpsBegin();
+    if (audioBegin()) Serial.println("[AUDIO] DF1201S ready.");
+    else              Serial.println("[AUDIO] WARN: DF1201S did not ACK — /audio disabled.");
+
+    telemetryBegin();
+
+    Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",
+        DEFAULT_CRUISE_US, AUTO_CRUISE_CAP_US, DEFAULT_KP, DEFAULT_KD, CAPTURE_RADIUS_M);
+    Serial.println("Ready.");
 }
 
-// ==================== MAIN LOOP ====================
 void loop() {
-  // --- Always-on: parse iBUS and update sensors regardless of state ---
-  ibusUpdate();
-  batteryUpdate();
-  bilgeUpdate();
-  gpsUpdate();
-  imuUpdate();
-  sonarUpdate();
-  audioUpdate();
-  telemetryUpdate();
-  weaponsUpdate();
+    // Read inputs.
+    ibusUpdate();
+    imuUpdate();
+    ibusUpdate();              // second poll: low-latency for SwD detection
+    batteryUpdate();
+    bilgeUpdate();
+    radarUpdate();
+    sonarUpdate();
+    gpsUpdate();
+    telemetryUpdate();
 
-  // --- E-stop takes priority over everything ---
-  if (eStopReq) {
-    state   = STATE_ESTOP;
-    eStopReq = false;
-  }
-
-  // --- State machine ---
-  switch (state) {
-    case STATE_IDLE:
-      motorsKill();
-      // Transition to MANUAL once iBUS signal is present
-      if (!ibusSignalLost()) state = STATE_MANUAL;
-      break;
-
-    case STATE_MANUAL: {
-      if (ibusSignalLost()) { state = STATE_FAILSAFE; break; }
-      if (batteryGet().criticalVoltage) { navTriggerRTH(); state = STATE_AUTONOMOUS; break; }
-
-      uint16_t throttle = ibusChannel(IBUS_CH_THROTTLE);
-      uint16_t rudder   = ibusChannel(IBUS_CH_RUDDER);
-      uint16_t modeSwitch = ibusChannel(IBUS_CH_MODE);
-
-      // Mode switch: >1600 = autonomous
-      if (modeSwitch > 1600) { state = STATE_AUTONOMOUS; break; }
-
-      motorsSetManual(throttle, rudder);
-
-      // Throttle → engine audio volume
-      float tNorm = (float)(throttle - 1000) / 1000.0f;
-      audioSetThrottle(tNorm);
-      break;
-    }
-
-    case STATE_AUTONOMOUS: {
-      if (ibusSignalLost()) { state = STATE_FAILSAFE; break; }
-
-      uint16_t modeSwitch = ibusChannel(IBUS_CH_MODE);
-      // RC always wins — flip mode switch back to manual
-      if (modeSwitch <= 1600) { state = STATE_MANUAL; break; }
-
-      navigationUpdate();
-      break;
-    }
-
-    case STATE_FAILSAFE:
-      motorsKill();
-      audioStop();
-      Serial.println("[FAILSAFE] iBUS signal lost");
-      // Recover automatically when signal returns
-      if (!ibusSignalLost()) state = STATE_MANUAL;
-      break;
-
-    case STATE_ESTOP:
-      motorsKill();
-      audioStop();
-      setCIWSSpin(false);
-      setRadar(false);
-      // Hold until app sends /estop-release (TODO: add HTTP endpoint)
-      break;
-
-    case STATE_CALIBRATION:
-      // IMU calibration spin — handled by imuCalibrateMag() called from telemetry endpoint
-      break;
-  }
+    // Compute + apply.
+    updateMode();
+    navUpdate();
+    weaponsUpdate();
+    applyOutputs();
 }
-
-// ==================== E-STOP CALLBACK ====================
-// Called from telemetry.cpp HTTP /estop handler
-void requestEStop() { eStopReq = true; }

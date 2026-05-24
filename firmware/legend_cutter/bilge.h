@@ -1,19 +1,19 @@
 // bilge.h
-// Water intrusion detection and bilge pump control.
-// Two sensors: forward bilge (GPIO 32) and aft bilge (GPIO 33).
-// Pump MOSFET gate driven from GPIO 13 (active HIGH).
-// Pump never runs dry: stops after BILGE_DRY_DELAY_MS of dry readings
-// and has a hard BILGE_MAX_RUN_MS emergency cutoff.
+// 3 active-LOW water probes (fwd / mid / rear) + 1 active-HIGH pump MOSFET.
+// Only the mid sensor (co-located with the pump) runs the pump.
 
 #pragma once
+
 #include <Arduino.h>
 
-struct BilgeData {
-  bool sensorFwd;   // true = water detected forward
-  bool sensorAft;   // true = water detected aft
-  bool pumpRunning; // true = pump is active
-};
-
 void bilgeBegin();
-void bilgeUpdate();            // Call every loop(); manages pump state machine
-const BilgeData& bilgeGet();
+void bilgeUpdate();
+
+bool     bilgeFwdWet();
+bool     bilgeMidWet();
+bool     bilgeRearWet();
+bool     bilgePumpOn();
+bool     bilgePumpManual();
+bool     bilgeStuck();              // run-dry latch tripped
+
+void     bilgeSetManual(bool on);   // /bilge POST handler

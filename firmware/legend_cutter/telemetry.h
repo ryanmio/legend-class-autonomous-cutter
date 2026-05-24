@@ -1,17 +1,25 @@
 // telemetry.h
-// WiFi Access Point + WebSocket telemetry server + HTTP command API.
-// ESP32 hosts a WiFi AP; the iOS app connects directly (no router needed).
-// Telemetry JSON broadcast over WebSocket (port 81) at TELEMETRY_INTERVAL_MS.
-// HTTP API (port 80) handles command endpoints from the app.
+// WiFi (home → hotspot, no AP fallback) + HTTP API + /telemetry JSON.
+//
+// Endpoints (all CORS-enabled):
+//   GET  /status
+//   GET  /telemetry
+//   POST /cruise     {us | pct}
+//   POST /waypoint   {lat,lon}  (lat:null,lon:null clears)
+//   POST /pid        {kp?, kd?}
+//   POST /sim_gps    {lat,lon}  (bench-only; sticky for session)
+//   POST /led        {light:"nav|bridge|deck", state:bool}
+//   POST /audio      {sound:"horn|gun|board"}
+//   POST /bilge      {on:bool}
+//   POST /radar      {on?, speed?, burst_ms?, pause_ms?}
+//   POST /depth      {mode:"stop|check|run"}
 
 #pragma once
+
 #include <Arduino.h>
 
-void telemetryBegin();
-void telemetryUpdate();   // Call every loop(); handles WebSocket and HTTP events
+void telemetryBegin();   // brings up WiFi, registers handlers, starts server
+void telemetryUpdate();  // server.handleClient()
 
-// Enqueue a JSON telemetry broadcast — called from main loop on timer
-void telemetryBroadcast();
-
-// Register HTTP command handlers (called once from telemetryBegin)
-void telemetryRegisterRoutes();
+uint16_t   telemetryCruiseUs();        // last value POSTed to /cruise
+const char* telemetryBoatIP();          // c-string; empty if not connected

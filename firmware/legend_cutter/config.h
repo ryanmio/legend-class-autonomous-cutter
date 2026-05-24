@@ -1,159 +1,181 @@
 // config.h
 // Central pin definitions, PCA9685 channel assignments, and tuning constants
 // for the Legend Class Autonomous Cutter firmware.
-// Edit this file when hardware changes — never scatter magic numbers in module files.
+//
+// Source of truth: tests/test_29_pool_integration (locked channel map and
+// pin assignments, 2026-05-10..2026-05-20). All hardware values reflect
+// what has actually been bench/water-tested. When hardware changes, edit
+// this file — never scatter magic numbers into module files.
 
 #pragma once
 
-// ==================== BUILD IDENTIFICATION ====================
-#define FIRMWARE_VERSION  "0.1.0"
-#define VESSEL_NAME       "Legend Cutter"
-#define OTA_HOSTNAME      "legend-cutter"
+#include <stdint.h>
 
-// ==================== ESP32 PIN DEFINITIONS ====================
+// ── Build identification ───────────────────────────────────────────────────
+#define FIRMWARE_VERSION "0.2.0"
+#define VESSEL_NAME      "Legend Cutter"
 
-// iBUS receiver (Flysky FS-iA10B, iBUS SERVO port)
-#define IBUS_RX_PIN       16   // UART1 RX — 5V signal, use 1K+2K voltage divider
+// ── I2C ────────────────────────────────────────────────────────────────────
+static const uint8_t  I2C_SDA_PIN = 21;
+static const uint8_t  I2C_SCL_PIN = 22;
+static const uint32_t I2C_FREQ_HZ = 400000;
 
-// GPS (BN-220 u-blox NEO-M8N)
-// Wire colors on the boat harness: white=BN-220 TX, green=BN-220 RX.
-// (This batch is REVERSED from typical convention — confirmed 2026-05-03.)
-//   white → GPIO 17 (ESP32 reads NMEA here)
-//   green → GPIO 4  (ESP32 writes here, optional)
-#define GPS_RX_PIN        17   // UART2 RX — NMEA from GPS (← white)
-#define GPS_TX_PIN         4   // UART2 TX — config commands to GPS (→ green, optional)
-#define GPS_BAUD        9600   // Default BN-220 baud rate
+static const uint8_t PCA9685_ADDR  = 0x40;
+static const uint8_t INA219_ADDR   = 0x41;
+static const uint8_t ICM20948_ADDR = 0x68;
 
-// I2C bus — shared by PCA9685, INA219, ICM-20948
-#define I2C_SDA_PIN       21
-#define I2C_SCL_PIN       22
-#define I2C_FREQ        400000 // 400 kHz; keep total bus length < 30 cm
+// ── iBUS receiver (Flysky FS-iA10B) ────────────────────────────────────────
+static const uint8_t  IBUS_RX_PIN = 16;
+static const uint32_t IBUS_BAUD   = 115200;
 
-// I2C device addresses
-#define PCA9685_ADDR    0x40
-#define INA219_ADDR     0x41
-#define ICM20948_ADDR   0x68   // AD0 low; use 0x69 if AD0 high
+// Channel indices (0-based). Final map locked 2026-05-10.
+//   CH1 idx 0  rudder        (right-stick H)
+//   CH2 idx 1  reverse       (right-stick V, down=reverse)
+//   CH3 idx 2  throttle      (left-stick V)
+//   CH5 idx 4  knob          (deck gun pan)
+//   CH6 idx 5  failsafe guard (SwD; up≈1000 µs nominal, ≥1500 µs = TX gone)
+//   CH7 idx 6  mode switch   (SwA; up≈1000 µs=MANUAL, down≈2000 µs=AUTO)
+static const uint8_t IBUS_IDX_RUDDER         = 0;
+static const uint8_t IBUS_IDX_REVERSE        = 1;
+static const uint8_t IBUS_IDX_THROTTLE       = 2;
+static const uint8_t IBUS_IDX_GUN_PAN        = 4;
+static const uint8_t IBUS_IDX_FAILSAFE_GUARD = 5;
+static const uint8_t IBUS_IDX_MODE           = 6;
 
-// DFPlayer Mini (software serial, 9600 baud)
-#define DFPLAYER_TX_PIN   25   // ESP32 TX → DFPlayer RX
-#define DFPLAYER_RX_PIN   26   // ESP32 RX ← DFPlayer TX
+// ── PCA9685 channel assignments ────────────────────────────────────────────
+static const uint8_t CH_ESC_PORT = 0;
+static const uint8_t CH_ESC_STBD = 1;
+static const uint8_t CH_RUDDER   = 2;
+static const uint8_t CH_GUN_PAN  = 8;   // positional 9g micro (test_18 PASS 2026-05-04)
 
-// Ultrasonic depth sonar (JSN-SR04T V3)
-#define SONAR_TRIG_PIN    27
-#define SONAR_ECHO_PIN    14
-// Speed of sound in freshwater ~1480 m/s → ~13.4 µs/cm (NOT the default air value of 58)
-#define SONAR_SOUND_SPEED_US_CM  13.4f
+static const uint16_t PCA9685_FREQ_HZ = 50;
 
-// Water intrusion sensors (ADC1 pins — ADC2 unavailable when WiFi active)
-#define WATER_SENSOR_FWD_PIN  32  // Forward bilge — GPIO32 has internal pullup
-#define WATER_SENSOR_AFT_PIN  33  // Aft bilge
+// ── Output bounds (µs) ─────────────────────────────────────────────────────
+static const uint16_t NEUTRAL_US    = 1500;
+static const uint16_t MAX_FWD_US    = 1800;
+// AUTO never asks for reverse; MIN_REV_US widens setEscs floor so MANUAL
+// reverse (right-stick V down past deadband) can reach the ESCs.
+static const uint16_t MIN_REV_US    = 1200;
 
-// MOSFET gate outputs
-#define BILGE_PUMP_PIN    13   // Active HIGH → runs bilge pump direct from 4S
-#define RADAR_MOTOR_PIN   15   // Active HIGH → mast radar motor
+// Rudder limits found in test_15 (1334/1683 observed safe; ±170 chosen).
+static const uint16_t RUDDER_MIN_US = 1330;
+static const uint16_t RUDDER_MAX_US = 1670;
 
-// ==================== PCA9685 CHANNEL ASSIGNMENTS ====================
-// All servos and ESCs are driven through the PCA9685 I2C PWM driver.
-// Standard servo pulse range: 1000 µs (full reverse/left) to 2000 µs (full forward/right), 1500 µs = neutral.
+// AUTO cruise selection (no floor; cap only). cruise=NEUTRAL_US is valid
+// for static heading-hold. Cap prevents an in-water hands-off runaway.
+static const uint16_t AUTO_CRUISE_CAP_US = 1750;
+static const uint16_t DEFAULT_CRUISE_US  = 1660;
+static const float    DIFF_THRUST_FACTOR = 0.3f;
 
-#define CH_ESC_PORT        0   // Port (left) motor ESC
-#define CH_ESC_STBD        1   // Starboard (right) motor ESC — counter-rotating prop
-#define CH_RUDDER          2   // 20 kg waterproof rudder servo (twin rudders via tiller linkage)
-#define CH_BAY_DOOR_PORT   3   // Port bay door winch (FS90R continuous rotation) — UNVERIFIED, scaffold value
-#define CH_GUN_TILT        4   // Deck gun tilt (2.1 g micro servo, pushrod through central tube)
-#define CH_CIWS_PAN        5   // Phalanx CIWS pan servo
-#define CH_CIWS_SPIN       6   // Phalanx barrel spin (6 mm coreless via L9110S — use full-on PWM)
-#define CH_RADAR           7   // Top radar rotation motor
-#define CH_GUN_PAN         8   // Deck gun pan — positional 9g micro (MG90S/SG90 class). Verified test_18 PASS 2026-05-04.
-#define CH_BAY_DOOR_STBD   9   // Starboard bay door winch (FS90R continuous rotation)
-#define CH_ANCHOR_FWD     10   // Forward anchor winch (continuous rotation)
-#define CH_ANCHOR_AFT     11   // Aft anchor winch (continuous rotation)
-// 12–15: reserved for expansion (searchlight, ramp doors, etc.)
+// Stick safety + reverse interlock.
+static const uint16_t THROTTLE_IDLE_MAX    = 1100;
+static const uint16_t REVERSE_DEADBAND_US  = 30;
 
-// PWM pulse widths (µs) — adjust per actual servo calibration
-#define PWM_NEUTRAL       1500
-#define PWM_MIN           1000
-#define PWM_MAX           2000
-#define PCA9685_FREQ        50  // Hz — standard 50 Hz for servos
+// SwA hysteresis.
+static const uint16_t MODE_MAN_BELOW_US  = 1450;
+static const uint16_t MODE_AUTO_ABOVE_US = 1550;
 
-// Rudder-specific limits (tighter than PWM_MIN/MAX). Past these the twin-tiller
-// linkage over-rotates and the dogbone flips center, jamming. Found via
-// tests/test_15_rudder_max_deflection on 2026-05-03 (observed safe extremes
-// 1334/1683 µs; ±170 chosen for symmetric travel with right-side margin).
-#define RUDDER_MIN_US     1330
-#define RUDDER_MAX_US     1670
+// Failsafe thresholds.
+static const uint16_t FAILSAFE_GUARD_THRESHOLD = 1500;
+static const uint32_t FAILSAFE_DETECT_MS       = 500;
+static const uint32_t FAILSAFE_NO_FRAME_MS     = 3000;
 
-// ==================== iBUS PROTOCOL ====================
-#define IBUS_BAUD        115200
-#define IBUS_CHANNELS        10
-// Channel indices (0-based) from Flysky FS-i6X transmitter
-// Final map locked in 2026-05-10 after the test_27 RC-loss diagnostic.
-#define IBUS_CH_RUDDER          0   // CH1 right-stick H — verified test_07/15/17/26/27
-#define IBUS_CH_REVERSE         1   // CH2 right-stick V (down = reverse) — used in test_17 only
-#define IBUS_CH_THROTTLE        2   // CH3 left-stick V — verified test_08/17/26/27
-#define IBUS_CH_GUN_PAN         4   // CH5 right-knob (VrA) — verified test_18 PASS 2026-05-04
-#define IBUS_CH_FAILSAFE_GUARD  5   // CH6 SwD — guard for TX-loss detection. SwD sits up
-                                    //   (~1000 µs) in normal operation; receiver outputs
-                                    //   ~2000 µs from its stored failsafe value when TX
-                                    //   is gone. Firmware: ch[5] > 1500 sustained 500 ms
-                                    //   → MODE_FAILSAFE. Required because FS-iA10B with
-                                    //   CH-OFF failsafe holds-last instead of going silent.
-#define IBUS_CH_MODE            6   // CH7 SwA — manual/auto switch. Up=MANUAL (~1000 µs),
-                                    //   down=AUTO (~2000 µs). Up is MANUAL because the
-                                    //   FS-i6X forces switches up at TX power-up — that
-                                    //   makes MANUAL the safe boot state.
-// iBUS raw value range: 1000–2000
+// ── GPS (BN-220) ───────────────────────────────────────────────────────────
+// Wire colors on this batch are reversed from convention: white=TX, green=RX.
+//   white (BN-220 TX) → GPIO 17 (ESP32 RX)
+//   green (BN-220 RX) → GPIO 4  (ESP32 TX, optional)
+// SoftwareSerial is used: UART2 is owned by the DF1201S audio module which
+// needs 115200 (SoftwareSerial @ 115200 + WiFi is unreliable, test_11).
+static const uint8_t  GPS_RX_PIN = 17;
+static const uint8_t  GPS_TX_PIN = 4;
+static const uint32_t GPS_BAUD   = 9600;
 
-// ==================== CONTROL MIXING ====================
-// Differential thrust: blend port/stbd ESC speeds with rudder input for tight turns.
-// 0.0 = no differential (rudder only), 1.0 = full differential contribution.
-#define DIFF_THRUST_FACTOR    0.3f
+// ── IMU (ICM-20948) ────────────────────────────────────────────────────────
+static const uint32_t IMU_UPDATE_INTERVAL_MS = 20;
+// Default heading-hold gains; live-tunable via POST /pid.
+static const float    DEFAULT_KP   = 3.0f;
+static const float    DEFAULT_KD   = 8.0f;
+// Mag offsets from test_22 calibration.
+static const float    MAG_OFFSET_X = -20.70f;
+static const float    MAG_OFFSET_Y =  -0.45f;
+static const float    MAG_OFFSET_Z = -17.70f;
+static const float    IMU_FILTER_ALPHA = 0.98f;
 
-// Heading-hold PID defaults (stored in NVS, overridable from app)
-#define PID_KP_DEFAULT        2.0f
-#define PID_KI_DEFAULT        0.05f
-#define PID_KD_DEFAULT        0.5f
+// ── Battery (INA219) ───────────────────────────────────────────────────────
+static const uint32_t INA_POLL_INTERVAL_MS = 250;
 
-// Waypoint capture radius (metres) — when to advance to next waypoint
-#define WAYPOINT_CAPTURE_M    3.0f
+// ── Depth sonar (RCWL-1655) ────────────────────────────────────────────────
+// RCWL-1655 — NOT a JSN-SR04T. Confirmed bench-good 2026-03-15 in test_04.
+// Sound speed: 13.4 µs/cm freshwater round-trip. AIR is ~4.3× slower, so
+// bench tests show distances ~4.3× LARGER than reality.
+static const uint8_t  PIN_SONAR_TRIG        = 27;
+static const uint8_t  PIN_SONAR_ECHO        = 14;
+static const float    SONAR_US_PER_CM       = 13.4f;
+static const uint32_t DEPTH_PING_TIMEOUT_US = 40000;
+static const uint32_t DEPTH_RUN_INTERVAL_MS = 20000;
 
-// Low-voltage return-to-home threshold (volts)
-#define BATTERY_RTH_VOLTAGE   13.0f   // 4S LiPo ~3.25 V/cell
-#define BATTERY_ALARM_VOLTAGE 13.6f   // Warn before RTH
+// ── Bilge ──────────────────────────────────────────────────────────────────
+// 3 active-LOW water probes + 1 active-HIGH pump MOSFET. Only the mid
+// sensor (co-located with the pump) runs the pump; fwd/rear are
+// informational.
+//   GPIO 5 is a strapping pin but only governs SDIO-slave boot mode (unused);
+//   safe as a sensor input for normal flash boot.
+static const uint8_t  PIN_BILGE_FWD_SENSOR    = 32;
+static const uint8_t  PIN_BILGE_MID_SENSOR    = 33;
+static const uint8_t  PIN_BILGE_REAR_SENSOR   = 5;
+static const uint8_t  PIN_BILGE_PUMP          = 13;
+static const uint32_t BILGE_DRY_DELAY_MS      = 5000;
+static const uint32_t BILGE_MANUAL_TIMEOUT_MS = 60000;
+static const uint32_t BILGE_MAX_RUN_MS        = 60000;
 
-// Battery voltage divider ratio — adjust to match physical resistors
-// INA219 input range: measure voltage at shunt input terminal
-#define BATTERY_VOLTAGE_SCALE 1.0f   // INA219 reads bus voltage directly
+// ── Radar (mast dish, 2N2222 low-side PWM on GPIO 2) ───────────────────────
+// 1 kHz instead of "above audible": at 20 kHz the coil L/R doesn't let
+// current build per pulse — low duty produces no torque. 1 kHz is audible
+// as a whine but produces useful low-speed torque.
+// Add a 1N4148/1N4001 flyback diode across the motor before sustained use.
+static const uint8_t  PIN_RADAR_MOTOR        = 2;
+static const uint32_t RADAR_PWM_FREQ_HZ      = 1000;
+static const uint8_t  RADAR_PWM_RESOLUTION   = 8;
+static const uint8_t  RADAR_DEFAULT_SPEED    = 25;
+static const uint32_t RADAR_BURST_MS_DEFAULT = 3;
+static const uint32_t RADAR_PAUSE_MS_DEFAULT = 200;
+static const uint32_t RADAR_BURST_MS_MIN     = 2;
+static const uint32_t RADAR_BURST_MS_MAX     = 5000;
+static const uint32_t RADAR_PAUSE_MS_MIN     = 0;
+static const uint32_t RADAR_PAUSE_MS_MAX     = 60000;
 
-// ==================== BILGE PUMP ====================
-#define BILGE_DRY_DELAY_MS    5000   // Run pump this long after sensors read dry before stopping
-#define BILGE_MAX_RUN_MS     60000   // Emergency shutoff (run-dry protection)
+// ── LED light circuits ─────────────────────────────────────────────────────
+static const uint8_t PIN_NAV    = 18;
+static const uint8_t PIN_BRIDGE = 19;
+static const uint8_t PIN_DECK   = 23;
 
-// ==================== FAILSAFE ====================
-// If iBUS frames stop arriving for this long, engage failsafe (throttle off, rudder centre)
-#define IBUS_FAILSAFE_MS      500
+// ── DF1201S audio (HardwareSerial2) ────────────────────────────────────────
+// AT-protocol DFPlayer Pro at 115200. NOT the DFPlayer Mini. Index-based
+// playback only — path-based has known firmware bugs on this module.
+// Indices reflect FAT write order; AppleDouble files from macOS occupy the
+// even slots until a clean `xattr -cr` wipe (then odd-only becomes 1/2/3).
+static const uint8_t  DFP_RX_PIN      = 25;
+static const uint8_t  DFP_TX_PIN      = 26;
+static const uint32_t DFP_BAUD        = 115200;
+static const uint8_t  DFP_VOLUME      = 20;
+static const int16_t  DFP_HORN_INDEX  = 1;
+static const int16_t  DFP_GUN_INDEX   = 3;
+static const int16_t  DFP_BOARD_INDEX = 5;
 
-// ==================== WIFI / OTA ====================
-// ESP32 runs as a WiFi Access Point for direct phone-to-boat connection.
-// Credentials defined in secrets.h (not committed).
-#define WIFI_AP_CHANNEL       6
-#define WIFI_AP_MAX_CONN      2
+// ── Deck gun pan (test_18) ─────────────────────────────────────────────────
+// Positional 9g micro on PCA ch8 (servo swapped from FS90R continuous
+// 2026-05-04). Knob CH5 → angle directly. PAN_REVERSE compensates for
+// the linkage direction on this build.
+static const uint16_t GUN_PAN_MIN_US      = 1000;
+static const uint16_t GUN_PAN_MAX_US      = 2000;
+static const uint16_t GUN_PAN_DEADBAND_US = 15;
+static const bool     GUN_PAN_REVERSE     = true;
 
-// WebSocket telemetry port
-#define TELEMETRY_WS_PORT    81
-// HTTP control API port
-#define HTTP_PORT            80
-// Telemetry broadcast interval (ms)
-#define TELEMETRY_INTERVAL_MS  100  // 10 Hz
+// ── Navigation ─────────────────────────────────────────────────────────────
+static const float CAPTURE_RADIUS_M = 3.0f;
 
-// ==================== DFPlayer TRACK NUMBERS ====================
-// Files on SD card stored as 0001.mp3, 0002.mp3, etc.
-#define AUDIO_ENGINE_IDLE      1
-#define AUDIO_ENGINE_REV       2
-#define AUDIO_HORN             3
-#define AUDIO_GUN_FIRE         4
-#define AUDIO_CIWS_BRRT        5
-#define AUDIO_GENERAL_ALARM    6
-#define AUDIO_BOSUNS_WHISTLE   7
-#define AUDIO_LRAD_HAIL_1      8
-#define AUDIO_LRAD_HAIL_2      9
+// ── HTTP / WiFi ────────────────────────────────────────────────────────────
+// Home WiFi first (bench), iPhone hotspot second (water). No AP fallback by
+// design — if neither connects, autopilot + RC failsafe still work; HTTP/
+// telemetry are simply absent until the network returns.
+static const uint16_t HTTP_PORT = 80;

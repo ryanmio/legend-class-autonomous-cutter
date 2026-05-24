@@ -1,53 +1,46 @@
 // audio.cpp
-// DFPlayer Mini driver using DFRobotDFPlayerMini library.
-// Connected via SoftwareSerial (TX=25, RX=26) at 9600 baud.
-// Speaker should be mounted close to DFPlayer to minimise ESC noise on wires.
+// DF1201S on HardwareSerial(2) @ 115200 — test_11 proved path.
+// The chip silently drops a play command issued while a previous track is
+// still playing, so audioPlay() always pauses + 50 ms before issuing the
+// new playFileNum (EF commit 54dc3ca).
 
 #include "audio.h"
 #include "config.h"
-#include <SoftwareSerial.h>
-#include <DFRobotDFPlayerMini.h>
+#include <DFRobot_DF1201S.h>
 
-static SoftwareSerial    dfSerial(DFPLAYER_RX_PIN, DFPLAYER_TX_PIN);
-static DFRobotDFPlayerMini dfPlayer;
-static bool              dfAvailable = false;
-static uint8_t           currentVolume = 15;
+static HardwareSerial   dfSerial(2);
+static DFRobot_DF1201S  df;
+static bool             ready = false;
 
-void audioBegin() {
-  dfSerial.begin(9600);
-  delay(200);
-  if (dfPlayer.begin(dfSerial)) {
-    dfAvailable = true;
-    dfPlayer.volume(currentVolume);
-    Serial.println("[AUDIO] DFPlayer Mini ready");
-  } else {
-    Serial.println("[AUDIO] DFPlayer Mini not found — check wiring");
-  }
+bool audioBegin() {
+    dfSerial.begin(DFP_BAUD, SERIAL_8N1, DFP_RX_PIN, DFP_TX_PIN);
+    delay(1000);
+    uint32_t startMs = millis();
+    while (!df.begin(dfSerial)) {
+        if (millis() - startMs > 3000) return false;
+        delay(250);
+    }
+    df.setVol(DFP_VOLUME);
+    df.switchFunction(df.MUSIC);
+    delay(2000);
+    df.setPlayMode(df.SINGLE);
+    df.enableAMP();
+    ready = true;
+    return true;
 }
 
-void audioUpdate() {
-  if (!dfAvailable) return;
-  // DFRobotDFPlayerMini has no async callback needed; poll available() if desired.
-}
+bool audioAvailable() { return ready; }
 
-void audioPlay(uint8_t track) {
-  if (!dfAvailable) return;
-  dfPlayer.play(track);
-}
-
-void audioStop() {
-  if (!dfAvailable) return;
-  dfPlayer.stop();
-}
-
-void audioSetVolume(uint8_t vol) {
-  if (!dfAvailable) return;
-  currentVolume = constrain(vol, 0, 30);
-  dfPlayer.volume(currentVolume);
-}
-
-void audioSetThrottle(float throttle) {
-  // Map throttle (0–1) to volume range (8–28) for engine rumble
-  uint8_t vol = (uint8_t)(8.0f + throttle * 20.0f);
-  audioSetVolume(vol);
+void audioPlay(AudioClip clip) {
+    if (!ready) return;
+    int16_t track = 0;
+    switch (clip) {
+      case AUDIO_HORN:  track = DFP_HORN_INDEX;  break;
+      case AUDIO_GUN:   track = DFP_GUN_INDEX;   break;
+      case AUDIO_BOARD: track = DFP_BOARD_INDEX; break;
+    }
+    if (track <= 0) return;
+    df.pause();
+    delay(50);
+    df.playFileNum(track);
 }

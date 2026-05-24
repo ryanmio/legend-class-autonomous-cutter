@@ -1,61 +1,53 @@
 // gps.cpp
-// Parses GGA (position/fix) and RMC (speed/course) NMEA sentences from BN-220.
-// Uses TinyGPSPlus library for parsing.
-// UART2 on GPS_RX_PIN / GPS_TX_PIN at GPS_BAUD.
+// BN-220 on SoftwareSerial @ 9600. Same physical pins as before; we
+// chose SoftwareSerial because UART2 is reserved for the DF1201S audio
+// module at 115200 (SoftwareSerial @ 115200 + WiFi is unreliable, test_11).
 
 #include "gps.h"
 #include "config.h"
+#include <SoftwareSerial.h>
 #include <TinyGPSPlus.h>
 
-static HardwareSerial gpsSerial(2);  // UART2
-static TinyGPSPlus    tinyGps;
-static GpsData        gpsData;
+static SoftwareSerial gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
+static TinyGPSPlus    tgps;
 
-void gpsBegin() {
-  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-  memset(&gpsData, 0, sizeof(gpsData));
+static float boatLat = 0.0f;
+static float boatLon = 0.0f;
+static bool  valid       = false;
+static bool  simulated   = false;
+
+bool gpsBegin() {
+    gpsSerial.begin(GPS_BAUD);
+    return true;
 }
 
 void gpsUpdate() {
-  while (gpsSerial.available()) {
-    if (tinyGps.encode(gpsSerial.read())) {
-      // New sentence decoded
-      if (tinyGps.location.isUpdated() && tinyGps.location.isValid()) {
-        gpsData.lat        = tinyGps.location.lat();
-        gpsData.lon        = tinyGps.location.lng();
-        gpsData.fix        = true;
-        gpsData.lastFixMs  = millis();
-      }
-      if (tinyGps.speed.isUpdated())    gpsData.speedKnots = tinyGps.speed.knots();
-      if (tinyGps.course.isUpdated())   gpsData.courseTrue  = tinyGps.course.deg();
-      if (tinyGps.satellites.isUpdated()) gpsData.satellites = tinyGps.satellites.value();
+    while (gpsSerial.available()) tgps.encode(gpsSerial.read());
+    if (simulated) return;
+    if (tgps.location.isValid() && tgps.location.age() < 5000) {
+        boatLat = (float)tgps.location.lat();
+        boatLon = (float)tgps.location.lng();
+        valid   = true;
+    } else if (valid) {
+        // Fix went stale (>5 s); clear so AUTO safe-holds at neutral
+        // rather than steering on frozen coordinates.
+        valid = false;
     }
-  }
-  // Mark fix lost if nothing for 5 seconds
-  if (gpsData.fix && (millis() - gpsData.lastFixMs > 5000)) {
-    gpsData.fix = false;
-  }
 }
 
-const GpsData& gpsGet() { return gpsData; }
+bool  gpsValid()        { return valid; }
+float gpsLat()          { return boatLat; }
+float gpsLon()          { return boatLon; }
+bool  gpsSimulated()    { return simulated; }
+uint8_t gpsSats()       { return (uint8_t)tgps.satellites.value(); }
+bool  gpsSpeedValid()   { return tgps.speed.isValid(); }
+float gpsSpeedKnots()   { return tgps.speed.knots(); }
+bool  gpsCourseValid()  { return tgps.course.isValid(); }
+float gpsCourseDeg()    { return tgps.course.deg(); }
 
-// Haversine great-circle distance in metres
-float gpsDistanceM(double lat1, double lon1, double lat2, double lon2) {
-  const double R = 6371000.0;
-  double dLat = radians(lat2 - lat1);
-  double dLon = radians(lon2 - lon1);
-  double a = sin(dLat/2)*sin(dLat/2) +
-             cos(radians(lat1))*cos(radians(lat2)) *
-             sin(dLon/2)*sin(dLon/2);
-  return (float)(R * 2.0 * atan2(sqrt(a), sqrt(1.0-a)));
-}
-
-// Initial bearing from point 1 → point 2
-float gpsBearingDeg(double lat1, double lon1, double lat2, double lon2) {
-  double dLon = radians(lon2 - lon1);
-  double y = sin(dLon) * cos(radians(lat2));
-  double x = cos(radians(lat1))*sin(radians(lat2)) -
-             sin(radians(lat1))*cos(radians(lat2))*cos(dLon);
-  float bearing = degrees(atan2(y, x));
-  return fmod(bearing + 360.0f, 360.0f);
+void gpsSimSet(float lat, float lon) {
+    boatLat   = lat;
+    boatLon   = lon;
+    valid     = true;
+    simulated = true;
 }
