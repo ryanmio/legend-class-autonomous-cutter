@@ -674,7 +674,9 @@ static void pollBilge() {
     bilgeMidWet  = (digitalRead(PIN_BILGE_MID_SENSOR)  == LOW);
     bilgeRearWet = (digitalRead(PIN_BILGE_REAR_SENSOR) == LOW);
 
-    bool anyWet = bilgeFwdWet || bilgeMidWet || bilgeRearWet;
+    // Only the mid sensor is co-located with the pump; fwd/rear are
+    // informational only (visible in telemetry but do not run the pump).
+    bool anyWet = bilgeMidWet;
     if (anyWet) lastWetMs = now;
     // A real dry reading clears the stuck-sensor latch.
     if (!anyWet && bilgeStuckLatch) {
