@@ -96,6 +96,7 @@ static const uint16_t MIN_REV_US    = 1200;
 // test_32 step 2). The cap prevents an in-water hands-off runaway.
 static const uint16_t AUTO_CRUISE_CAP_US = 1750;
 static const uint16_t DEFAULT_CRUISE_US  = 1660;
+static const float    DIFF_THRUST_FACTOR = 0.3f;
 
 // ── iBUS channel indices (locked 2026-05-10) ────────────────────────────────
 static const uint8_t  IBUS_IDX_RUDDER         = 0;
@@ -466,6 +467,28 @@ static void setEscs(uint16_t us) {
     outPort = outStbd = us;
     writePCA(CH_ESC_PORT, us);
     writePCA(CH_ESC_STBD, us);
+}
+static void setEscsPortStbd(uint16_t portUs, uint16_t stbdUs) {
+    if (portUs < MIN_REV_US) portUs = MIN_REV_US;
+    if (portUs > MAX_FWD_US) portUs = MAX_FWD_US;
+    if (stbdUs < MIN_REV_US) stbdUs = MIN_REV_US;
+    if (stbdUs > MAX_FWD_US) stbdUs = MAX_FWD_US;
+    outPort = portUs; outStbd = stbdUs;
+    writePCA(CH_ESC_PORT, portUs);
+    writePCA(CH_ESC_STBD, stbdUs);
+}
+static void computePortStbd(uint16_t throttleUs, uint16_t rudderUs,
+                             uint16_t &portUs, uint16_t &stbdUs) {
+    float rudderDelta = (float)((int)rudderUs - 1500) / 500.0f;
+    float diffUs = rudderDelta * DIFF_THRUST_FACTOR * ((int)throttleUs - 1500);
+    int port = (int)throttleUs + (int)diffUs;
+    int stbd = (int)throttleUs - (int)diffUs;
+    if (port < MIN_REV_US) port = MIN_REV_US;
+    if (port > MAX_FWD_US) port = MAX_FWD_US;
+    if (stbd < MIN_REV_US) stbd = MIN_REV_US;
+    if (stbd > MAX_FWD_US) stbd = MAX_FWD_US;
+    portUs = (uint16_t)port;
+    stbdUs = (uint16_t)stbd;
 }
 
 // Reverse-interlock pattern from test_17: forward throttle (left stick
@@ -1330,9 +1353,12 @@ static void applyOutputs() {
         break;
       case MODE_AUTO: {
         if (wpSet && gpsValid && !captured) {
-            uint16_t engageUs = (cruiseUs > AUTO_CRUISE_CAP_US) ? AUTO_CRUISE_CAP_US : cruiseUs;
-            setEscs(engageUs);
-            setRudder(headingHoldUs(wpBearing));
+            uint16_t engageUs  = (cruiseUs > AUTO_CRUISE_CAP_US) ? AUTO_CRUISE_CAP_US : cruiseUs;
+            uint16_t rudderUs  = headingHoldUs(wpBearing);
+            uint16_t portUs, stbdUs;
+            computePortStbd(engageUs, rudderUs, portUs, stbdUs);
+            setRudder(rudderUs);
+            setEscsPortStbd(portUs, stbdUs);
         } else {
             // No waypoint, no GPS, or already captured → safe-hold.
             setRudder(NEUTRAL_US);
