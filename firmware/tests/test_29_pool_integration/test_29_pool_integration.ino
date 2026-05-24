@@ -791,37 +791,67 @@ static void updateWaypointGeometry() {
 }
 
 // ── WiFi ────────────────────────────────────────────────────────────────────
-static bool tryConnect(const char* ssid, const char* pass, int timeoutSecs) {
-    WiFi.begin(ssid, pass);
-    Serial.printf("[WiFi] Trying %s", ssid);
-    for (int i = 0; i < timeoutSecs * 2; i++) {
+// Scan-first connect (ported from EdmundFitzgeraldController, which works in the
+// field). Priority: home SSID exact match → any SSID containing "iPhone"
+// (handles curly-vs-straight apostrophe and phone renames) → blind fallback to
+// configured hotspot SSID. Called from setup() AND retried every 30 s from
+// loop() if disconnected — covers the case where the hotspot comes up after
+// boot or the boat drifts out and back into range.
+static void wifiConnect() {
+    Serial.println();
+    Serial.println("[WiFi] Scanning…");
+    WiFi.disconnect(true);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    int n = WiFi.scanNetworks();
+    Serial.printf("[WiFi] %d networks found\n", n);
+
+    String ssid;
+    String pass;
+    bool foundHome = false;
+
+    for (int i = 0; i < n; i++) {
+        String s = WiFi.SSID(i);
+        Serial.printf("  [%d] '%s' RSSI=%d\n", i, s.c_str(), WiFi.RSSI(i));
+        if (s == SECRET_HOME_SSID) {
+            ssid = s; pass = SECRET_HOME_PASS; foundHome = true;
+            Serial.printf("[WiFi] matched home: %s\n", s.c_str());
+            break;
+        }
+    }
+
+    if (!foundHome) {
+        for (int i = 0; i < n; i++) {
+            String s = WiFi.SSID(i);
+            if (s.indexOf("iPhone") >= 0 || s == SECRET_HOTSPOT_SSID) {
+                ssid = s; pass = SECRET_HOTSPOT_PASS;
+                Serial.printf("[WiFi] matched hotspot: %s\n", s.c_str());
+                break;
+            }
+        }
+    }
+
+    if (ssid.length() == 0) {
+        ssid = SECRET_HOTSPOT_SSID;
+        pass = SECRET_HOTSPOT_PASS;
+        Serial.printf("[WiFi] no scan match — blind-connecting: %s\n", ssid.c_str());
+    }
+
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    Serial.print("[WiFi] connecting");
+    for (int i = 0; i < 40; i++) {       // 20 s
         if (WiFi.status() == WL_CONNECTED) {
             boatIP = WiFi.localIP().toString();
-            Serial.printf(" OK  %s\n", boatIP.c_str());
-            return true;
+            Serial.printf(" OK %s\n", boatIP.c_str());
+            return;
         }
         delay(500);
         Serial.print(".");
     }
-    Serial.println(" FAIL");
-    WiFi.disconnect(true);
-    delay(100);
-    return false;
+    Serial.printf(" FAIL (status=%d)\n", WiFi.status());
 }
 
-static void wifiSetup() {
-    // Home WiFi first (bench), then iPhone hotspot (water). No AP
-    // fallback by design — if neither connects, the boat operates
-    // without telemetry/HTTP. Autopilot + RC failsafe still work
-    // (iBUS is independent of WiFi). ESP32's WiFi stack will keep
-    // trying to reconnect to the last attempted network in the
-    // background; if your hotspot comes up after boot, just wait
-    // ~10 s and SCAN from the app.
-    WiFi.mode(WIFI_STA);
-    if (tryConnect(SECRET_HOME_SSID,    SECRET_HOME_PASS,    10)) return;
-    if (tryConnect(SECRET_HOTSPOT_SSID, SECRET_HOTSPOT_PASS, 10)) return;
-    Serial.println("[WiFi] no network — operating without HTTP. RC + autopilot still active.");
-}
+static void wifiSetup() { wifiConnect(); }
 
 // ── HTTP handlers ──────────────────────────────────────────────────────────
 static void addCORS() {
@@ -1514,6 +1544,13 @@ void loop() {
     pollDepth();
     updatePosition();
     server.handleClient();
+
+    static unsigned long lastWifiCheck = 0;
+    if (WiFi.status() != WL_CONNECTED && millis() - lastWifiCheck > 30000) {
+        lastWifiCheck = millis();
+        Serial.println("[WiFi] disconnected — re-scanning");
+        wifiConnect();
+    }
 
     updateMode();
     updateWaypointGeometry();
