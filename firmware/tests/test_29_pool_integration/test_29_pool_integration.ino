@@ -722,6 +722,12 @@ static void updatePosition() {
         boatLat  = (float)gps.location.lat();
         boatLon  = (float)gps.location.lng();
         gpsValid = true;
+    } else if (gpsValid) {
+        // Fix went stale (>5 s) or invalid. Clear gpsValid so AUTO's
+        // existing !gpsValid branch in applyOutputs() safe-holds at
+        // neutral instead of steering on frozen coordinates.
+        gpsValid = false;
+        Serial.println("[GPS] fix lost (age > 5s) — AUTO will safe-hold until fix returns");
     }
 }
 
