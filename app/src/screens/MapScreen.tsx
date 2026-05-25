@@ -375,7 +375,7 @@ export default function MapScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* ── Top bar: BACK + MODE ──────────────────────────────────── */}
+      {/* ── Top bar: MODE only (back button is at the bottom) ─────── */}
       <View
         style={[
           styles.topBarRow,
@@ -383,10 +383,6 @@ export default function MapScreen({ route, navigation }: Props) {
         ]}
         pointerEvents="box-none"
       >
-        <TouchableOpacity style={styles.chip} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <Text style={styles.chipBackText}>‹ HELM</Text>
-        </TouchableOpacity>
-
         <View style={styles.topBarSpacer} />
 
         {mode && (
@@ -421,6 +417,15 @@ export default function MapScreen({ route, navigation }: Props) {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* ── Back-to-Helm chip (bottom left) ───────────────────────── */}
+      <TouchableOpacity
+        style={[styles.backFab, { bottom: insets.bottom + 24 }]}
+        onPress={() => navigation.goBack()}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.backFabText}>‹ HELM</Text>
+      </TouchableOpacity>
 
       {/* ── Center-on-boat FAB (bottom right) ─────────────────────── */}
       <TouchableOpacity
@@ -483,4 +488,20 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   centerFabIcon: { color: Colors.accent, fontSize: 24, fontWeight: '800', lineHeight: 24 },
+
+  // Back-to-Helm chip (bottom-left). Larger tap target than the original
+  // top-right chip so it's reachable one-handed without resetting the map.
+  backFab: {
+    position: 'absolute',
+    left: 16,
+    height: 52,
+    paddingHorizontal: 18,
+    borderRadius: 26,
+    backgroundColor: 'rgba(10,15,26,0.92)',
+    borderWidth: 1.5, borderColor: Colors.accent,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.4, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4,
+    elevation: 4,
+  },
+  backFabText: { color: Colors.accent, fontSize: 13, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
 });

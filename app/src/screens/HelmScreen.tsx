@@ -403,7 +403,7 @@ const styles = StyleSheet.create({
 
   // Bilge status card — compact one-liner on Helm. Full controls live
   // on SystemsScreen. Card goes red when any zone wet.
-  bilgeCard:           { backgroundColor: Colors.surface, borderRadius: 4, padding: 12, marginTop: 8, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  bilgeCard:           { backgroundColor: Colors.surface, borderRadius: 4, padding: 12, marginTop: 8, marginBottom: 24, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
   bilgeCardLabel:      { color: Colors.textSecondary, fontSize: 10, letterSpacing: 2, fontFamily: 'monospace', fontWeight: '800' },
   bilgeCardLabelWet:   { color: Colors.danger },
   bilgeCardValue:      { color: Colors.textPrimary, fontSize: 13, letterSpacing: 1, fontFamily: 'monospace', fontWeight: '700' },
