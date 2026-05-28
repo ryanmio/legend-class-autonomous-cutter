@@ -156,7 +156,15 @@ export default function TelemetryScreen({ navigation }: Props) {
                   {data.bilge_fwd  != null && <Row label="Fwd"   value={data.bilge_fwd  ? '⚠ WET' : 'dry'} warn={data.bilge_fwd}  />}
                   {data.bilge_mid  != null && <Row label="Bilge" value={data.bilge_mid  ? '⚠ WET' : 'dry'} warn={data.bilge_mid}  />}
                   {data.bilge_rear != null && <Row label="Rear"  value={data.bilge_rear ? '⚠ WET' : 'dry'} warn={data.bilge_rear} />}
-                  {data.pump        != null && <Row label="Pump"  value={data.pump ? (data.pump_manual ? 'MANUAL' : 'AUTO') : 'off'} />}
+                  {data.pump_phase  != null && (
+                    <Row label="Pump"
+                         value={
+                           data.pump_phase === 'off'
+                             ? 'off'
+                             : `${data.pump_phase.toUpperCase()} · cycle ${data.pump_cycle ?? '?'} · ${data.pump_manual ? 'MANUAL' : 'AUTO'}`
+                         } />
+                  )}
+                  {data.pump_stuck && <Row label="Pump" value="⚠ stuck (auto cap hit)" warn />}
                 </>
               )}
             </>

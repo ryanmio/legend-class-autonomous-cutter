@@ -93,12 +93,20 @@ static void handleTelemetry() {
 
     doc["audio_ok"]     = audioAvailable();
 
-    doc["bilge_fwd"]    = bilgeFwdWet();
-    doc["bilge_mid"]    = bilgeMidWet();
-    doc["bilge_rear"]   = bilgeRearWet();
-    doc["pump"]         = bilgePumpOn();
-    doc["pump_manual"]  = bilgePumpManual();
-    doc["pump_stuck"]   = bilgeStuck();
+    doc["bilge_fwd"]      = bilgeFwdWet();
+    doc["bilge_mid"]      = bilgeMidWet();
+    doc["bilge_rear"]     = bilgeRearWet();
+    doc["pump"]           = bilgePumpOn();
+    doc["pump_manual"]    = bilgePumpManual();
+    doc["pump_stuck"]     = bilgeStuck();
+    BilgePhase phase      = bilgePumpPhase();
+    doc["pump_phase"]     = (phase == BILGE_PHASE_ON)    ? "on"
+                          : (phase == BILGE_PHASE_PAUSE) ? "pause"
+                          : "off";
+    if (phase != BILGE_PHASE_OFF) {
+        doc["pump_cycle"]    = bilgePumpCycle();
+        doc["pump_phase_ms"] = bilgePumpPhaseMs();
+    }
 
     doc["radar_on"]       = radarOn();
     doc["radar_speed"]    = radarSpeed();
@@ -357,7 +365,6 @@ static void handleBilge() {
     StaticJsonDocument<128> resp;
     resp["ok"]          = true;
     resp["pump_manual"] = bilgePumpManual();
-    resp["timeout_ms"]  = BILGE_MANUAL_TIMEOUT_MS;
     char out[128];
     serializeJson(resp, out);
     server.send(200, "application/json", out);

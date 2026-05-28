@@ -115,18 +115,23 @@ static const uint32_t DEPTH_PING_TIMEOUT_US = 40000;
 static const uint32_t DEPTH_RUN_INTERVAL_MS = 20000;
 
 // ── Bilge ──────────────────────────────────────────────────────────────────
-// 3 active-LOW water probes + 1 active-HIGH pump MOSFET. Only the mid
-// sensor (co-located with the pump) runs the pump; fwd/rear are
-// informational.
+// 3 active-LOW water probes + 1 active-HIGH pump MOSFET. Pump lives in the
+// REAR compartment (moved 2026-05-27) — only the rear sensor drives the
+// pump; fwd/mid are informational.
 //   GPIO 5 is a strapping pin but only governs SDIO-slave boot mode (unused);
 //   safe as a sensor input for normal flash boot.
+// Pump can clear the rear compartment in ~5 s, so we duty-cycle:
+//   BILGE_PULSE_ON_MS  ON, then BILGE_PULSE_OFF_MS pause, repeat. Auto
+//   mode gives up after BILGE_AUTO_MAX_MS total elapsed if the rear
+//   probe is still wet — at that point the operator must manually engage
+//   (manual cycles forever; clears on operator stop).
 static const uint8_t  PIN_BILGE_FWD_SENSOR    = 32;
 static const uint8_t  PIN_BILGE_MID_SENSOR    = 33;
 static const uint8_t  PIN_BILGE_REAR_SENSOR   = 5;
 static const uint8_t  PIN_BILGE_PUMP          = 13;
-static const uint32_t BILGE_DRY_DELAY_MS      = 5000;
-static const uint32_t BILGE_MANUAL_TIMEOUT_MS = 60000;
-static const uint32_t BILGE_MAX_RUN_MS        = 60000;
+static const uint32_t BILGE_PULSE_ON_MS       = 6000;
+static const uint32_t BILGE_PULSE_OFF_MS      = 6000;
+static const uint32_t BILGE_AUTO_MAX_MS       = 60000;
 
 // ── Radar (mast dish, 2N2222 low-side PWM on GPIO 2) ───────────────────────
 // 1 kHz instead of "above audible": at 20 kHz the coil L/R doesn't let

@@ -255,7 +255,11 @@ export default function HelmScreen({ route, navigation }: Props) {
           </Text>
           <Text style={[styles.bilgeCardValue, wetCount > 0 && styles.bilgeCardValueWet]}>
             {wetCount}/3 {wetCount > 0 ? 'FLOODED' : 'DRY'}
-            {data?.pump ? ' · PUMP ON' : ''}
+            {data?.pump_phase === 'on'    ? ` · PUMP ON (cycle ${data?.pump_cycle ?? '?'})`
+           : data?.pump_phase === 'pause' ? ` · PUMP PAUSE (cycle ${data?.pump_cycle ?? '?'})`
+           : ''}
+            {data?.pump_manual ? ' · MANUAL' : ''}
+            {data?.pump_stuck  ? ' · ⚠ STUCK' : ''}
           </Text>
         </TouchableOpacity>
 

@@ -35,15 +35,32 @@ export default function SystemsScreen({ route }: Props) {
 
 // ── BILGE ──────────────────────────────────────────────────────────────────────
 // Damage-control panel: side-profile hull silhouette with three vertical
-// thirds that fill red when their bilge sensor is wet. PUMP button below
-// drives /bilge {on:bool}; auto-pump on any wet sensor is firmware-side.
+// thirds that fill red when their bilge sensor is wet. Pump lives in the
+// rear compartment and duty-cycles 6 s on / 6 s off. Auto fires on
+// bilge_rear wet, caps at 60 s of cycling; manual cycles forever until
+// the operator taps PUMP again to stop.
 function BilgeSection({ ip }: { ip: string }) {
   const { data } = useTelemetry();
+  const phase    = data?.pump_phase ?? 'off';
+  const cycling  = phase !== 'off';
+  const manual   = !!data?.pump_manual;
+  const cycle    = data?.pump_cycle;
 
   const togglePump = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    postBilge(ip, !(data?.pump_manual ?? false)).catch(() => {});
-  }, [ip, data?.pump_manual]);
+    // Manual-on if not already cycling under manual; manual-off otherwise.
+    // (Stopping during an AUTO cycle is intentionally not exposed —
+    // operator-initiated stop only applies to manual.)
+    postBilge(ip, !manual).catch(() => {});
+  }, [ip, manual]);
+
+  // Button label reflects current phase + cycle. Tapping always toggles
+  // manual: starts a fresh 6/6 sequence, or stops one in progress.
+  const phaseLabel =
+    phase === 'on'    ? `ON (cycle ${cycle ?? '?'})`
+  : phase === 'pause' ? `PAUSE (cycle ${cycle ?? '?'})`
+  :                     'OFF';
+  const sourceLabel = manual ? ' · MANUAL' : (cycling ? ' · AUTO' : '');
 
   return (
     <View style={styles.section}>
@@ -56,21 +73,20 @@ function BilgeSection({ ip }: { ip: string }) {
       />
 
       <TouchableOpacity
-        style={[styles.pumpBtn, data?.pump && styles.pumpBtnOn]}
+        style={[styles.pumpBtn, !!data?.pump && styles.pumpBtnOn]}
         onPress={togglePump}
         activeOpacity={0.7}
       >
-        <Text style={[styles.pumpBtnText, data?.pump && styles.pumpBtnTextOn]}>
-          PUMP {data?.pump ? 'ON' : 'OFF'}
-          {data?.pump_manual ? ' · MANUAL' : ''}
+        <Text style={[styles.pumpBtnText, !!data?.pump && styles.pumpBtnTextOn]}>
+          PUMP {phaseLabel}{sourceLabel}
         </Text>
       </TouchableOpacity>
       <Text style={styles.pumpSub}>
-        Auto fires on any wet sensor (latches off after 60 s continuous run — sensor stuck?). Manual override stays on for 60 s.
+        Pump cycles 6 s ON / 6 s OFF. Auto engages on rear sensor wet and gives up after 60 s. Manual cycles until you tap PUMP again to stop.
       </Text>
       {data?.pump_stuck && (
         <Text style={[styles.pumpSub, styles.pumpSubAlarm]}>
-          ⚠ AUTO-PUMP LATCHED OFF — sensor reading wet for &gt;60 s. Use manual PUMP to override; check probe.
+          ⚠ AUTO PUMP GAVE UP — rear sensor still wet after 60 s of cycling. Tap PUMP to engage manual override.
         </Text>
       )}
     </View>
