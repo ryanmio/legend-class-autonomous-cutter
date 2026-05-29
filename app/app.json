@@ -12,7 +12,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.ryanmio.legendcutter",
       "icon": "./assets/icon.png",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSLocalNetworkUsageDescription": "This app connects to the Legend Cutter ESP32 on your local Wi-Fi network.",

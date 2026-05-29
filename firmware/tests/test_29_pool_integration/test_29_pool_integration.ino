@@ -185,6 +185,11 @@ static const uint8_t PIN_BILGE_PUMP        = 13;
 static const uint32_t BILGE_PULSE_ON_MS  = 6000;
 static const uint32_t BILGE_PULSE_OFF_MS = 6000;
 static const uint32_t BILGE_AUTO_MAX_MS  = 60000;
+// Declared up here (not in the state block below) so the Arduino IDE's
+// auto-generated forward declarations at the top of the file can resolve
+// these types when pollBilge / bilgeEnterPhase / handleBilge reference them.
+enum BilgePhase  { BILGE_PHASE_OFF = 0, BILGE_PHASE_ON = 1, BILGE_PHASE_PAUSE = 2 };
+enum BilgeSource { BILGE_SRC_NONE = 0, BILGE_SRC_AUTO = 1, BILGE_SRC_MANUAL = 2 };
 
 // ── Radar motor (TRS-3D mast dish) ──────────────────────────────────────────
 // 3V planetary gear motor switched by a 2N2222 NPN on the low side.
@@ -418,8 +423,8 @@ static void pollDepth() {
 }
 
 // ── Bilge state ─────────────────────────────────────────────────────────────
-enum BilgePhase  { BILGE_PHASE_OFF = 0, BILGE_PHASE_ON = 1, BILGE_PHASE_PAUSE = 2 };
-enum BilgeSource { BILGE_SRC_NONE = 0, BILGE_SRC_AUTO = 1, BILGE_SRC_MANUAL = 2 };
+// BilgePhase / BilgeSource enums are declared up with the bilge constants
+// so the IDE's auto-generated forward declarations can resolve them.
 static bool     bilgeFwdWet = false, bilgeMidWet = false, bilgeRearWet = false;
 static BilgePhase  bilgePhase    = BILGE_PHASE_OFF;
 static BilgeSource bilgeSource   = BILGE_SRC_NONE;
