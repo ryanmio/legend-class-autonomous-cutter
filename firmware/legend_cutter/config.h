@@ -52,10 +52,14 @@ static const uint16_t PCA9685_FREQ_HZ = 50;
 
 // ── Output bounds (µs) ─────────────────────────────────────────────────────
 static const uint16_t NEUTRAL_US    = 1500;
-static const uint16_t MAX_FWD_US    = 1800;
+static const uint16_t MAX_FWD_US    = 1710;
 // AUTO never asks for reverse; MIN_REV_US widens setEscs floor so MANUAL
 // reverse (right-stick V down past deadband) can reach the ESCs.
-static const uint16_t MIN_REV_US    = 1200;
+static const uint16_t MIN_REV_US    = 1290;
+
+// ESCs wired such that stick-forward turned props in reverse (pool 2026-05-29).
+// Mirror at the PCA write boundary so upstream math keeps "MAX_FWD_US = forward fast".
+static const bool ESC_DIRECTION_INVERTED = true;
 
 // Rudder limits found in test_15 (1334/1683 observed safe; ±170 chosen).
 static const uint16_t RUDDER_MIN_US = 1330;
@@ -63,8 +67,8 @@ static const uint16_t RUDDER_MAX_US = 1670;
 
 // AUTO cruise selection (no floor; cap only). cruise=NEUTRAL_US is valid
 // for static heading-hold. Cap prevents an in-water hands-off runaway.
-static const uint16_t AUTO_CRUISE_CAP_US = 1750;
-static const uint16_t DEFAULT_CRUISE_US  = 1660;
+static const uint16_t AUTO_CRUISE_CAP_US = 1700;
+static const uint16_t DEFAULT_CRUISE_US  = 1620;
 static const float    DIFF_THRUST_FACTOR = 0.3f;
 
 // Stick safety + reverse interlock.

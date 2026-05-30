@@ -21,6 +21,10 @@ void pcaWriteUs(uint8_t channel, uint16_t us) {
     pca.setPWM(channel, 0, usToTicks(us));
 }
 
+static uint16_t escUs(uint16_t us) {
+    return ESC_DIRECTION_INVERTED ? (uint16_t)(3000 - us) : us;
+}
+
 bool motorsBegin() {
     // Wire is brought up in legend_cutter.ino setup() before any module init.
     pca.begin();
@@ -45,8 +49,8 @@ void setEscs(uint16_t us) {
     if (us < MIN_REV_US) us = MIN_REV_US;
     if (us > MAX_FWD_US) us = MAX_FWD_US;
     outPort = outStbd = us;
-    pcaWriteUs(CH_ESC_PORT, us);
-    pcaWriteUs(CH_ESC_STBD, us);
+    pcaWriteUs(CH_ESC_PORT, escUs(us));
+    pcaWriteUs(CH_ESC_STBD, escUs(us));
 }
 
 void setEscsPortStbd(uint16_t portUs, uint16_t stbdUs) {
@@ -56,8 +60,8 @@ void setEscsPortStbd(uint16_t portUs, uint16_t stbdUs) {
     if (stbdUs > MAX_FWD_US) stbdUs = MAX_FWD_US;
     outPort = portUs;
     outStbd = stbdUs;
-    pcaWriteUs(CH_ESC_PORT, portUs);
-    pcaWriteUs(CH_ESC_STBD, stbdUs);
+    pcaWriteUs(CH_ESC_PORT, escUs(portUs));
+    pcaWriteUs(CH_ESC_STBD, escUs(stbdUs));
 }
 
 void computePortStbd(uint16_t throttleUs, uint16_t rudderUs,
