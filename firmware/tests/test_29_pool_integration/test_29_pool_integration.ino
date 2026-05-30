@@ -58,8 +58,11 @@
  *   - Props on, rudder linkage free, hatch sealed.
  *
  * SAFETY:
- *   AUTO cruise cap 1750 µs. Hard ESC clamp at MAX_FWD_US=1800 in
- *   setEscs(). Captured boat freezes at neutral until operator intervenes.
+ *   AUTO cruise cap 1700 µs. Hard ESC clamp at MAX_FWD_US=1710 in
+ *   setEscs() (~42% of full forward — trimmed after 2026-05-29 pool run).
+ *   ESC outputs are inverted via ESC_DIRECTION_INVERTED at the PCA
+ *   write boundary so MAX_FWD_US still means "forward fast" upstream.
+ *   Captured boat freezes at neutral until operator intervenes.
  */
 
 #include <Wire.h>
@@ -73,6 +76,7 @@
 #include <SoftwareSerial.h>
 #include <DFRobot_DF1201S.h>
 #include <math.h>
+#include <esp_system.h>
 #include "secrets.h"
 
 // ── PCA9685 channels ────────────────────────────────────────────────────────
@@ -81,21 +85,27 @@ static const uint8_t  CH_ESC_STBD = 1;
 static const uint8_t  CH_RUDDER   = 2;
 
 // ── Output bounds ───────────────────────────────────────────────────────────
+// Trimmed 2026-05-30 after pool run #1: prior 60% cap (1800/1200) was
+// problematically fast even at half stick (bow rose above the deck).
 static const uint16_t RUDDER_MIN_US = 1330;
 static const uint16_t RUDDER_MAX_US = 1670;
 static const uint16_t NEUTRAL_US    = 1500;
-static const uint16_t MAX_FWD_US    = 1800;
-// Reverse cap, ported from test_17. MIN_REV_US=1200 ≈ 60% reverse.
-// AUTO mode never asks for reverse (cruise is always ≥ NEUTRAL_US);
+static const uint16_t MAX_FWD_US    = 1710;   // ~42% of full forward
+// Reverse cap. AUTO never asks for reverse (cruise is always ≥ NEUTRAL_US);
 // the setEscs() floor is widened to this only so MANUAL reverse can
 // reach the ESCs.
-static const uint16_t MIN_REV_US    = 1200;
+static const uint16_t MIN_REV_US    = 1290;   // ~42% of full reverse
+
+// ESCs wired such that stick-forward turned props in reverse on pool run #1.
+// Mirror at the PCA write boundary so MAX_FWD_US still semantically means
+// "forward fast" everywhere upstream (AUTO, diff thrust, computeThrottle).
+static const bool ESC_DIRECTION_INVERTED = true;
 
 // ── AUTO cruise selection (no floor; cap only) ─────────────────────────────
 // cruise=NEUTRAL_US is valid for static heading-hold (AUTOPILOT_PLAN
 // test_32 step 2). The cap prevents an in-water hands-off runaway.
-static const uint16_t AUTO_CRUISE_CAP_US = 1750;
-static const uint16_t DEFAULT_CRUISE_US  = 1660;
+static const uint16_t AUTO_CRUISE_CAP_US = 1700;
+static const uint16_t DEFAULT_CRUISE_US  = 1620;
 static const float    DIFF_THRUST_FACTOR = 0.3f;
 
 // ── iBUS channel indices (locked 2026-05-10) ────────────────────────────────
@@ -278,6 +288,7 @@ static SoftwareSerial           gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
 static WebServer                server(80);
 static String                   boatIP;
 static bool                     ina219OK = false;
+static uint32_t                 sessionId = 0;  // hardware-random per boot; app uses to detect mid-flight reboots
 
 // ── Mode state machine ─────────────────────────────────────────────────────
 enum Mode { MODE_MANUAL, MODE_AUTO, MODE_FAILSAFE };
@@ -458,6 +469,11 @@ static const uint32_t INA_POLL_INTERVAL_MS = 250;
 // ── Helpers ────────────────────────────────────────────────────────────────
 static uint16_t usTicks(uint16_t us) { return (uint16_t)((us / 20000.0f) * 4096); }
 static void writePCA(uint8_t c, uint16_t us) { pca.setPWM(c, 0, usTicks(us)); }
+// Mirror at PCA boundary when ESCs are wired backwards. Clamps stay on the
+// un-mirrored value so MAX_FWD_US / MIN_REV_US still mean what they say.
+static uint16_t escUs(uint16_t us) {
+    return ESC_DIRECTION_INVERTED ? (uint16_t)(3000 - us) : us;
+}
 
 static void setRudder(uint16_t us) {
     if (us < RUDDER_MIN_US) us = RUDDER_MIN_US;
@@ -471,8 +487,8 @@ static void setEscs(uint16_t us) {
     if (us < MIN_REV_US) us = MIN_REV_US;
     if (us > MAX_FWD_US) us = MAX_FWD_US;
     outPort = outStbd = us;
-    writePCA(CH_ESC_PORT, us);
-    writePCA(CH_ESC_STBD, us);
+    writePCA(CH_ESC_PORT, escUs(us));
+    writePCA(CH_ESC_STBD, escUs(us));
 }
 static void setEscsPortStbd(uint16_t portUs, uint16_t stbdUs) {
     if (portUs < MIN_REV_US) portUs = MIN_REV_US;
@@ -480,8 +496,8 @@ static void setEscsPortStbd(uint16_t portUs, uint16_t stbdUs) {
     if (stbdUs < MIN_REV_US) stbdUs = MIN_REV_US;
     if (stbdUs > MAX_FWD_US) stbdUs = MAX_FWD_US;
     outPort = portUs; outStbd = stbdUs;
-    writePCA(CH_ESC_PORT, portUs);
-    writePCA(CH_ESC_STBD, stbdUs);
+    writePCA(CH_ESC_PORT, escUs(portUs));
+    writePCA(CH_ESC_STBD, escUs(stbdUs));
 }
 static void computePortStbd(uint16_t throttleUs, uint16_t rudderUs,
                              uint16_t &portUs, uint16_t &stbdUs) {
@@ -898,13 +914,14 @@ static void handleOptions() { addCORS(); server.send(204); }
 static void handleStatus() {
     addCORS();
     server.send(200, "application/json",
-        "{\"ok\":true,\"v\":\"test_29\",\"ip\":\"" + boatIP + "\"}");
+        "{\"ok\":true,\"v\":\"test_29-pool2\",\"ip\":\"" + boatIP + "\"}");
 }
 
 static void handleTelemetry() {
     addCORS();
-    StaticJsonDocument<1024> doc;
-    doc["v"]            = "test_29";
+    StaticJsonDocument<1280> doc;
+    doc["v"]            = "test_29-pool2";
+    doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
     doc["mode"]         = modeName(mode);
@@ -998,7 +1015,7 @@ static void handleTelemetry() {
     snprintf(buf, sizeof(buf), "%.2f", livePidKp); doc["pid_kp"] = buf;
     snprintf(buf, sizeof(buf), "%.2f", livePidKd); doc["pid_kd"] = buf;
 
-    char out[1024];
+    char out[1280];
     serializeJson(doc, out);
     server.send(200, "application/json", out);
 }
@@ -1019,7 +1036,7 @@ static void handleCruise() {
         int us = req["us"].as<int>();
         if (us < NEUTRAL_US || us > MAX_FWD_US) {
             server.send(400, "application/json",
-                "{\"ok\":false,\"err\":\"us out of [1500..1800]\"}");
+                "{\"ok\":false,\"err\":\"us out of [1500..1710]\"}");
             return;
         }
         newUs = (uint16_t)us;
@@ -1460,7 +1477,8 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println();
-    Serial.println("test_29_pool_integration");
+    Serial.println("test_29_pool_integration v test_29-pool2");
+    sessionId = esp_random();   // app uses this to detect mid-flight reboots
 
     pinMode(PIN_NAV,    OUTPUT); digitalWrite(PIN_NAV,    LOW);
     pinMode(PIN_BRIDGE, OUTPUT); digitalWrite(PIN_BRIDGE, LOW);
