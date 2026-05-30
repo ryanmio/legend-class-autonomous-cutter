@@ -219,3 +219,49 @@ Pump control loop runs every loop() iteration:
 
 A 3-waypoint mission is NOT in scope per recent conversation
 (2026-05-10) — the pool is too small.
+
+## Pool run 2026-05-29 — partial PASS, AUTO blocked
+
+Ran ~10 minutes in the backyard pool. Handling overall: very pleased.
+Hull integrity good — after 10 min the only water inboard was a small
+amount in the rear compartment (expected). No leaks elsewhere. Depth
+sensor returned accurate readings.
+
+Two blocking issues found before AUTO could be tested:
+
+1. **ESC direction is inverted.** Stick-forward (CH3 up) commands the
+   props in reverse; stick-down commands forward. AUTO would have driven
+   full-speed reverse with no steering authority, so AUTO leg was
+   skipped. Needs fix before next pool run — either swap the ESC
+   forward/reverse mapping in `motors.cpp` or reverse the throttle sense
+   feeding `setEscs()`. (Whichever keeps AUTO's "forward = MAX_FWD_US"
+   semantics intact.)
+
+2. **Boat is far too fast even with current limits.** Running manual
+   reverse at an estimated 30–50% stick, the bow wake climbed above the
+   deck and threw water out to the sides. Awesome in a pool; in any
+   chop the boat would submarine itself. Current throttle cap needs to
+   come down significantly.
+
+### Current throttle limits (config.h)
+
+- `NEUTRAL_US = 1500`
+- `MAX_FWD_US = 1800` → forward swing is 300 µs of the 500 µs full
+  range = **60% of full forward throttle**.
+- `MIN_REV_US = 1200` → reverse swing 300 µs = **60% of full reverse**.
+- `AUTO_CRUISE_CAP_US = 1750` (50 µs below MAX_FWD = ~50% of full).
+- `DEFAULT_CRUISE_US = 1660` (~32% of full forward).
+
+So manual is already capped at 60% and that was still problematically
+fast. Next pool run should drop MAX_FWD_US / MIN_REV_US substantially
+(candidate: ~1650 / ~1350, i.e. ~30% each way) and re-pick
+AUTO_CRUISE_CAP_US / DEFAULT_CRUISE_US accordingly. Do not change yet —
+pending decision.
+
+### Status
+
+- [x] Manual handling, hull seal, depth sensor — PASS
+- [ ] ESC direction fix — required before re-test
+- [ ] Throttle cap reduction — required before re-test
+- [ ] AUTO heading hold / waypoint capture — DEFERRED to next pool run
+- [ ] Failsafe live — DEFERRED to next pool run
