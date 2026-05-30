@@ -5,6 +5,7 @@
 
 export interface TelemetryData {
   v: string;              // firmware/sketch version — always present
+  session_id?: number;    // hardware-random per boot; app uses to detect mid-flight reboots
   uptime?: number;        // seconds since boot
   heap?: number;          // free heap bytes
 

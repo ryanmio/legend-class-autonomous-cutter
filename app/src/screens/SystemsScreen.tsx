@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { NativeStackScreenProps, NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
@@ -25,11 +26,27 @@ export default function SystemsScreen({ route }: Props) {
         <BilgeSection ip={ip} />
         <RadarSection ip={ip} />
         <DepthSection ip={ip} />
+        <FlightsSection />
         <WeaponsSection />
         <SurveySection />
         <SettingsSection />
       </ScrollView>
     </Screen>
+  );
+}
+
+// ── FLIGHT LOGS ────────────────────────────────────────────────────────────────
+// Auto-logger captures each run as a saved flight in AsyncStorage.
+// This button opens the list — see telemetryLogger.ts + FLIGHT_LOG_PLAN.md.
+function FlightsSection() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  return (
+    <View style={styles.section}>
+      <SectionHeader label="FLIGHT LOGS" />
+      <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Flights')}>
+        <Text style={styles.btnText}>OPEN FLIGHT LOGS</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
