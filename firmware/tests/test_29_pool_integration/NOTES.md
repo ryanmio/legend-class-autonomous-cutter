@@ -1,6 +1,6 @@
 # test_29_pool_integration — Notes
 
-## Status: BENCH-VERIFIED 2026-05-16 (GPS + audio + LEDs all working); pool run pending
+## Status: POOL-VERIFIED 2026-05-30 (run #2, firmware `test_29-pool2`); IMU heading bias open; lake test next
 
 ## What this sketch is
 
