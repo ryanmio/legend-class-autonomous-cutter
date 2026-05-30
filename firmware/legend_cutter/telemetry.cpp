@@ -21,6 +21,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
+#include <esp_system.h>
 
 // Provided by legend_cutter.ino — current vessel mode label.
 extern const char* vesselModeName();
@@ -28,6 +29,7 @@ extern const char* vesselModeName();
 static WebServer server(HTTP_PORT);
 static String    boatIP;
 static uint16_t  cruiseUs = DEFAULT_CRUISE_US;
+static uint32_t  sessionId = 0;     // hardware-random, set once in telemetryBegin()
 
 uint16_t    telemetryCruiseUs() { return cruiseUs; }
 const char* telemetryBoatIP()   { return boatIP.c_str(); }
@@ -69,8 +71,9 @@ static void handleStatus() {
 
 static void handleTelemetry() {
     addCORS();
-    StaticJsonDocument<1280> doc;
+    StaticJsonDocument<1536> doc;
     doc["v"]            = FIRMWARE_VERSION;
+    doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
     doc["mode"]         = vesselModeName();
@@ -163,7 +166,7 @@ static void handleTelemetry() {
     snprintf(buf, sizeof(buf), "%.2f", pidKp()); doc["pid_kp"] = buf;
     snprintf(buf, sizeof(buf), "%.2f", pidKd()); doc["pid_kd"] = buf;
 
-    char out[1280];
+    char out[1536];
     serializeJson(doc, out);
     server.send(200, "application/json", out);
 }
@@ -433,6 +436,7 @@ static void handleDepth() {
 }
 
 void telemetryBegin() {
+    sessionId = esp_random();   // app uses this to detect mid-flight reboots
     WiFi.mode(WIFI_STA);
     if (!tryConnect(SECRET_HOME_SSID, SECRET_HOME_PASS, 10)) {
         if (!tryConnect(SECRET_HOTSPOT_SSID, SECRET_HOTSPOT_PASS, 10)) {
