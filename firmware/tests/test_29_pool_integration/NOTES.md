@@ -265,3 +265,63 @@ pending decision.
 - [ ] Throttle cap reduction — required before re-test
 - [ ] AUTO heading hold / waypoint capture — DEFERRED to next pool run
 - [ ] Failsafe live — DEFERRED to next pool run
+
+## Pool run #2 2026-05-30 — PASS, ready for lake test
+
+Firmware: `test_29-pool2` (commit `99b48ac3`). All pool-2 fixes
+validated — boat drives great.
+
+### Confirmed PASS
+
+- **ESC direction fix** — forward stick = forward props. `ESC_DIRECTION_INVERTED`
+  mirror at the PCA write boundary works as intended. Diff thrust and
+  AUTO yaw direction also correct (verified during AUTO test below).
+- **Throttle trim to ~42% (MAX_FWD_US=1710 / MIN_REV_US=1290)** — speed
+  feels right. Boat is responsive but no longer submarining itself at
+  manual full stick. Cap can be revisited after the lake run; for now
+  it's a keeper.
+- **AUTO mode engages and drives** — flipped SwA, boat moved toward the
+  posted waypoint and yawed via differential thrust.
+
+### Open issue — IMU heading appears ~20° off
+
+When a waypoint was set and AUTO engaged, the boat turned in roughly
+the right direction but settled pointing ~20° to the LEFT of the
+intended bearing. Repeated with a waypoint in a different direction —
+same ~20° leftward offset. Suggests a systematic IMU heading bias
+rather than a navigation-math bug.
+
+Pool was too small to see whether GPS course-over-ground would have
+corrected the heading estimate over a longer run (the existing IMU+GPS
+fusion is supposed to nudge IMU heading toward GPS course once the
+boat is moving consistently). At pool speeds and distances the GPS
+correction loop probably never got enough signal to engage.
+
+Likely fix: **magnetometer calibration on the assembled boat**, with
+all the metal/motors in their final positions (different magnetic
+environment than wherever the IMU was last calibrated). Worth doing
+before the lake run.
+
+### Status
+
+- [x] ESC direction fix — PASS
+- [x] Throttle cap (1710/1290/1700/1620) — PASS
+- [x] AUTO engages and drives toward waypoint — PASS
+- [x] Differential-thrust yaw direction correct — PASS
+- [x] Hull seal at ~10 min — PASS (run #1 already confirmed; run #2 consistent)
+- [~] AUTO heading accuracy — ~20° leftward bias; investigate IMU mag cal before lake
+- [ ] GPS+IMU fusion behavior over distance — needs lake (pool too small)
+- [ ] Failsafe live — not exercised this run; defer to lake
+- [ ] App auto-flight-logging (commit `2b4bbc10`) — not yet bench/water-tested
+
+### Next action: lake test
+
+Pre-lake checklist:
+1. Run magnetometer calibration with the boat fully assembled, motors
+   in place. Verify heading reads true on all four cardinal directions
+   at rest.
+2. Bench-test the app auto-flight-logger against the new firmware
+   (Expo Go) before relying on it for the lake run.
+3. Confirm the app's Firmware row shows `test_29-pool2`.
+4. Lake run: longer AUTO leg so GPS-course fusion has time to nudge
+   IMU heading. Watch whether the ~20° offset closes on its own.
