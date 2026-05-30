@@ -75,6 +75,7 @@
 #include <TinyGPSPlus.h>
 #include <SoftwareSerial.h>
 #include <DFRobot_DF1201S.h>
+#include <Preferences.h>
 #include <math.h>
 #include <esp_system.h>
 #include "secrets.h"
@@ -139,9 +140,12 @@ static const uint32_t IMU_UPDATE_INTERVAL_MS = 20;
 // behave under real water resistance.
 static const float    DEFAULT_KP = 3.0f;
 static const float    DEFAULT_KD = 8.0f;
-static const float    MAG_OFFSET_X = -20.70f;
-static const float    MAG_OFFSET_Y =  -0.45f;
-static const float    MAG_OFFSET_Z = -17.70f;
+// Default mag offsets used until/unless NVS contains a fresh cal.
+// Provenance unknown; preserved as fallback so flashing this firmware
+// produces zero behaviour change pre-cal. Real cal via /calibrate_mag/start.
+static const float    DEFAULT_MAG_OFFSET_X = -20.70f;
+static const float    DEFAULT_MAG_OFFSET_Y =  -0.45f;
+static const float    DEFAULT_MAG_OFFSET_Z = -17.70f;
 static const float    ALPHA = 0.98f;
 
 // ── INA219 ──────────────────────────────────────────────────────────────────
@@ -300,6 +304,47 @@ static uint16_t cruiseUs           = DEFAULT_CRUISE_US;
 // ── Live PID gains ──────────────────────────────────────────────────────────
 static float   livePidKp = DEFAULT_KP;
 static float   livePidKd = DEFAULT_KD;
+
+// ── Mag calibration (NVS-backed, runtime mutable) ──────────────────────────
+// Loaded from NVS namespace "imu_cal" at boot. If NVS is empty, falls back
+// to DEFAULT_MAG_OFFSET_{X,Y,Z} so this firmware behaves identically to
+// pre-cal-feature firmware on first flash. /calibrate_mag/start triggers an
+// onboard plateau-detect cal procedure that overwrites these and saves.
+enum MagCalState { MAG_CAL_IDLE, MAG_CAL_COLLECTING, MAG_CAL_DONE, MAG_CAL_FAILED };
+static MagCalState magCalState = MAG_CAL_IDLE;
+static const char* magCalStateName(MagCalState s) {
+    return s == MAG_CAL_IDLE       ? "idle"
+         : s == MAG_CAL_COLLECTING ? "collecting"
+         : s == MAG_CAL_DONE       ? "done"
+                                   : "failed";
+}
+static float    magOffX = DEFAULT_MAG_OFFSET_X;
+static float    magOffY = DEFAULT_MAG_OFFSET_Y;
+static float    magOffZ = DEFAULT_MAG_OFFSET_Z;
+static float    magBaselineUT = 0.0f;   // 0 = no cal recorded yet
+static uint32_t magCalTs = 0;
+static bool     magFromNVS = false;     // true if we loaded a real cal at boot
+
+// Cal-in-progress scratch (only valid during MAG_CAL_COLLECTING)
+static float    calMinX, calMinY, calMinZ, calMaxX, calMaxY, calMaxZ;
+static int      calSampleCnt = 0;
+static unsigned long calStartMs = 0;
+static const int CAL_HIST_LEN = 5;
+static float    calHistX[CAL_HIST_LEN] = {}, calHistY[CAL_HIST_LEN] = {};
+static int      calHistIdx = 0;
+static unsigned long calLastHistMs = 0;
+static const char* magCalFailReason = "";
+// Cached live mag magnitude (post-offset) — emitted in /telemetry for the
+// app's drift health check.
+static float    liveMagUT = 0.0f;
+
+// Cal tuning — same heuristics as test_22.
+static const unsigned long MAG_CAL_MIN_MS     = 10000;
+static const unsigned long MAG_CAL_TIMEOUT_MS = 60000;
+static const float         MAG_CAL_MIN_RANGE  = 20.0f;
+static const float         MAG_CAL_PLATEAU_UT = 1.0f;
+
+static Preferences         magPrefs;
 
 // ── Waypoint state ─────────────────────────────────────────────────────────
 static bool    wpSet         = false;
@@ -607,6 +652,121 @@ static void readIbus() {
     }
 }
 
+// ── Mag calibration (NVS-backed, app-triggered) ────────────────────────────
+static bool magCalibratedFlag() {
+    return magBaselineUT > 0.0f
+        && (magOffX != 0.0f || magOffY != 0.0f || magOffZ != 0.0f);
+}
+
+static void magCalLoadFromNVS() {
+    magPrefs.begin("imu_cal", true);
+    bool present = magPrefs.isKey("off_x") && magPrefs.isKey("base_uT");
+    if (present) {
+        magOffX       = magPrefs.getFloat("off_x", DEFAULT_MAG_OFFSET_X);
+        magOffY       = magPrefs.getFloat("off_y", DEFAULT_MAG_OFFSET_Y);
+        magOffZ       = magPrefs.getFloat("off_z", DEFAULT_MAG_OFFSET_Z);
+        magBaselineUT = magPrefs.getFloat("base_uT", 0.0f);
+        magCalTs      = magPrefs.getUInt ("cal_ts", 0);
+        magFromNVS = true;
+    }
+    magPrefs.end();
+    Serial.printf("[mag-cal] %s  off=(%.2f, %.2f, %.2f)  base=%.2f uT\n",
+                  magFromNVS ? "loaded from NVS" : "NVS empty, using hardcoded defaults",
+                  magOffX, magOffY, magOffZ, magBaselineUT);
+}
+
+static void magCalSaveToNVS() {
+    magPrefs.begin("imu_cal", false);
+    magPrefs.putFloat("off_x",   magOffX);
+    magPrefs.putFloat("off_y",   magOffY);
+    magPrefs.putFloat("off_z",   magOffZ);
+    magPrefs.putFloat("base_uT", magBaselineUT);
+    magPrefs.putUInt ("cal_ts",  magCalTs);
+    magPrefs.end();
+    magFromNVS = true;
+    Serial.printf("[mag-cal] saved: off=(%.2f, %.2f, %.2f) base=%.2f uT\n",
+                  magOffX, magOffY, magOffZ, magBaselineUT);
+}
+
+static void magCalBegin() {
+    calMinX =  1e9f; calMinY =  1e9f; calMinZ =  1e9f;
+    calMaxX = -1e9f; calMaxY = -1e9f; calMaxZ = -1e9f;
+    calSampleCnt = 0;
+    calHistIdx = 0;
+    calLastHistMs = 0;
+    for (int i = 0; i < CAL_HIST_LEN; i++) { calHistX[i] = 0; calHistY[i] = 0; }
+    calStartMs = millis();
+    magCalFailReason = "";
+    magCalState = MAG_CAL_COLLECTING;
+    Serial.println("[mag-cal] START — spin boat through 360°");
+}
+
+static void magCalFinishSuccess() {
+    magOffX = (calMinX + calMaxX) / 2.0f;
+    magOffY = (calMinY + calMaxY) / 2.0f;
+    magOffZ = (calMinZ + calMaxZ) / 2.0f;
+    magBaselineUT = liveMagUT;  // magnitude at the final orientation
+    magCalTs = millis() / 1000;
+    magCalSaveToNVS();
+    magCalState = MAG_CAL_DONE;
+    Serial.printf("[mag-cal] DONE  samples=%d\n", calSampleCnt);
+}
+
+static void magCalFinishFail(const char* why) {
+    magCalFailReason = why;
+    magCalState = MAG_CAL_FAILED;
+    Serial.printf("[mag-cal] FAILED: %s\n", why);
+}
+
+// Called from updateImu() every IMU sample. Cheap when state==idle/done.
+static void magCalTick(float rawX, float rawY, float rawZ) {
+    if (magCalState != MAG_CAL_COLLECTING) return;
+
+    if (rawX < calMinX) calMinX = rawX;  if (rawX > calMaxX) calMaxX = rawX;
+    if (rawY < calMinY) calMinY = rawY;  if (rawY > calMaxY) calMaxY = rawY;
+    if (rawZ < calMinZ) calMinZ = rawZ;  if (rawZ > calMaxZ) calMaxZ = rawZ;
+    calSampleCnt++;
+
+    unsigned long elapsed = millis() - calStartMs;
+    if (millis() - calLastHistMs >= 1000) {
+        calLastHistMs = millis();
+        calHistX[calHistIdx % CAL_HIST_LEN] = calMaxX - calMinX;
+        calHistY[calHistIdx % CAL_HIST_LEN] = calMaxY - calMinY;
+        calHistIdx++;
+    }
+    if (elapsed > MAG_CAL_TIMEOUT_MS) {
+        magCalFinishFail("timeout — spin incomplete or magnetic interference");
+        return;
+    }
+    if (elapsed > MAG_CAL_MIN_MS && calHistIdx >= CAL_HIST_LEN) {
+        float loX = calHistX[0], hiX = calHistX[0];
+        float loY = calHistY[0], hiY = calHistY[0];
+        for (int i = 1; i < CAL_HIST_LEN; i++) {
+            if (calHistX[i] < loX) loX = calHistX[i];  if (calHistX[i] > hiX) hiX = calHistX[i];
+            if (calHistY[i] < loY) loY = calHistY[i];  if (calHistY[i] > hiY) hiY = calHistY[i];
+        }
+        float growthX = hiX - loX, growthY = hiY - loY;
+        float rangeX  = calMaxX - calMinX, rangeY = calMaxY - calMinY;
+        if (growthX < MAG_CAL_PLATEAU_UT && growthY < MAG_CAL_PLATEAU_UT
+            && rangeX > MAG_CAL_MIN_RANGE && rangeY > MAG_CAL_MIN_RANGE) {
+            magCalFinishSuccess();
+        }
+    }
+}
+
+// Percent based on max range vs CAL_MIN_RANGE — saturates at 100% once
+// ranges are credible; plateau detection finishes the cal shortly after.
+static int magCalProgressPct() {
+    if (magCalState == MAG_CAL_DONE) return 100;
+    if (magCalState != MAG_CAL_COLLECTING) return 0;
+    float rX = calMaxX - calMinX, rY = calMaxY - calMinY;
+    float best = rX > rY ? rX : rY;
+    int pct = (int)(best / MAG_CAL_MIN_RANGE * 100.0f);
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+    return pct;
+}
+
 // ── IMU + complementary filter ─────────────────────────────────────────────
 static void updateImu() {
     static uint32_t lastImuPollMs = 0;
@@ -616,9 +776,14 @@ static void updateImu() {
     myICM.getAGMT();
     float ax = myICM.accX(), ay = myICM.accY(), az = myICM.accZ();
     float gx = myICM.gyrX(), gy = myICM.gyrY(), gz = myICM.gyrZ();
-    float mx = myICM.magX() - MAG_OFFSET_X;
-    float my = myICM.magY() - MAG_OFFSET_Y;
-    float mz = myICM.magZ() - MAG_OFFSET_Z;
+    float magRawX = myICM.magX();
+    float magRawY = myICM.magY();
+    float magRawZ = myICM.magZ();
+    float mx = magRawX - magOffX;
+    float my = magRawY - magOffY;
+    float mz = magRawZ - magOffZ;
+    liveMagUT = sqrtf(mx*mx + my*my + mz*mz);
+    magCalTick(magRawX, magRawY, magRawZ);
 
     float ar_x = ay, ar_y = az, ar_z = ax;
     float mr_x = -mz, mr_y = -my, mr_z = -mx;
@@ -914,13 +1079,13 @@ static void handleOptions() { addCORS(); server.send(204); }
 static void handleStatus() {
     addCORS();
     server.send(200, "application/json",
-        "{\"ok\":true,\"v\":\"test_29-pool2\",\"ip\":\"" + boatIP + "\"}");
+        "{\"ok\":true,\"v\":\"test_29-pool2.1-magcal\",\"ip\":\"" + boatIP + "\"}");
 }
 
 static void handleTelemetry() {
     addCORS();
     StaticJsonDocument<1280> doc;
-    doc["v"]            = "test_29-pool2";
+    doc["v"]            = "test_29-pool2.1-magcal";
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
@@ -1015,9 +1180,52 @@ static void handleTelemetry() {
     snprintf(buf, sizeof(buf), "%.2f", livePidKp); doc["pid_kp"] = buf;
     snprintf(buf, sizeof(buf), "%.2f", livePidKd); doc["pid_kd"] = buf;
 
+    // ── Mag calibration / health ─────────────────────────────────────────
+    doc["mag_cal_state"]    = magCalStateName(magCalState);
+    doc["mag_cal_progress"] = magCalProgressPct();
+    doc["mag_calibrated"]   = magCalibratedFlag();
+    doc["mag_cal_ts"]       = magCalTs;
+    doc["mag_from_nvs"]     = magFromNVS;
+    if (magCalState == MAG_CAL_FAILED) doc["mag_cal_fail"] = magCalFailReason;
+    snprintf(buf, sizeof(buf), "%.2f", magOffX);       doc["mag_off_x"]       = buf;
+    snprintf(buf, sizeof(buf), "%.2f", magOffY);       doc["mag_off_y"]       = buf;
+    snprintf(buf, sizeof(buf), "%.2f", magOffZ);       doc["mag_off_z"]       = buf;
+    snprintf(buf, sizeof(buf), "%.2f", magBaselineUT); doc["mag_baseline_uT"] = buf;
+    snprintf(buf, sizeof(buf), "%.2f", liveMagUT);     doc["mag_uT"]          = buf;
+
     char out[1280];
     serializeJson(doc, out);
     server.send(200, "application/json", out);
+}
+
+static void handleCalibrateMagStart() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    if (magCalState == MAG_CAL_COLLECTING) {
+        server.send(200, "application/json",
+            "{\"ok\":true,\"state\":\"collecting\",\"note\":\"already running\"}");
+        return;
+    }
+    magCalBegin();
+    server.send(200, "application/json", "{\"ok\":true,\"state\":\"collecting\"}");
+}
+
+static void handleCalibrateMagAbort() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    if (magCalState != MAG_CAL_COLLECTING) {
+        if (magCalState == MAG_CAL_FAILED) magCalState = MAG_CAL_IDLE;
+        server.send(200, "application/json",
+            "{\"ok\":true,\"state\":\"idle\",\"note\":\"not collecting\"}");
+        return;
+    }
+    magCalFinishFail("operator aborted");
+    magCalState = MAG_CAL_IDLE;
+    server.send(200, "application/json", "{\"ok\":true,\"state\":\"idle\"}");
 }
 
 static void handleCruise() {
@@ -1477,7 +1685,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println();
-    Serial.println("test_29_pool_integration v test_29-pool2");
+    Serial.println("test_29_pool_integration v test_29-pool2.1-magcal");
     sessionId = esp_random();   // app uses this to detect mid-flight reboots
 
     pinMode(PIN_NAV,    OUTPUT); digitalWrite(PIN_NAV,    LOW);
@@ -1524,6 +1732,10 @@ void setup() {
     if (ina219OK) Serial.printf("[I2C] INA219 detected at 0x%02X\n", INA219_ADDR);
     else          Serial.printf("[I2C] WARN: INA219 not at 0x%02X — voltage telemetry disabled\n",
                                 INA219_ADDR);
+
+    // Mag offsets — NVS wins if present, otherwise the hardcoded defaults
+    // already loaded by their initializers remain in effect.
+    magCalLoadFromNVS();
 
     setRudder(NEUTRAL_US); setEscs(NEUTRAL_US);
     Serial.println("Arming ESCs (3 s @ 1500 µs)...");
@@ -1588,6 +1800,10 @@ void setup() {
     server.on("/radar",     HTTP_OPTIONS, handleOptions);
     server.on("/depth",     HTTP_POST,    handleDepth);
     server.on("/depth",     HTTP_OPTIONS, handleOptions);
+    server.on("/calibrate_mag/start", HTTP_POST,    handleCalibrateMagStart);
+    server.on("/calibrate_mag/start", HTTP_OPTIONS, handleOptions);
+    server.on("/calibrate_mag/abort", HTTP_POST,    handleCalibrateMagAbort);
+    server.on("/calibrate_mag/abort", HTTP_OPTIONS, handleOptions);
     server.begin();
     Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
     Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",

@@ -1,6 +1,6 @@
 # test_29_pool_integration — Notes
 
-## Status: POOL-VERIFIED 2026-05-30 (run #2, firmware `test_29-pool2`); IMU heading bias open; lake test next
+## Status: POOL-VERIFIED 2026-05-30 (run #2, firmware `test_29-pool2`); mag-cal feature added on top in `test_29-pool2.1-magcal`, cal gates pending; lake test next
 
 ## What this sketch is
 
@@ -322,6 +322,41 @@ Pre-lake checklist:
    at rest.
 2. Bench-test the app auto-flight-logger against the new firmware
    (Expo Go) before relying on it for the lake run.
-3. Confirm the app's Firmware row shows `test_29-pool2`.
+3. Confirm the app's Firmware row shows `test_29-pool2.1-magcal`
+   (post-magcal integration) or later.
 4. Lake run: longer AUTO leg so GPS-course fusion has time to nudge
    IMU heading. Watch whether the ~20° offset closes on its own.
+
+## Mag-cal integration 2026-05-30 — bench-the-boat gates pending
+
+`test_29-pool2.1-magcal` adds NVS-backed mag calibration with safe
+fallback. Pre-cal behaviour is unchanged: NVS empty → existing
+hardcoded `DEFAULT_MAG_OFFSET_*` defaults remain in use.
+
+New surface:
+- `POST /calibrate_mag/start` — boat enters cal mode, spin operator
+  rotates whole boat through 360° on a flat surface. Plateau detected
+  → offsets computed → saved to NVS namespace `imu_cal` → applied to
+  live heading. 60 s timeout.
+- `POST /calibrate_mag/abort` — return to idle without saving.
+- Telemetry adds: `mag_cal_state`, `mag_cal_progress`,
+  `mag_calibrated`, `mag_off_x/y/z`, `mag_baseline_uT`, `mag_uT`,
+  `mag_from_nvs`, `mag_cal_ts`, optional `mag_cal_fail`.
+
+### Bench-the-boat gates (need PASS before lake)
+
+| Gate | What |
+|------|------|
+| MC-1 | Flash `test_29-pool2.1-magcal`. Boat boots, app `Firmware` row reads `test_29-pool2.1-magcal`. |
+| MC-2 | Fresh-NVS boot (no prior cal): Serial shows `[mag-cal] NVS empty, using hardcoded defaults`. `/telemetry` shows `mag_calibrated=false`, `mag_from_nvs=false`, offsets match the hardcoded defaults. |
+| MC-3 | All other systems still work — AUTO, manual, bilge, depth, GPS, etc. (Smoke-test, not a full pool rerun.) |
+| MC-4 | `curl -X POST http://<ip>/calibrate_mag/start` → `mag_cal_state` transitions to `"collecting"`. `mag_cal_progress` climbs as operator rotates whole boat. |
+| MC-5 | Within 60 s of rotation: `mag_cal_state="done"`, `mag_off_x/y/z` populated with new values, `mag_baseline_uT > 20`. |
+| MC-6 | Power-cycle ESP32. On reboot: Serial shows `[mag-cal] loaded from NVS`. `/telemetry` shows `mag_calibrated=true`, `mag_from_nvs=true`, same offsets. |
+| MC-7 | After cal: app's `Heading` row matches a known compass bearing ±15° (use phone compass app to find true bearing). |
+| MC-8 | Two consecutive heading readings with boat still differ < 5°. |
+| MC-9 | `POST /calibrate_mag/abort` during a `collecting` run → state returns to `idle`; NVS unchanged. |
+
+MC-7 and MC-8 are the gates test_22 documented but never formally
+completed. Don't skip them — these are the proof the cal procedure
+actually fixes the pool-#2 ~20° AUTO heading bias.
