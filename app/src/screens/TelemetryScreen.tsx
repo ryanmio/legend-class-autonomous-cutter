@@ -31,6 +31,28 @@ function modeColor(mode: string | undefined): string {
   }
 }
 
+function magRowText(data: { mag_uT?: string; mag_baseline_uT?: string; mag_calibrated?: boolean }): string {
+  const live = data.mag_uT != null ? parseFloat(data.mag_uT) : NaN;
+  const base = data.mag_baseline_uT != null ? parseFloat(data.mag_baseline_uT) : NaN;
+  const liveText = isNaN(live) ? '--' : `${live.toFixed(1)} µT`;
+  if (data.mag_calibrated === false) return `${liveText} (uncal)`;
+  if (!isNaN(live) && !isNaN(base) && base > 0) {
+    const dev = ((live - base) / base) * 100;
+    return `${liveText} (${dev >= 0 ? '+' : ''}${dev.toFixed(0)}%)`;
+  }
+  return liveText;
+}
+
+function magRowWarn(data: { mag_uT?: string; mag_baseline_uT?: string; mag_calibrated?: boolean }): boolean {
+  if (data.mag_calibrated === false) return true;
+  const live = data.mag_uT != null ? parseFloat(data.mag_uT) : NaN;
+  const base = data.mag_baseline_uT != null ? parseFloat(data.mag_baseline_uT) : NaN;
+  if (!isNaN(live) && !isNaN(base) && base > 0) {
+    return Math.abs(live - base) / base > 0.25;
+  }
+  return false;
+}
+
 export default function TelemetryScreen({ navigation }: Props) {
   const { data, connected } = useTelemetry();
   const [logRows, setLogRows] = useState(getRowCount());
@@ -114,6 +136,9 @@ export default function TelemetryScreen({ navigation }: Props) {
               {data.rudder_us != null && <Row label="Rudder" value={`${data.rudder_us} µs`} />}
               {data.esc_us    != null && <Row label="ESC"    value={`${data.esc_us} µs`} />}
               {data.heading   != null && <Row label="Heading" value={`${data.heading}°`} />}
+              {(data.mag_uT != null || data.mag_calibrated != null) && (
+                <Row label="Mag" value={magRowText(data)} warn={magRowWarn(data)} />
+              )}
 
               <Section label="GPS" />
               <Row

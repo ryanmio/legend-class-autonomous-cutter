@@ -30,6 +30,19 @@ export interface TelemetryData {
   pitch?: string;
   accel_mag?: number;
 
+  // ── Mag calibration / health (added test_29-pool2.1-magcal) ──
+  mag_cal_state?: 'idle' | 'collecting' | 'done' | 'failed';
+  mag_cal_progress?: number;       // 0..100
+  mag_calibrated?: boolean;        // true if a real cal exists in NVS
+  mag_from_nvs?: boolean;          // true if offsets came from NVS (not hardcoded fallback)
+  mag_cal_ts?: number;             // uptime-seconds when cal was last saved
+  mag_cal_fail?: string;           // present only when state=='failed'
+  mag_off_x?: string;              // current applied offsets (post-cal or defaults)
+  mag_off_y?: string;
+  mag_off_z?: string;
+  mag_baseline_uT?: string;        // magnitude recorded at cal time; 0 = no cal
+  mag_uT?: string;                 // live magnitude post-offset
+
   // ── Battery (INA219) ──────────────────────────────────────────
   batt_v?: string;        // bus voltage, V (string formatted)
   batt_a?: string;        // current draw, A

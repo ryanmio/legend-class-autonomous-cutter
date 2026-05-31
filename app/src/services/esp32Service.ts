@@ -104,6 +104,19 @@ export async function setRadar(ip: string, args: {
   return post(ip, '/radar', args);
 }
 
+// Mag calibration: enter onboard plateau-detect cal mode. Operator
+// rotates the whole boat through 360° on a flat surface; firmware
+// computes hard-iron offsets, writes to NVS, applies to live heading.
+// Idempotent — if already collecting, returns current state.
+export async function postCalibrateMagStart(ip: string) {
+  return post(ip, '/calibrate_mag/start');
+}
+
+// Exit cal mode without saving — NVS untouched.
+export async function postCalibrateMagAbort(ip: string) {
+  return post(ip, '/calibrate_mag/abort');
+}
+
 // Play an audio cue on the DF1201S. test_29 ignores `sound` and plays
 // track 1 for any value; the key still goes over the wire so firmware
 // can branch on it once track mapping is decided.

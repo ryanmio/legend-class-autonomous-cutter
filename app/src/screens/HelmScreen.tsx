@@ -69,6 +69,19 @@ function stateSentence(
       color: Colors.danger,
     };
   }
+
+  // Compass health takes priority over normal-state messages because a bad
+  // heading silently breaks AUTO. Doesn't override failsafe above (that's
+  // the bigger problem). When boat is doing real work in AUTO/MANUAL with
+  // good motion, defer to the activity message — operator already knows
+  // they're driving; compass nag during a captured leg is noise.
+  const calBanner = magHealthBanner(data);
+  const movingFast = (() => {
+    const sp = data.speed_kts != null ? parseFloat(data.speed_kts) : 0;
+    return !isNaN(sp) && sp > 0.5;
+  })();
+  if (calBanner && !movingFast) return calBanner;
+
   if (data.mode === 'AUTO') {
     if (!data.wp_set)  return { text: 'NO WAYPOINT', color: Colors.warning };
     if (!data.gps_fix) return { text: 'NO GPS FIX',  color: Colors.warning };
@@ -83,6 +96,21 @@ function stateSentence(
     return { text: `UNDERWAY · ${sp.toFixed(1)} KTS`, color: Colors.accent };
   }
   return { text: 'AT REST', color: Colors.textSecondary };
+}
+
+// Returns a banner only when something is wrong with the compass cal.
+// Quiet otherwise (caller falls through to normal-state messages).
+function magHealthBanner(data: TelemetryData): { text: string; color: string } | null {
+  if (data.mag_calibrated === false) {
+    return { text: 'COMPASS NOT CALIBRATED', color: Colors.warning };
+  }
+  const live = data.mag_uT != null ? parseFloat(data.mag_uT) : NaN;
+  const base = data.mag_baseline_uT != null ? parseFloat(data.mag_baseline_uT) : NaN;
+  if (!isNaN(live) && !isNaN(base) && base > 0) {
+    const dev = Math.abs(live - base) / base;
+    if (dev > 0.25) return { text: 'COMPASS DRIFT · RECALIBRATE', color: Colors.danger };
+  }
+  return null;
 }
 
 // ── Screen ─────────────────────────────────────────────────────────────────────

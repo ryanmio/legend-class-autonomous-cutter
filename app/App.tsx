@@ -10,6 +10,7 @@ import MapScreen from './src/screens/MapScreen';
 import TelemetryScreen from './src/screens/TelemetryScreen';
 import SystemsScreen from './src/screens/SystemsScreen';
 import FlightsScreen from './src/screens/FlightsScreen';
+import CalibrationScreen from './src/screens/CalibrationScreen';
 import { initAutoLogger } from './src/services/telemetryLogger';
 
 export type RootStackParamList = {
@@ -19,6 +20,7 @@ export type RootStackParamList = {
   Telemetry:  { ip: string };
   Systems:    { ip: string };
   Flights:    undefined;
+  Calibration: { ip: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -43,6 +45,7 @@ export default function App() {
           <Stack.Screen name="Telemetry"  component={TelemetryScreen} />
           <Stack.Screen name="Systems"    component={SystemsScreen} />
           <Stack.Screen name="Flights"    component={FlightsScreen} />
+          <Stack.Screen name="Calibration" component={CalibrationScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>

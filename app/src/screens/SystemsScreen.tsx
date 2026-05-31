@@ -29,7 +29,7 @@ export default function SystemsScreen({ route }: Props) {
         <FlightsSection />
         <WeaponsSection />
         <SurveySection />
-        <SettingsSection />
+        <SettingsSection ip={ip} />
       </ScrollView>
     </Screen>
   );
@@ -265,7 +265,8 @@ function SurveySection() {
 // exposes durable versions of /pid (NVS-persisted) and /calibrate-imu.
 // Today /pid is live-tunable on test_29 but values don't survive reboot,
 // and /calibrate-imu doesn't exist.
-function SettingsSection() {
+function SettingsSection({ ip }: { ip: string }) {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [kp, setKp] = useState('3.0');
   const [ki, setKi] = useState('0.0');
   const [kd, setKd] = useState('8.0');
@@ -295,7 +296,7 @@ function SettingsSection() {
       </TouchableOpacity>
 
       <Text style={styles.subSection}>SENSORS</Text>
-      <TouchableOpacity style={[styles.btn, styles.btnDisabled]} disabled>
+      <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Calibration', { ip })}>
         <Text style={styles.btnText}>CALIBRATE IMU COMPASS</Text>
       </TouchableOpacity>
     </View>
