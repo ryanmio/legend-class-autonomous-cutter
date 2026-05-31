@@ -312,7 +312,7 @@ before the lake run.
 - [~] AUTO heading accuracy — ~20° leftward bias; investigate IMU mag cal before lake
 - [ ] GPS+IMU fusion behavior over distance — needs lake (pool too small)
 - [ ] Failsafe live — not exercised this run; defer to lake
-- [ ] App auto-flight-logging (commit `2b4bbc10`) — not yet bench/water-tested
+- [x] App auto-flight-logging (commit `2b4bbc10`) — PASS in pool run #2: logger auto-started on throttle-up, flight saved to FlightsScreen, tap-to-share produced CSV via system share sheet
 
 ### Next action: lake test
 
