@@ -94,16 +94,52 @@ const TRACK_MAP_HTML = `<!DOCTYPE html>
     }
     .ep-start{background:#34c759;box-shadow:0 0 6px rgba(52,199,89,0.8)}
     .ep-end  {background:#ff3b30;box-shadow:0 0 6px rgba(255,59,48,0.8)}
+
+    #layer-toggle{
+      position:absolute;
+      top:10px;
+      right:10px;
+      background:rgba(10,15,26,0.92);
+      border:1.5px solid #00bfff;
+      border-radius:4px;
+      color:#00bfff;
+      font-family:monospace;
+      font-weight:800;
+      font-size:11px;
+      letter-spacing:2px;
+      padding:6px 10px;
+      z-index:1000;
+      cursor:pointer;
+      user-select:none;
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div id="layer-toggle">MAP</div>
   <script>
     var map = L.map('map', { zoomControl:false, attributionControl:false })
       .setView([37.8, -122.4], 13);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+    var satLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19 }
+    );
+    var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19
-    }).addTo(map);
+    });
+    var currentLayer = satLayer;
+    currentLayer.addTo(map);
+
+    document.getElementById('layer-toggle').addEventListener('click', function() {
+      if (currentLayer === satLayer) {
+        map.removeLayer(satLayer); osmLayer.addTo(map); currentLayer = osmLayer;
+        this.textContent = 'SAT';
+      } else {
+        map.removeLayer(osmLayer); satLayer.addTo(map); currentLayer = satLayer;
+        this.textContent = 'MAP';
+      }
+    });
 
     window.drawTrack = function(points) {
       if (!points || points.length === 0) return;

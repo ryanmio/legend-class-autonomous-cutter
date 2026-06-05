@@ -99,6 +99,25 @@ const MAP_HTML = `<!DOCTYPE html>
     .boat{font-size:22px;line-height:1}
 
     /* Waypoint reticle — bright cyan, the active target color. */
+    /* Tile-layer toggle (top-left). Tap swaps between satellite + street. */
+    #layer-toggle{
+      position:absolute;
+      top:90px;
+      left:12px;
+      background:rgba(10,15,26,0.92);
+      border:1.5px solid #00bfff;
+      border-radius:4px;
+      color:#00bfff;
+      font-family:monospace;
+      font-weight:800;
+      font-size:11px;
+      letter-spacing:2px;
+      padding:7px 11px;
+      z-index:1000;
+      cursor:pointer;
+      user-select:none;
+    }
+
     .wp-icon{background:transparent !important;border:none !important}
     .wp-target{position:relative;width:30px;height:30px}
     .wp-ring{
@@ -122,13 +141,33 @@ const MAP_HTML = `<!DOCTYPE html>
     <div id="hud-primary"></div>
     <div id="hud-secondary"></div>
   </div>
+  <div id="layer-toggle">MAP</div>
   <script>
     // zoomControl off — pinch-zoom still works; the in-map buttons
     // overlapped the iOS status bar at the top-left.
     var map = L.map('map', { zoomControl:false }).setView([37.8,-122.4], 13);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+    // Esri World Imagery (satellite) — keyless, fine for personal use.
+    // Default for waypoint placement around piers / shoreline detail.
+    var satLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { attribution:'© Esri', maxZoom:19 }
+    );
+    var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution:'© OpenStreetMap contributors', maxZoom:19
-    }).addTo(map);
+    });
+    var currentLayer = satLayer;
+    currentLayer.addTo(map);
+
+    document.getElementById('layer-toggle').addEventListener('click', function() {
+      if (currentLayer === satLayer) {
+        map.removeLayer(satLayer); osmLayer.addTo(map); currentLayer = osmLayer;
+        this.textContent = 'SAT';
+      } else {
+        map.removeLayer(osmLayer); satLayer.addTo(map); currentLayer = satLayer;
+        this.textContent = 'MAP';
+      }
+    });
 
     var boatIcon = L.divIcon({
       html:'<div class="boat">⛵</div>',
