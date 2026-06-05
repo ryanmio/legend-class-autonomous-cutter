@@ -1654,10 +1654,15 @@ static void applyOutputs() {
         return;
     }
     switch (mode) {
-      case MODE_MANUAL:
-        setRudder(mapRudderStickToServo(ch[IBUS_IDX_RUDDER]));
-        setEscs  (computeThrottleUs(ch[IBUS_IDX_THROTTLE], ch[IBUS_IDX_REVERSE]));
+      case MODE_MANUAL: {
+        uint16_t throttleUs = computeThrottleUs(ch[IBUS_IDX_THROTTLE], ch[IBUS_IDX_REVERSE]);
+        uint16_t rudderUs   = mapRudderStickToServo(ch[IBUS_IDX_RUDDER]);
+        uint16_t portUs, stbdUs;
+        computePortStbd(throttleUs, rudderUs, portUs, stbdUs);
+        setRudder(rudderUs);
+        setEscsPortStbd(portUs, stbdUs);
         break;
+      }
       case MODE_AUTO: {
         if (wpSet && gpsValid && !captured) {
             uint16_t engageUs  = (cruiseUs > AUTO_CRUISE_CAP_US) ? AUTO_CRUISE_CAP_US : cruiseUs;
