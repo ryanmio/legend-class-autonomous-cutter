@@ -6,18 +6,21 @@
 //      public API as before; TelemetryScreen still controls it manually.
 //   2. Auto engine (initAutoLogger) — always-on subscriber that
 //      auto-starts the recorder when the boat is throttled up, and
-//      auto-saves the captured rows as a "flight" in AsyncStorage when
+//      auto-saves the captured rows as a "flight" in storage when
 //      the boat goes away (telemetry lost / boat rebooted) or the
 //      operator manually stops.
 //
-// Persistence lives entirely on the phone via AsyncStorage:
-//   flight:<isoTimestamp>  → CSV body
-//   flights:index          → JSON array of { id, startTs, endTs, rowCount }
+// Persistence:
+//   ${documentDirectory}flights/<id>.csv   — CSV body, one file per flight.
+//   AsyncStorage 'flights:index'           — JSON array of FlightMeta
+//                                            (id, timestamps, row count, derived stats).
 //
-// See FLIGHT_LOG_PLAN.md for the design.
+// Legacy AsyncStorage layout (flight:<id> → CSV body) is migrated on
+// first listFlights() call after upgrade.
 
 import { Share } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 import { TelemetryData } from '../types';
 import { subscribe } from './websocketService';
 
@@ -26,14 +29,30 @@ export interface LogRow extends TelemetryData {
 }
 
 export interface FlightMeta {
-  id: string;             // ISO-ish timestamp, also the AsyncStorage key suffix
+  id: string;             // ISO-ish timestamp, also the filename stem
   startTs: number;        // ms epoch of first row
   endTs: number;          // ms epoch of last row
   rowCount: number;
+
+  // Derived stats — present on flights saved by v2+, lazily filled for
+  // migrated v1 flights. All optional so consumers must null-check.
+  distanceM?: number;          // total over-ground distance (1.5 m threshold)
+  maxSpeedKts?: number;
+  autoMs?: number;             // wall time spent in MODE_AUTO
+  manualMs?: number;
+  failsafeMs?: number;
+  battStartV?: number;
+  battEndV?: number;
+  maxDepthM?: number;
+  capturedWaypoint?: boolean;
+  gpsRowCount?: number;        // # rows with gps_fix and parseable lat/lon
+
+  storage?: 'fs' | 'async';    // where the CSV body lives
 }
 
-const FLIGHTS_INDEX_KEY = 'flights:index';
-const FLIGHT_KEY_PREFIX = 'flight:';
+const FLIGHTS_INDEX_KEY  = 'flights:index';
+const LEGACY_FLIGHT_KEY  = 'flight:';  // AsyncStorage key prefix for v1 bodies
+const FLIGHT_DIR         = (FileSystem.documentDirectory ?? '') + 'flights/';
 
 // Cap at 7200 rows ≈ 2 hours @ 1 Hz. Drops oldest when full.
 const MAX_ROWS = 7200;
@@ -43,6 +62,14 @@ const AUTO_ESC_DEADBAND_US   = 30;        // |esc_us - 1500| must exceed this
 const AUTO_ESC_DEBOUNCE_MS   = 500;       // ...for this long to auto-start
 const AUTO_LOST_THRESHOLD_MS = 60_000;    // 60 s of no frames = boat is gone
 const AUTO_TICK_MS           = 5_000;     // how often to check for telemetry loss
+
+// Stats tuning.
+// GPS jitter floor: per-step displacements under this are noise, not real
+// travel. Outdoor BN-220 typically jitters ±2 m even stationary.
+const DISTANCE_STEP_MIN_M    = 1.5;
+// Cap any single inter-row gap when attributing wall time to a mode.
+// Beyond this, treat as a telemetry gap and don't credit any mode.
+const MODE_TIME_GAP_CAP_MS   = 10_000;
 
 let rows: LogRow[] = [];
 let unsubscribe: (() => void) | null = null;
@@ -100,7 +127,7 @@ export function subscribeRunning(fn: (running: boolean) => void): () => void {
   return () => { runningListeners = runningListeners.filter((l) => l !== fn); };
 }
 
-// ── CSV building ───────────────────────────────────────────────────────────
+// ── CSV building / parsing ─────────────────────────────────────────────────
 
 function columns(forRows: LogRow[]): string[] {
   const seen = new Set<string>();
@@ -132,6 +159,47 @@ function rowsToCSV(forRows: LogRow[]): string {
   return [header, ...body].join('\n');
 }
 
+// Single-line CSV parser. Our writer never emits a newline inside a
+// cell (telemetry fields are numbers / booleans / short enums), so it's
+// safe to split the file on '\n' first.
+function parseCSVLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQ) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; continue; }
+        inQ = false;
+        continue;
+      }
+      cur += c;
+    } else {
+      if (c === ',') { cells.push(cur); cur = ''; continue; }
+      if (c === '"' && cur === '') { inQ = true; continue; }
+      cur += c;
+    }
+  }
+  cells.push(cur);
+  return cells;
+}
+
+export function parseCSV(csv: string): Array<Record<string, string>> {
+  const lines = csv.split('\n');
+  if (lines.length < 2) return [];
+  const header = parseCSVLine(lines[0]);
+  const out: Array<Record<string, string>> = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i] === '') continue;
+    const cells = parseCSVLine(lines[i]);
+    const row: Record<string, string> = {};
+    for (let j = 0; j < header.length; j++) row[header[j]] = cells[j] ?? '';
+    out.push(row);
+  }
+  return out;
+}
+
 // Builds CSV from the current in-memory buffer — kept for backward
 // compatibility with code that calls getCSV() directly. New code
 // should prefer the saved-flight flow (saveFlight / loadFlight).
@@ -141,7 +209,7 @@ export function getCSV(): string {
 
 // Pop a Share sheet with the current in-memory buffer as a string
 // message. Same behavior as before. Used by TelemetryScreen's EXPORT
-// button. Saved flights have their own export path in FlightsScreen.
+// button. Saved flights have their own export path in FlightDetailScreen.
 export async function exportShare(): Promise<void> {
   if (rows.length === 0) {
     await Share.share({ message: 'No telemetry rows captured yet.' });
@@ -155,9 +223,179 @@ export async function exportShare(): Promise<void> {
   });
 }
 
-// ── Saved flights (AsyncStorage) ───────────────────────────────────────────
+// ── Stats computation ──────────────────────────────────────────────────────
 
-export async function listFlights(): Promise<FlightMeta[]> {
+function num(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+}
+
+function asBool(v: unknown): boolean {
+  return v === true || v === 'true';
+}
+
+function tsMs(v: unknown): number {
+  if (typeof v === 'number') return v;
+  const s = String(v ?? '');
+  const parsed = Date.parse(s);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+type StatsInput = Array<Record<string, unknown>>;
+
+export interface FlightStats {
+  distanceM: number;
+  maxSpeedKts: number;
+  autoMs: number;
+  manualMs: number;
+  failsafeMs: number;
+  battStartV?: number;
+  battEndV?: number;
+  maxDepthM: number;
+  capturedWaypoint: boolean;
+  gpsRowCount: number;
+}
+
+export function computeStats(rs: StatsInput): FlightStats {
+  let distanceM       = 0;
+  let maxSpeedKts     = 0;
+  let autoMs          = 0;
+  let manualMs        = 0;
+  let failsafeMs      = 0;
+  let battStartV: number | undefined;
+  let battEndV:   number | undefined;
+  let maxDepthM       = 0;
+  let capturedWaypoint = false;
+  let gpsRowCount     = 0;
+
+  let prevGps: { lat: number; lon: number } | null = null;
+  let prevTs:   number | null = null;
+  let prevMode: string | null = null;
+
+  for (const r of rs) {
+    const t = tsMs(r.ts);
+
+    // Time-in-mode (credit dt to mode at start of interval, cap gaps).
+    const mode = r.mode == null ? null : String(r.mode);
+    if (prevTs != null && prevMode != null) {
+      const dt = t - prevTs;
+      if (dt > 0 && dt < MODE_TIME_GAP_CAP_MS) {
+        if      (prevMode === 'AUTO')     autoMs     += dt;
+        else if (prevMode === 'MANUAL')   manualMs   += dt;
+        else if (prevMode === 'FAILSAFE') failsafeMs += dt;
+      }
+    }
+    prevTs   = t;
+    prevMode = mode;
+
+    // GPS-derived distance (jitter floor).
+    if (asBool(r.gps_fix)) {
+      const lat = num(r.lat);
+      const lon = num(r.lon);
+      if (lat != null && lon != null) {
+        gpsRowCount++;
+        if (prevGps != null) {
+          const step = haversineMeters(prevGps.lat, prevGps.lon, lat, lon);
+          if (step >= DISTANCE_STEP_MIN_M) {
+            distanceM += step;
+            prevGps = { lat, lon };
+          }
+          // else: leave prevGps anchored so slow drift eventually clears
+          //       the threshold against the original sample.
+        } else {
+          prevGps = { lat, lon };
+        }
+      }
+    }
+
+    const speed = num(r.speed_kts);
+    if (speed != null && speed > maxSpeedKts) maxSpeedKts = speed;
+
+    const batt = num(r.batt_v);
+    if (batt != null) {
+      if (battStartV === undefined) battStartV = batt;
+      battEndV = batt;
+    }
+
+    const depth = num(r.depth_m);
+    if (depth != null && depth > maxDepthM) maxDepthM = depth;
+
+    if (asBool(r.captured)) capturedWaypoint = true;
+  }
+
+  return {
+    distanceM:        Math.round(distanceM * 10) / 10,
+    maxSpeedKts:      Math.round(maxSpeedKts * 100) / 100,
+    autoMs,
+    manualMs,
+    failsafeMs,
+    battStartV:       battStartV !== undefined ? Math.round(battStartV * 100) / 100 : undefined,
+    battEndV:         battEndV   !== undefined ? Math.round(battEndV   * 100) / 100 : undefined,
+    maxDepthM:        Math.round(maxDepthM * 100) / 100,
+    capturedWaypoint,
+    gpsRowCount,
+  };
+}
+
+// Extract GPS track (and ts) from a parsed CSV — used by FlightDetailScreen
+// to draw the polyline.
+export interface TrackPoint { ts: number; lat: number; lon: number }
+export function extractTrack(rs: StatsInput): TrackPoint[] {
+  const out: TrackPoint[] = [];
+  for (const r of rs) {
+    if (!asBool(r.gps_fix)) continue;
+    const lat = num(r.lat);
+    const lon = num(r.lon);
+    if (lat == null || lon == null) continue;
+    out.push({ ts: tsMs(r.ts), lat, lon });
+  }
+  return out;
+}
+
+// ── Filesystem helpers ─────────────────────────────────────────────────────
+
+async function ensureFlightDir(): Promise<void> {
+  const info = await FileSystem.getInfoAsync(FLIGHT_DIR);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(FLIGHT_DIR, { intermediates: true });
+}
+
+function flightPath(id: string): string {
+  return FLIGHT_DIR + id + '.csv';
+}
+
+export function getFlightFileUri(id: string): string {
+  return flightPath(id);
+}
+
+async function writeFlightFile(id: string, csv: string): Promise<void> {
+  await ensureFlightDir();
+  await FileSystem.writeAsStringAsync(flightPath(id), csv);
+}
+
+async function readFlightFile(id: string): Promise<string | null> {
+  const info = await FileSystem.getInfoAsync(flightPath(id));
+  if (!info.exists) return null;
+  return FileSystem.readAsStringAsync(flightPath(id));
+}
+
+async function deleteFlightFile(id: string): Promise<void> {
+  await FileSystem.deleteAsync(flightPath(id), { idempotent: true });
+}
+
+// ── Saved flights (index in AsyncStorage, bodies on disk) ─────────────────
+
+async function readIndex(): Promise<FlightMeta[]> {
   const raw = await AsyncStorage.getItem(FLIGHTS_INDEX_KEY);
   if (!raw) return [];
   try {
@@ -168,15 +406,88 @@ export async function listFlights(): Promise<FlightMeta[]> {
   }
 }
 
+async function writeIndex(index: FlightMeta[]): Promise<void> {
+  await AsyncStorage.setItem(FLIGHTS_INDEX_KEY, JSON.stringify(index));
+}
+
+// One-shot migration. For every meta entry without `storage: 'fs'`:
+//   • read CSV from AsyncStorage key 'flight:<id>'
+//   • write to filesystem
+//   • compute stats from the CSV
+//   • update meta in place (storage='fs' + stats)
+//   • remove the AsyncStorage body
+// Idempotent: a partially-migrated flight will retry on next call.
+// Memoize per-session — runs at most once per app launch. Concurrent
+// callers share the in-flight promise.
+let migratePromise: Promise<void> | null = null;
+async function migrateLegacyFlights(): Promise<void> {
+  if (migratePromise) return migratePromise;
+  migratePromise = (async () => {
+    const index = await readIndex();
+    let mutated = false;
+    for (let i = 0; i < index.length; i++) {
+      const m = index[i];
+      if (m.storage === 'fs') continue;
+
+      const legacyKey = LEGACY_FLIGHT_KEY + m.id;
+      let csv: string | null = null;
+      try {
+        csv = await AsyncStorage.getItem(legacyKey);
+      } catch (e) {
+        console.warn('[telemetryLogger] legacy read failed', m.id, e);
+      }
+
+      // If body already on disk (interrupted prior migration), skip the write.
+      const existing = await readFlightFile(m.id);
+      if (existing != null) csv = existing;
+
+      if (csv == null) {
+        // No body anywhere — orphaned meta. Mark fs to stop retrying;
+        // listFlights will simply fail to read it later.
+        index[i] = { ...m, storage: 'fs' };
+        mutated = true;
+        continue;
+      }
+
+      try {
+        if (existing == null) await writeFlightFile(m.id, csv);
+        const stats = computeStats(parseCSV(csv));
+        index[i] = { ...m, ...stats, storage: 'fs' };
+        mutated = true;
+        try { await AsyncStorage.removeItem(legacyKey); } catch {}
+      } catch (e) {
+        console.warn('[telemetryLogger] migration failed', m.id, e);
+      }
+    }
+    if (mutated) await writeIndex(index);
+  })();
+  return migratePromise;
+}
+
+export async function listFlights(): Promise<FlightMeta[]> {
+  await migrateLegacyFlights();
+  return readIndex();
+}
+
 export async function loadFlightCSV(id: string): Promise<string | null> {
-  return AsyncStorage.getItem(FLIGHT_KEY_PREFIX + id);
+  await migrateLegacyFlights();
+  const onDisk = await readFlightFile(id);
+  if (onDisk != null) return onDisk;
+  // Fallback: very stale meta that pre-dates migration code paths.
+  return AsyncStorage.getItem(LEGACY_FLIGHT_KEY + id);
+}
+
+export async function loadFlightRows(id: string): Promise<Array<Record<string, string>>> {
+  const csv = await loadFlightCSV(id);
+  if (csv == null) return [];
+  return parseCSV(csv);
 }
 
 export async function deleteFlight(id: string): Promise<void> {
-  await AsyncStorage.removeItem(FLIGHT_KEY_PREFIX + id);
-  const index = await listFlights();
-  const next = index.filter((m) => m.id !== id);
-  await AsyncStorage.setItem(FLIGHTS_INDEX_KEY, JSON.stringify(next));
+  await deleteFlightFile(id);
+  try { await AsyncStorage.removeItem(LEGACY_FLIGHT_KEY + id); } catch {}
+  const index = await readIndex();
+  await writeIndex(index.filter((m) => m.id !== id));
 }
 
 // Snapshots `rows` into a saved flight if non-empty, then clears the
@@ -193,11 +504,12 @@ async function finalizeAndSave(): Promise<void> {
   const endTs   = snapshot[snapshot.length - 1].ts;
   const id      = new Date(startTs).toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const csv     = rowsToCSV(snapshot);
+  const stats   = computeStats(snapshot as unknown as StatsInput);
 
-  await AsyncStorage.setItem(FLIGHT_KEY_PREFIX + id, csv);
-  const index = await listFlights();
-  index.push({ id, startTs, endTs, rowCount: snapshot.length });
-  await AsyncStorage.setItem(FLIGHTS_INDEX_KEY, JSON.stringify(index));
+  await writeFlightFile(id, csv);
+  const index = await readIndex();
+  index.push({ id, startTs, endTs, rowCount: snapshot.length, storage: 'fs', ...stats });
+  await writeIndex(index);
 }
 
 // ── Auto engine ────────────────────────────────────────────────────────────

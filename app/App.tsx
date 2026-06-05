@@ -10,6 +10,7 @@ import MapScreen from './src/screens/MapScreen';
 import TelemetryScreen from './src/screens/TelemetryScreen';
 import SystemsScreen from './src/screens/SystemsScreen';
 import FlightsScreen from './src/screens/FlightsScreen';
+import FlightDetailScreen from './src/screens/FlightDetailScreen';
 import CalibrationScreen from './src/screens/CalibrationScreen';
 import { initAutoLogger } from './src/services/telemetryLogger';
 
@@ -20,6 +21,7 @@ export type RootStackParamList = {
   Telemetry:  { ip: string };
   Systems:    { ip: string };
   Flights:    undefined;
+  FlightDetail: { id: string };
   Calibration: { ip: string };
 };
 
@@ -45,6 +47,7 @@ export default function App() {
           <Stack.Screen name="Telemetry"  component={TelemetryScreen} />
           <Stack.Screen name="Systems"    component={SystemsScreen} />
           <Stack.Screen name="Flights"    component={FlightsScreen} />
+          <Stack.Screen name="FlightDetail" component={FlightDetailScreen} />
           <Stack.Screen name="Calibration" component={CalibrationScreen} />
         </Stack.Navigator>
       </NavigationContainer>

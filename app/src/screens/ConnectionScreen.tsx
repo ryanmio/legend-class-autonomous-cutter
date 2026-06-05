@@ -193,6 +193,15 @@ export default function ConnectionScreen({ navigation }: Props) {
           }
         </TouchableOpacity>
 
+        {/* ── Flight logs (no connection required) ─────────── */}
+        <TouchableOpacity
+          style={styles.flightLogsBtn}
+          onPress={() => navigation.navigate('Flights')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.flightLogsBtnText}>FLIGHT LOGS →</Text>
+        </TouchableOpacity>
+
         {/* ── Advanced disclosure ──────────────────────────── */}
         <TouchableOpacity
           style={styles.advancedToggle}
@@ -262,6 +271,10 @@ const styles = StyleSheet.create({
   // Primary action (SCAN)
   scanBtn:      { backgroundColor: Colors.accent, paddingVertical: 18, borderRadius: 4, alignItems: 'center' },
   scanBtnText:  { color: '#000', fontWeight: '800', fontSize: 15, letterSpacing: 6, fontFamily: 'monospace' },
+
+  // Flight logs (works offline)
+  flightLogsBtn:     { marginTop: 12, paddingVertical: 12, borderRadius: 4, alignItems: 'center', backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.surfaceLight },
+  flightLogsBtnText: { color: Colors.accent, fontWeight: '800', fontSize: 12, letterSpacing: 3, fontFamily: 'monospace' },
 
   // Advanced disclosure
   advancedToggle:    { alignSelf: 'center', marginTop: 18, paddingVertical: 6, paddingHorizontal: 10 },
