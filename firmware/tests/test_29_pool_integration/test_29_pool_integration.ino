@@ -91,7 +91,7 @@ static const uint8_t  CH_RUDDER   = 2;
 static const uint16_t RUDDER_MIN_US = 1330;
 static const uint16_t RUDDER_MAX_US = 1670;
 static const uint16_t NEUTRAL_US    = 1500;
-static const uint16_t MAX_FWD_US    = 1710;   // ~42% of full forward
+static const uint16_t MAX_FWD_US    = 1800;   // pool #1 level — restoring after harbor weak-forward
 // Reverse cap. AUTO never asks for reverse (cruise is always ≥ NEUTRAL_US);
 // the setEscs() floor is widened to this only so MANUAL reverse can
 // reach the ESCs.
@@ -1079,13 +1079,13 @@ static void handleOptions() { addCORS(); server.send(204); }
 static void handleStatus() {
     addCORS();
     server.send(200, "application/json",
-        "{\"ok\":true,\"v\":\"test_29-pool2.1-magcal\",\"ip\":\"" + boatIP + "\"}");
+        "{\"ok\":true,\"v\":\"test_29-pool2.3-field\",\"ip\":\"" + boatIP + "\"}");
 }
 
 static void handleTelemetry() {
     addCORS();
     StaticJsonDocument<1280> doc;
-    doc["v"]            = "test_29-pool2.1-magcal";
+    doc["v"]            = "test_29-pool2.3-field";
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
@@ -1690,7 +1690,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println();
-    Serial.println("test_29_pool_integration v test_29-pool2.1-magcal");
+    Serial.println("test_29_pool_integration v test_29-pool2.3-field");
     sessionId = esp_random();   // app uses this to detect mid-flight reboots
 
     pinMode(PIN_NAV,    OUTPUT); digitalWrite(PIN_NAV,    LOW);
