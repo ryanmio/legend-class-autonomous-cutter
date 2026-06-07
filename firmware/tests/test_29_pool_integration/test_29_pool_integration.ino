@@ -95,7 +95,7 @@ static const uint16_t MAX_FWD_US    = 1800;   // pool #1 level — restoring aft
 // Reverse cap. AUTO never asks for reverse (cruise is always ≥ NEUTRAL_US);
 // the setEscs() floor is widened to this only so MANUAL reverse can
 // reach the ESCs.
-static const uint16_t MIN_REV_US    = 1290;   // ~42% of full reverse
+static const uint16_t MIN_REV_US    = 1200;   // pool #1 level — symmetric with MAX_FWD_US
 
 // ESCs wired such that stick-forward turned props in reverse on pool run #1.
 // Mirror at the PCA write boundary so MAX_FWD_US still semantically means
@@ -105,8 +105,8 @@ static const bool ESC_DIRECTION_INVERTED = true;
 // ── AUTO cruise selection (no floor; cap only) ─────────────────────────────
 // cruise=NEUTRAL_US is valid for static heading-hold (AUTOPILOT_PLAN
 // test_32 step 2). The cap prevents an in-water hands-off runaway.
-static const uint16_t AUTO_CRUISE_CAP_US = 1700;
-static const uint16_t DEFAULT_CRUISE_US  = 1620;
+static const uint16_t AUTO_CRUISE_CAP_US = 1800;  // matches MAX_FWD_US so app can dial cruise high
+static const uint16_t DEFAULT_CRUISE_US  = 1720;  // fallback past the ESC deadband
 static const float    DIFF_THRUST_FACTOR = 0.3f;
 
 // ── iBUS channel indices (locked 2026-05-10) ────────────────────────────────
@@ -1079,13 +1079,13 @@ static void handleOptions() { addCORS(); server.send(204); }
 static void handleStatus() {
     addCORS();
     server.send(200, "application/json",
-        "{\"ok\":true,\"v\":\"test_29-pool2.3-field\",\"ip\":\"" + boatIP + "\"}");
+        "{\"ok\":true,\"v\":\"test_29-pool2.4-uncap\",\"ip\":\"" + boatIP + "\"}");
 }
 
 static void handleTelemetry() {
     addCORS();
     StaticJsonDocument<1280> doc;
-    doc["v"]            = "test_29-pool2.3-field";
+    doc["v"]            = "test_29-pool2.4-uncap";
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
@@ -1690,7 +1690,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println();
-    Serial.println("test_29_pool_integration v test_29-pool2.3-field");
+    Serial.println("test_29_pool_integration v test_29-pool2.4-uncap");
     sessionId = esp_random();   // app uses this to detect mid-flight reboots
 
     pinMode(PIN_NAV,    OUTPUT); digitalWrite(PIN_NAV,    LOW);
