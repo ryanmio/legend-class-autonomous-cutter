@@ -357,12 +357,13 @@ static float   wpBearing     = 0.0f;
 // Prevents the boat from re-engaging cruise after hovering across.
 static bool    captured      = false;
 
-// Crossing-trigger state: when a waypoint is set, we record the boat's
-// position on the first GPS fix we see and treat that as the "start"
-// of the leg. The capture fires if the boat passes the perpendicular
-// line through the waypoint (perpendicular to start→waypoint). This
+// Crossing-trigger state: the boat's position is recorded when AUTO
+// engages (first fix after engage) and treated as the "start" of the
+// leg. The capture fires if the boat passes the perpendicular line
+// through the waypoint (perpendicular to start→waypoint). This
 // prevents endless circling when GPS noise (~2-3 m) is close to the
-// capture radius (3 m).
+// capture radius (3 m). Capture detection only runs in AUTO — driving
+// past the waypoint manually must not mark the leg complete.
 static bool    startValid    = false;
 static float   startLat      = 0.0f;
 static float   startLon      = 0.0f;
@@ -988,7 +989,12 @@ static void updateWaypointGeometry() {
         return;
     }
 
-    // Record leg-start position on the first GPS fix after /waypoint.
+    // Everything below is capture detection — armed only while AUTO is
+    // actually driving the leg. MANUAL/FAILSAFE still get live dist/bearing
+    // telemetry above, but can't trip `captured`.
+    if (mode != MODE_AUTO) return;
+
+    // Record leg-start position on the first GPS fix after AUTO engage.
     if (!startValid) {
         startLat   = boatLat;
         startLon   = boatLon;
@@ -1650,6 +1656,10 @@ static void updateMode() {
 
     if (mode != prev) {
         if (mode == MODE_AUTO) {
+            // Re-record the leg start at engage position — the crossing
+            // line must be perpendicular to the path AUTO will actually
+            // drive, not to wherever the boat was when /waypoint landed.
+            startValid = false;
             uint16_t engageUs = (cruiseUs > AUTO_CRUISE_CAP_US) ? AUTO_CRUISE_CAP_US : cruiseUs;
             if (wpSet && gpsValid && !captured) {
                 Serial.printf("[MODE] %s → AUTO (cruise=%u µs, wp=%.6f,%.6f, dist=%.1f m)\n",
