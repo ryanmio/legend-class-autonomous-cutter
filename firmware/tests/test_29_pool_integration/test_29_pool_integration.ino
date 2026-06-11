@@ -1009,9 +1009,15 @@ static void updateWaypointGeometry() {
 // Scan-first connect (ported from EdmundFitzgeraldController, which works in the
 // field). Priority: home SSID exact match → any SSID containing "iPhone"
 // (handles curly-vs-straight apostrophe and phone renames) → blind fallback to
-// configured hotspot SSID. Called from setup() AND retried every 30 s from
-// loop() if disconnected — covers the case where the hotspot comes up after
-// boot or the boat drifts out and back into range.
+// configured hotspot SSID.
+//
+// BLOCKING — called from setup() only (boat is neutral on the bench then).
+// In-water reconnects go through wifiMaintain(), which never blocks: WiFi
+// is telemetry-only and AUTO must keep running on RC + GPS alone.
+static String lastSsid;
+static String lastPass;
+static bool   wifiWasConnected = false;
+
 static void wifiConnect() {
     Serial.println();
     Serial.println("[WiFi] Scanning…");
@@ -1052,11 +1058,14 @@ static void wifiConnect() {
         Serial.printf("[WiFi] no scan match — blind-connecting: %s\n", ssid.c_str());
     }
 
+    lastSsid = ssid;
+    lastPass = pass;
     WiFi.begin(ssid.c_str(), pass.c_str());
     Serial.print("[WiFi] connecting");
     for (int i = 0; i < 40; i++) {       // 20 s
         if (WiFi.status() == WL_CONNECTED) {
             boatIP = WiFi.localIP().toString();
+            wifiWasConnected = true;
             Serial.printf(" OK %s\n", boatIP.c_str());
             return;
         }
@@ -1067,6 +1076,30 @@ static void wifiConnect() {
 }
 
 static void wifiSetup() { wifiConnect(); }
+
+// Non-blocking reconnect, called every loop. On WiFi loss it re-issues
+// WiFi.begin() (returns immediately; radio retries on its own) at most
+// once per 30 s using the credentials picked at boot. No scan, no delay —
+// outputs, iBUS, and failsafe detection keep running the whole time.
+static void wifiMaintain() {
+    if (WiFi.status() == WL_CONNECTED) {
+        if (!wifiWasConnected) {
+            wifiWasConnected = true;
+            boatIP = WiFi.localIP().toString();
+            Serial.printf("[WiFi] reconnected: %s\n", boatIP.c_str());
+        }
+        return;
+    }
+    if (wifiWasConnected) {
+        wifiWasConnected = false;
+        Serial.println("[WiFi] lost — retrying in background; boat unaffected");
+    }
+    static uint32_t lastAttemptMs = 0;
+    if (millis() - lastAttemptMs >= 30000 && lastSsid.length() > 0) {
+        lastAttemptMs = millis();
+        WiFi.begin(lastSsid.c_str(), lastPass.c_str());
+    }
+}
 
 // ── HTTP handlers ──────────────────────────────────────────────────────────
 static void addCORS() {
@@ -1828,12 +1861,7 @@ void loop() {
     updatePosition();
     server.handleClient();
 
-    static unsigned long lastWifiCheck = 0;
-    if (WiFi.status() != WL_CONNECTED && millis() - lastWifiCheck > 30000) {
-        lastWifiCheck = millis();
-        Serial.println("[WiFi] disconnected — re-scanning");
-        wifiConnect();
-    }
+    wifiMaintain();
 
     updateMode();
     updateWaypointGeometry();
