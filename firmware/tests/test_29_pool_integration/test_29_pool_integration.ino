@@ -496,7 +496,11 @@ static bool             audioOK = false;
 // ── IMU / heading hold state ────────────────────────────────────────────────
 static float    fusedHeading    = 0;
 static float    prevHeadingForD = 0;
-static uint32_t lastDtUs        = 0;
+// Turn rate (deg/s) measured once per IMU update so the dt always matches
+// the heading-update cadence. Sampling this in headingHoldUs() at loop
+// rate (~1-5 ms) produced spiky garbage: dH was 0 on most loops, then a
+// full 20 ms heading step divided by a 2 ms loop dt — ~10x inflated.
+static float    headingRateDps  = 0.0f;
 static unsigned long lastImuUs  = 0;
 static bool     headingInit     = false;
 
@@ -808,23 +812,20 @@ static void updateImu() {
         fusedHeading = gyroH + (1.0f - ALPHA) * diff;
         if (fusedHeading <   0.0f) fusedHeading += 360.0f;
         if (fusedHeading >= 360.0f) fusedHeading -= 360.0f;
+        if (dt > 0.0f) {
+            headingRateDps = shortestPathError(fusedHeading, prevHeadingForD) / dt;
+        }
+        prevHeadingForD = fusedHeading;
     }
 }
 
 // Heading-hold output. Uses livePidKp / livePidKd so /pid edits take
-// effect immediately — no reflash.
+// effect immediately — no reflash. D-term uses headingRateDps, which is
+// computed in updateImu() at the IMU cadence (see note at its decl).
 static uint16_t headingHoldUs(float target) {
     if (!headingInit) return NEUTRAL_US;
-    float err = shortestPathError(target, fusedHeading);
-    uint32_t nowUs = micros();
-    float dt = (lastDtUs == 0) ? 0.0f : (nowUs - lastDtUs) * 1e-6f;
-    lastDtUs = nowUs;
-    float dErr = 0.0f;
-    if (dt > 0.0f && dt < 0.5f) {
-        float dH = shortestPathError(fusedHeading, prevHeadingForD);
-        dErr = -dH / dt;
-    }
-    prevHeadingForD = fusedHeading;
+    float err  = shortestPathError(target, fusedHeading);
+    float dErr = -headingRateDps;
     int v = (int)(NEUTRAL_US + livePidKp * err + livePidKd * dErr);
     if (v < RUDDER_MIN_US) v = RUDDER_MIN_US;
     if (v > RUDDER_MAX_US) v = RUDDER_MAX_US;
