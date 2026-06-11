@@ -21,7 +21,7 @@
  *   - AUTO no longer requires cruise above any floor. Cruise=1500 (neutral)
  *     is now valid, so the static-heading-hold scenario in AUTOPILOT_PLAN
  *     test_32 step 2 ("AUTO at cruise=neutral, rudder tracks waypoint")
- *     just works. Cap stays at 1750 µs to prevent runaway.
+ *     just works. Cap is AUTO_CRUISE_CAP_US (see SAFETY below).
  *   - AUTO without a waypoint = neutral. Removes test_27's "hold heading
  *     at entry" placeholder; from here, AUTO means "drive to a waypoint."
  *   - Telemetry adds: gps_fix, lat, lon, sats, speed_kts,
@@ -55,8 +55,11 @@
  *   - Props on, rudder linkage free, hatch sealed.
  *
  * SAFETY:
- *   AUTO cruise cap 1700 µs. Hard ESC clamp at MAX_FWD_US=1710 in
- *   setEscs() (~42% of full forward — trimmed after 2026-05-29 pool run).
+ *   AUTO cruise cap = AUTO_CRUISE_CAP_US = 1800 µs, equal to the hard ESC
+ *   clamp MAX_FWD_US = 1800 in setEscs(). The earlier 1700/1710 trim was
+ *   removed 2026-06-05 ("uncap") after the harbor run showed no forward
+ *   motion at the trimmed level — AUTO may now command full trimmed
+ *   forward. Operator controls actual speed via /cruise.
  *   ESC outputs are inverted via ESC_DIRECTION_INVERTED at the PCA
  *   write boundary so MAX_FWD_US still means "forward fast" upstream.
  *   Captured boat freezes at neutral until operator intervenes.
@@ -1286,8 +1289,11 @@ static void handleCruise() {
     if (req.containsKey("us")) {
         int us = req["us"].as<int>();
         if (us < NEUTRAL_US || us > MAX_FWD_US) {
-            server.send(400, "application/json",
-                "{\"ok\":false,\"err\":\"us out of [1500..1710]\"}");
+            char err[80];
+            snprintf(err, sizeof(err),
+                "{\"ok\":false,\"err\":\"us out of [%u..%u]\"}",
+                NEUTRAL_US, MAX_FWD_US);
+            server.send(400, "application/json", err);
             return;
         }
         newUs = (uint16_t)us;
