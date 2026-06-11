@@ -1129,13 +1129,13 @@ static void handleOptions() { addCORS(); server.send(204); }
 static void handleStatus() {
     addCORS();
     server.send(200, "application/json",
-        "{\"ok\":true,\"v\":\"test_29-pool2.4-uncap\",\"ip\":\"" + boatIP + "\"}");
+        "{\"ok\":true,\"v\":\"test_29-pool2.5\",\"ip\":\"" + boatIP + "\"}");
 }
 
 static void handleTelemetry() {
     addCORS();
     StaticJsonDocument<1280> doc;
-    doc["v"]            = "test_29-pool2.4-uncap";
+    doc["v"]            = "test_29-pool2.5";
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
@@ -1730,7 +1730,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println();
-    Serial.println("test_29_pool_integration v test_29-pool2.4-uncap");
+    Serial.println("test_29_pool_integration v test_29-pool2.5");
     sessionId = esp_random();   // app uses this to detect mid-flight reboots
 
     pinMode(PIN_NAV,    OUTPUT); digitalWrite(PIN_NAV,    LOW);

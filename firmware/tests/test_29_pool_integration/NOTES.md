@@ -12,8 +12,8 @@ Merges:
 - **test_27** Mode FSM, CH6 SwD failsafe guard with sticky ACK, /cruise,
   /telemetry, INA219 voltage telemetry.
 - **test_25** Single /waypoint + haversine bearing + heading-hold.
-- **NEW** Capture detection (sticky), live /pid tuning, /sim_gps for
-  bench dry-runs of the app.
+- **NEW** Capture detection (sticky), live /pid tuning. (/sim_gps
+  existed through pool2.4 but was removed 2026-06-10 — see below.)
 
 ## What's NEW vs everything before
 
@@ -23,29 +23,30 @@ Merges:
    - **DISTANCE:** `wp_dist < 3 m` (the existing trigger).
    - **CROSSING:** boat passes the perpendicular line through the
      waypoint, perpendicular to the leg from start→waypoint. Start
-     point = boat position on the first GPS fix after `/waypoint` was
-     POSTed. Stops the boat circling forever when GPS noise (~2-3 m)
-     is close to the capture radius (3 m). Whichever fires first wins.
+     point = boat position on the first GPS fix after AUTO engage
+     (changed 2026-06-10; was first fix after `/waypoint` POST).
+     Stops the boat circling forever when GPS noise (~2-3 m) is
+     close to the capture radius (3 m). Whichever fires first wins.
+   Capture detection only arms while in AUTO (changed 2026-06-10) —
+   driving past the waypoint manually can no longer mark the leg done.
    ESCs + rudder forced neutral on capture. Serial logs which trigger
    fired (`captured by DISTANCE` vs `captured by CROSSING`).
 3. **POST /pid {kp, kd}** — live heading-hold tuning during the run.
    Defaults Kp=3.0, Kd=8.0 (test_27/test_28 baseline). Ki=0 — pool
    tuning is P+D only.
-4. **POST /sim_gps {lat, lon}** — bench-debug position injection.
-   Sticky for the session. Don't POST in water.
-5. **Cruise floor refusal removed** — cruise=NEUTRAL_US (1500) is now
+4. **Cruise floor refusal removed** — cruise=NEUTRAL_US (1500) is now
    valid. Static-heading-hold scenario from AUTOPILOT_PLAN test_32
    step 2 just works.
-6. **AUTO without a waypoint = neutral** — test_27's "AUTO holds
+5. **AUTO without a waypoint = neutral** — test_27's "AUTO holds
    heading at entry, runs cruise" placeholder is replaced. From here,
    AUTO means "drive to the active waypoint" or stay neutral.
-7. **MANUAL reverse** (CH2, ported from test_17). Throttle stick at
+6. **MANUAL reverse** (CH2, ported from test_17). Throttle stick at
    idle + right-stick V pulled down past the deadband → ESCs run
    reverse, capped at MIN_REV_US=1200 (~60% reverse). Forward throttle
    always wins — the interlock blocks reverse while the left stick is
    above THROTTLE_IDLE_MAX, so you can't slam forward→reverse instantly.
    AUTO mode never asks for reverse. Telemetry exposes `ch_reverse`.
-8. **POST /led + /audio** — HelmScreen light toggles (nav / bridge /
+7. **POST /led + /audio** — HelmScreen light toggles (nav / bridge /
    deck on GPIO 18 / 19 / 23) and the three sound buttons. Audio
    plays by **index** via `playFileNum()` (AT+PLAYNUM under the
    hood); path-based playback (`playSpecFile`/AT+PLAYFILE) is broken
@@ -115,9 +116,8 @@ Pump control loop runs every loop() iteration:
 | GET    | /status     |                                | `{ok, v, ip}` |
 | GET    | /telemetry  |                                | full JSON (see below) |
 | POST   | /cruise     | `{us:1660}` or `{pct:50}`      | sets AUTO cruise µs |
-| POST   | /waypoint   | `{lat, lon}` or `{lat:null,lon:null}` | arms / clears waypoint. On set: records `captured=false` and clears the leg-start latch; firmware re-records the leg-start position on the next valid GPS fix. |
+| POST   | /waypoint   | `{lat, lon}` or `{lat:null,lon:null}` | arms / clears waypoint. Rejects (400) waypoints >1000 m from the boat when a fix exists; otherwise auto-clears once the first fix shows the distance. On set: `captured=false`; leg-start is recorded on the first fix after AUTO engage. |
 | POST   | /pid        | `{kp, kd}` (either or both)    | live tuning |
-| POST   | /sim_gps    | `{lat, lon}`                   | bench-only position injection |
 | POST   | /led        | `{light:"nav"\|"bridge"\|"deck", state:bool}` | toggles nav (GPIO18) / bridge (GPIO19) / deck (GPIO23) |
 | POST   | /audio      | `{sound:"horn"\|"board"\|"gun"}` | horn → `playFileNum(1)`, gun → `playFileNum(2)`, board → `playFileNum(3)`. Index map depends on FAT write order — set by `audio-assets/dfplayer/load.sh`. 400 on unknown sound, 503 if DF1201S didn't ACK at boot. |
 | POST   | /bilge      | `{on:bool}` | manual pump override. `on:true` forces pump for up to 60 s (auto-clears); `on:false` releases. Auto-pump-on-leak continues to fire regardless. |
@@ -163,12 +163,11 @@ Pump control loop runs every loop() iteration:
   "batt_v":       "X.XX"   (if INA219 present, volts),
   "batt_a":       "X.XX"   (if INA219 present, amps),
   "gps_fix":      bool,
-  "gps_simulated":bool,
   "lat":          "X.XXXXXX" (if gps_fix),
   "lon":          "X.XXXXXX" (if gps_fix),
-  "sats":         int       (real GPS only),
-  "speed_kts":    "X.X"     (real GPS only),
-  "course":       "X.X"     (real GPS only),
+  "sats":         int,
+  "speed_kts":    "X.X"     (if GPS reports it),
+  "course":       "X.X"     (if GPS reports it),
   "wp_set":       bool,
   "captured":     bool,
   "wp_lat":       "X.XXXXXX" (if wp_set),
@@ -360,3 +359,64 @@ New surface:
 MC-7 and MC-8 are the gates test_22 documented but never formally
 completed. Don't skip them — these are the proof the cal procedure
 actually fixes the pool-#2 ~20° AUTO heading bias.
+
+## Autonomy-review fixes 2026-06-10 — `test_29-pool2.5` (UNTESTED)
+
+Code-review pass after the 2026-06-05 harbor run. Five firmware changes,
+one commit each:
+
+1. **WiFi reconnect is non-blocking.** The old loop-side reconnect ran a
+   blocking scan + up to 20 s of connect polling — during which iBUS,
+   the mode FSM, failsafe detection, and outputs were all frozen at
+   their last values. A WiFi drop mid-AUTO meant the boat kept driving
+   blind for ~25 s with both failsafes dead. Now: WiFi loss changes
+   nothing — AUTO runs on RC + GPS alone; `wifiMaintain()` re-issues a
+   non-blocking `WiFi.begin()` (boot-time credentials, no scan) at most
+   every 30 s. Blocking scan-first connect still used in `setup()` only.
+2. **`/sim_gps` removed** (firmware + app traces). It was sticky for the
+   session with no clear path and no interlock — one accidental POST in
+   water would freeze the boat's believed position, making both capture
+   triggers unable to ever fire while AUTO drove on a frozen bearing.
+   Bench dry-runs of the app now require real GPS.
+3. **Waypoint fat-finger guard** — `/waypoint` rejects targets >1000 m
+   from the boat (`MAX_WP_DIST_M`); if no fix exists at POST time, the
+   waypoint is auto-cleared at the first fix that shows it out of range.
+4. **Heading-hold D-term timing fix** — the damping term was sampled at
+   loop rate (~1-5 ms) against a heading that updates every 20 ms,
+   producing dErr spikes ~10× too large interleaved with zeros. The turn
+   rate (`headingRateDps`) is now computed once per IMU update. Expect
+   smoother rudder in AUTO; Kd may want re-tuning since its effective
+   authority changed.
+5. **Capture arms only in AUTO** — `captured` can no longer trip while
+   driving manually past the waypoint; leg-start (crossing-line anchor)
+   is recorded at AUTO engage, not at `/waypoint` POST.
+
+Also: stale SAFETY header / `/cruise` error text corrected to match the
+1800 µs uncap (no behavior change).
+
+### Heading reliability — analysis of 2026-06-05 harbor log
+
+`mission_logs/2026-06-05T15-26-05.csv` (595 rows): compass heading vs
+GPS course-over-ground while moving >0.8 kts (254 samples) shows
+median |error| ~36°, consistent +23° bias, stdev 39°. Live `mag_uT`
+swung 13.6–73.7 against a 27.7 baseline — the magnetic field at the
+sensor changes while driving (motor/ESC current), which static cal
+cannot fix. Conclusion: mag-only heading is not trustworthy under
+power. Future direction (deferred): blend GPS course into the heading
+estimate when speed is sufficient.
+
+AUTO during that log: ESCs held 1632 µs for all 58 AUTO seconds,
+speed 0–0.5 kts — confirms the "AUTO didn't move the boat" report;
+thrust at that level is insufficient in open water.
+
+### Bench-the-boat gates (before next water run)
+
+| Gate | What |
+|------|------|
+| AR-1 | Flash `test_29-pool2.5`. App Firmware row reads `test_29-pool2.5`. All prior behavior unchanged (manual drive, AUTO engage, bilge, depth, radar, audio smoke-test). |
+| AR-2 | WiFi drop: with RC live, kill the hotspot. RC control stays perfectly responsive (no freeze, no stutter). Restore hotspot — telemetry returns within ~30 s without reboot. |
+| AR-3 | `/sim_gps` returns 404. Telemetry has no `gps_simulated` field. |
+| AR-4 | `/waypoint` with a point >1000 m away returns 400 and `wp_set` stays false. |
+| AR-5 | Set a waypoint, drive past it MANUALLY — `captured` stays false. Flip AUTO near it — capture fires normally. |
+| AR-6 | (Water) AUTO rudder visibly smoother than pool2.4; re-tune Kd if needed. |
+| AR-7 | (Water, operator) TX failsafe live: kill TX mid-AUTO, boat stops within ~4 s. Verifies the RX actually signals loss (known failsafe value on CH6 per operator). Restore TX, SwA UP to ACK. |
