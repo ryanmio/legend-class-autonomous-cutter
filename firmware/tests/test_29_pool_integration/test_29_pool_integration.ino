@@ -274,6 +274,8 @@ static const int16_t  DFP_BOARD_INDEX = 5;   // BOARD.MP3 (index 4 = ._GUN.MP3)
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 static const float    CAPTURE_RADIUS_M = 3.0f;
+// Fat-finger guard: refuse waypoints farther than this from the boat.
+static const float    MAX_WP_DIST_M    = 1000.0f;
 
 // ── Hardware ───────────────────────────────────────────────────────────────
 static Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
@@ -972,6 +974,19 @@ static void updateWaypointGeometry() {
     wpDistM   = haversineDistM(boatLat, boatLon, wpLat, wpLon);
     wpBearing = haversineBearing(boatLat, boatLon, wpLat, wpLon);
 
+    // Backstop for the fat-finger guard: a waypoint accepted before the
+    // first GPS fix gets distance-checked here once position is known.
+    if (wpDistM > MAX_WP_DIST_M) {
+        Serial.printf("[WP] auto-cleared — %.0f m away (max %.0f)\n", wpDistM, MAX_WP_DIST_M);
+        wpSet      = false;
+        captured   = false;
+        capturedBy = CAPTURED_BY_NONE;
+        startValid = false;
+        wpDistM    = 0.0f;
+        wpBearing  = 0.0f;
+        return;
+    }
+
     // Record leg-start position on the first GPS fix after /waypoint.
     if (!startValid) {
         startLat   = boatLat;
@@ -1318,8 +1333,25 @@ static void handleWaypoint() {
         server.send(400, "text/plain", "Need lat and lon");
         return;
     }
-    wpLat      = req["lat"].as<float>();
-    wpLon      = req["lon"].as<float>();
+    float newLat = req["lat"].as<float>();
+    float newLon = req["lon"].as<float>();
+    // Fat-finger guard — only checkable when we know where the boat is.
+    // The no-fix case is backstopped in updateWaypointGeometry().
+    if (gpsValid) {
+        float d = haversineDistM(boatLat, boatLon, newLat, newLon);
+        if (d > MAX_WP_DIST_M) {
+            Serial.printf("[WP] REJECTED lat=%.6f lon=%.6f — %.0f m away (max %.0f)\n",
+                          newLat, newLon, d, MAX_WP_DIST_M);
+            char err[96];
+            snprintf(err, sizeof(err),
+                "{\"ok\":false,\"err\":\"waypoint %.0f m away (max %.0f m)\"}",
+                d, MAX_WP_DIST_M);
+            server.send(400, "application/json", err);
+            return;
+        }
+    }
+    wpLat      = newLat;
+    wpLon      = newLon;
     wpSet      = true;
     captured   = false;     // a new waypoint always reopens the run
     capturedBy = CAPTURED_BY_NONE;
