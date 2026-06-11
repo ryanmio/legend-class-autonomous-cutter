@@ -10,7 +10,7 @@
 //
 // Endpoint status as of test_29 (pool integration sketch):
 //   IMPLEMENTED in test_29: /status, /telemetry, /cruise, /waypoint,
-//                           /pid, /sim_gps, /led, /audio, /bilge,
+//                           /pid, /led, /audio, /bilge,
 //                           /radar, /depth
 
 import { HTTP_PORT } from '../constants';
@@ -63,12 +63,6 @@ export async function setWaypoint(ip: string, lat: number | null, lon: number | 
 // Live PID tuning. Either or both fields accepted; firmware ignores ki.
 export async function setPID(ip: string, params: PIDParams) {
   return post(ip, '/pid', params);
-}
-
-// Bench-debug only: inject a fake GPS position. Firmware sets
-// gps_simulated=true sticky for the session.
-export async function setSimGps(ip: string, lat: number, lon: number) {
-  return post(ip, '/sim_gps', { lat, lon });
 }
 
 // Toggle hull lights.

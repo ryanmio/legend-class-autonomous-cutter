@@ -52,7 +52,6 @@ export interface TelemetryData {
 
   // ── GPS / position ────────────────────────────────────────────
   gps_fix?: boolean;
-  gps_simulated?: boolean; // bench /sim_gps was used this session
   lat?: string;
   lon?: string;
   sats?: number;

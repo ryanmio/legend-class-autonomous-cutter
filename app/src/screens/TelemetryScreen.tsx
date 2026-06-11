@@ -146,7 +146,6 @@ export default function TelemetryScreen({ navigation }: Props) {
                 value={data.gps_fix ? '✓ LOCKED' : 'NO FIX'}
                 warn={data.gps_fix === false}
               />
-              {data.gps_simulated && <Row label="Simulated" value="⚠ /sim_gps active" warn />}
               {data.gps_fix && data.lat != null && <Row label="Position" value={`${data.lat}, ${data.lon}`} />}
               {data.sats      != null && <Row label="Sats"   value={`${data.sats}`} />}
               {data.speed_kts != null && <Row label="Speed"  value={`${data.speed_kts} kts`} />}

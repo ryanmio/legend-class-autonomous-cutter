@@ -8,8 +8,7 @@
  *   test_27  Mode FSM (MANUAL/AUTO/FAILSAFE), CH6 SwD failsafe guard with
  *            sticky ACK, /cruise, /telemetry, INA219 voltage telemetry.
  *   test_25  Single /waypoint + haversine bearing + heading-hold.
- *   NEW      Capture detection (sticky), live /pid tuning, /sim_gps for
- *            bench dry-runs of the app.
+ *   NEW      Capture detection (sticky), live /pid tuning.
  *
  * What's NEW vs test_27:
  *   - POST /waypoint {lat,lon} (and {lat:null,lon:null} to clear) — single
@@ -19,15 +18,13 @@
  *     waypoint. Equivalent to "mission complete" for a single-leg mission.
  *   - POST /pid {kp, kd} for live heading-hold tuning during the run. No
  *     Ki yet — we want to see how P+D behaves in water before adding I.
- *   - POST /sim_gps {lat,lon} as a bench-debug injection. Sticky for the
- *     session; lets the operator dry-run app↔firmware without GPS fix.
  *   - AUTO no longer requires cruise above any floor. Cruise=1500 (neutral)
  *     is now valid, so the static-heading-hold scenario in AUTOPILOT_PLAN
  *     test_32 step 2 ("AUTO at cruise=neutral, rudder tracks waypoint")
  *     just works. Cap stays at 1750 µs to prevent runaway.
  *   - AUTO without a waypoint = neutral. Removes test_27's "hold heading
  *     at entry" placeholder; from here, AUTO means "drive to a waypoint."
- *   - Telemetry adds: gps_fix, gps_simulated, lat, lon, sats, speed_kts,
+ *   - Telemetry adds: gps_fix, lat, lon, sats, speed_kts,
  *     course, wp_set, wp_lat, wp_lon, wp_dist_m, wp_bearing, captured,
  *     pid_kp, pid_kd.
  *
@@ -379,13 +376,9 @@ static const float METERS_PER_DEG_LAT = 111111.0f;
 static const float MIN_LEG_M2         = 1.0f;   // skip crossing check on legs < 1 m
 
 // ── Position state ──────────────────────────────────────────────────────────
-// gpsSimulated is sticky: once /sim_gps is POSTed in this session, real
-// GPS is ignored. Bench-debug only — operator should not POST /sim_gps
-// in water.
 static float   boatLat       = 0.0f;
 static float   boatLon       = 0.0f;
 static bool    gpsValid      = false;
-static bool    gpsSimulated  = false;
 
 // ── iBUS / RC state ─────────────────────────────────────────────────────────
 static uint8_t  ibusBuf[32], ibusIdx = 0;
@@ -934,7 +927,6 @@ static void pollBilge() {
 // ── Position update ────────────────────────────────────────────────────────
 static void updatePosition() {
     while (gpsSerial.available()) gps.encode(gpsSerial.read());
-    if (gpsSimulated) return;
     if (gps.location.isValid() && gps.location.age() < 5000) {
         boatLat  = (float)gps.location.lat();
         boatLon  = (float)gps.location.lng();
@@ -1175,17 +1167,13 @@ static void handleTelemetry() {
 
     // Position
     doc["gps_fix"]       = gpsValid;
-    doc["gps_simulated"] = gpsSimulated;
     if (gpsValid) {
         snprintf(buf, sizeof(buf), "%.6f", boatLat); doc["lat"] = buf;
         snprintf(buf, sizeof(buf), "%.6f", boatLon); doc["lon"] = buf;
     }
-    if (!gpsSimulated) {
-        // Real GPS metadata only meaningful when we're using real GPS.
-        doc["sats"]      = (int)gps.satellites.value();
-        if (gps.speed.isValid())  { snprintf(buf, sizeof(buf), "%.1f", gps.speed.knots());  doc["speed_kts"] = buf; }
-        if (gps.course.isValid()) { snprintf(buf, sizeof(buf), "%.1f", gps.course.deg());   doc["course"]    = buf; }
-    }
+    doc["sats"]      = (int)gps.satellites.value();
+    if (gps.speed.isValid())  { snprintf(buf, sizeof(buf), "%.1f", gps.speed.knots());  doc["speed_kts"] = buf; }
+    if (gps.course.isValid()) { snprintf(buf, sizeof(buf), "%.1f", gps.course.deg());   doc["course"]    = buf; }
 
     // Waypoint
     doc["wp_set"]      = wpSet;
@@ -1566,36 +1554,6 @@ static void handleBilge() {
     server.send(200, "application/json", out);
 }
 
-static void handleSimGps() {
-    addCORS();
-    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
-    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
-
-    StaticJsonDocument<128> req;
-    if (deserializeJson(req, server.arg("plain"))) {
-        server.send(400, "text/plain", "Bad JSON");
-        return;
-    }
-    if (!req.containsKey("lat") || !req.containsKey("lon")) {
-        server.send(400, "text/plain", "Need lat and lon");
-        return;
-    }
-    boatLat      = req["lat"].as<float>();
-    boatLon      = req["lon"].as<float>();
-    gpsValid     = true;
-    gpsSimulated = true;
-    Serial.printf("[SIM_GPS] lat=%.6f lon=%.6f\n", boatLat, boatLon);
-
-    StaticJsonDocument<128> resp;
-    resp["ok"]            = true;
-    resp["lat"]           = boatLat;
-    resp["lon"]           = boatLon;
-    resp["gps_simulated"] = gpsSimulated;
-    char out[128];
-    serializeJson(resp, out);
-    server.send(200, "application/json", out);
-}
-
 // ── Mode state machine (test_27 shape, no cruise floor refusal) ────────────
 static void updateMode() {
     Mode prev = mode;
@@ -1826,8 +1784,6 @@ void setup() {
     server.on("/waypoint",  HTTP_OPTIONS, handleOptions);
     server.on("/pid",       HTTP_POST,    handlePid);
     server.on("/pid",       HTTP_OPTIONS, handleOptions);
-    server.on("/sim_gps",   HTTP_POST,    handleSimGps);
-    server.on("/sim_gps",   HTTP_OPTIONS, handleOptions);
     server.on("/led",       HTTP_POST,    handleLed);
     server.on("/led",       HTTP_OPTIONS, handleOptions);
     server.on("/audio",     HTTP_POST,    handleAudio);
