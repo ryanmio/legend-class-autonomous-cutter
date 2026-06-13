@@ -25,22 +25,28 @@ export interface TelemetryData {
   esc_us?: number;
 
   // ── IMU ────────────────────────────────────────────────────────
-  heading?: string;
+  heading?: string;       // best TRUE heading (mag + declination + COG trim)
+  heading_mag?: string;   // raw fused magnetic heading, pre-correction
+  cog_trim?: string;      // GPS-COG residual trim currently applied, deg
   roll?: string;
   pitch?: string;
   accel_mag?: number;
 
   // ── Mag calibration / health (added test_29-pool2.1-magcal) ──
   mag_cal_state?: 'idle' | 'collecting' | 'done' | 'failed';
-  mag_cal_progress?: number;       // 0..100
+  mag_cal_progress?: number;       // 0..100, % of rotation sectors covered
+  mag_cal_mask?: number;           // 12-bit sector coverage bitmap (collecting only)
   mag_calibrated?: boolean;        // true if a real cal exists in NVS
   mag_from_nvs?: boolean;          // true if offsets came from NVS (not hardcoded fallback)
   mag_cal_ts?: number;             // uptime-seconds when cal was last saved
   mag_cal_fail?: string;           // present only when state=='failed'
+  mag_cal_quality?: 'unknown' | 'good' | 'fair' | 'poor';
+  mag_cal_radius_uT?: string;      // horizontal field-circle radius from the spin
+  mag_cal_circ_pct?: string;       // Y-vs-Z radius mismatch %, soft-iron indicator
   mag_off_x?: string;              // current applied offsets (post-cal or defaults)
   mag_off_y?: string;
   mag_off_z?: string;
-  mag_baseline_uT?: string;        // magnitude recorded at cal time; 0 = no cal
+  mag_baseline_uT?: string;        // expected level-water |B| post-cal; 0 = no cal
   mag_uT?: string;                 // live magnitude post-offset
 
   // ── Battery (INA219) ──────────────────────────────────────────

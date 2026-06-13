@@ -136,6 +136,9 @@ export default function TelemetryScreen({ navigation }: Props) {
               {data.rudder_us != null && <Row label="Rudder" value={`${data.rudder_us} µs`} />}
               {data.esc_us    != null && <Row label="ESC"    value={`${data.esc_us} µs`} />}
               {data.heading   != null && <Row label="Heading" value={`${data.heading}°`} />}
+              {data.cog_trim  != null && parseFloat(data.cog_trim) !== 0 && (
+                <Row label="COG trim" value={`${data.cog_trim}°`} />
+              )}
               {(data.mag_uT != null || data.mag_calibrated != null) && (
                 <Row label="Mag" value={magRowText(data)} warn={magRowWarn(data)} />
               )}

@@ -1,8 +1,9 @@
 // CalibrationScreen — drives the firmware's onboard mag calibration.
 // All math happens on the boat; this screen is a remote trigger +
-// status display. The operator rotates the whole boat through 360° on
-// a flat surface while the firmware collects samples and detects a
-// plateau, then writes hard-iron offsets to NVS.
+// status display. The operator rotates the whole boat through 360°
+// while the firmware bins the horizontal field vector into 12 sectors;
+// the cal finishes when every sector has been visited, so the progress
+// shown here is actual rotation coverage, not elapsed time.
 
 import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
@@ -15,19 +16,28 @@ import { postCalibrateMagStart, postCalibrateMagAbort } from '../services/esp32S
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Calibration'>;
 
+const SECTOR_COUNT = 12;
+// Mirrors firmware EXPECTED_HORIZ_FIELD_UT — local horizontal field, the
+// yardstick the boat grades its own cal against.
+const EXPECTED_RADIUS_UT = 20.5;
+
 export default function CalibrationScreen({ route, navigation }: Props) {
   const { ip } = route.params;
   const { data, connected } = useTelemetry();
   const [busy, setBusy] = useState(false);
 
   const state    = data?.mag_cal_state ?? 'idle';
-  const progress = data?.mag_cal_progress ?? 0;
+  const mask     = data?.mag_cal_mask ?? 0;
   const fail     = data?.mag_cal_fail;
+  const quality  = data?.mag_cal_quality ?? 'unknown';
+  const radius   = data?.mag_cal_radius_uT;
+  const circ     = data?.mag_cal_circ_pct;
   const offX     = data?.mag_off_x;
   const offY     = data?.mag_off_y;
   const offZ     = data?.mag_off_z;
   const baseline = data?.mag_baseline_uT;
   const liveMag  = data?.mag_uT;
+  const heading  = data?.heading;
   const calibrated = !!data?.mag_calibrated;
   const fromNVS    = !!data?.mag_from_nvs;
 
@@ -70,10 +80,9 @@ export default function CalibrationScreen({ route, navigation }: Props) {
           </View>
         )}
 
-        {/* Current cal status header */}
         <View style={styles.statusBlock}>
           <Text style={styles.statusLabel}>STATUS</Text>
-          <Text style={[styles.statusValue, { color: stateColor(state, calibrated) }]}>
+          <Text style={[styles.statusValue, { color: stateColor(state, calibrated, quality) }]}>
             {stateHeadline(state, calibrated, fromNVS)}
           </Text>
           {state === 'failed' && fail && (
@@ -81,31 +90,40 @@ export default function CalibrationScreen({ route, navigation }: Props) {
           )}
         </View>
 
-        {/* State-specific body */}
         {state === 'collecting' ? (
-          <CollectingBody progress={progress} liveMag={liveMag} onAbort={onAbort} busy={busy} />
+          <CollectingBody mask={mask} liveMag={liveMag} onAbort={onAbort} busy={busy} />
         ) : (
-          <IdleBody
-            state={state}
-            calibrated={calibrated}
-            offX={offX} offY={offY} offZ={offZ}
-            baseline={baseline} liveMag={liveMag}
-            onStart={onStart}
-            busy={busy}
-            disabled={!connected}
-          />
+          <>
+            {quality !== 'unknown' && (
+              <ResultsCard
+                quality={quality}
+                radius={radius}
+                circ={circ}
+                justFinished={state === 'done'}
+              />
+            )}
+            <IdleBody
+              state={state}
+              calibrated={calibrated}
+              offX={offX} offY={offY} offZ={offZ}
+              baseline={baseline} liveMag={liveMag} heading={heading}
+              onStart={onStart}
+              busy={busy}
+              disabled={!connected}
+            />
+          </>
         )}
 
-        {/* Instructions footer (only when not actively collecting) */}
         {state !== 'collecting' && (
           <View style={styles.instructionsBox}>
             <Text style={styles.instructionsTitle}>HOW TO CALIBRATE</Text>
             <Text style={styles.instructionsBody}>
-              1. Place the boat on a flat surface, away from large metal{'\n'}
-              2. Tap START{'\n'}
-              3. Rotate the boat slowly through 2–3 full 360° turns over ~30 s{'\n'}
-              4. Wait — firmware auto-finishes when ranges plateau{'\n'}
-              5. New offsets save to the boat's flash, survive reboot
+              1. Calibrate in the water if possible — motors and hull where they'll be{'\n'}
+              2. Keep clear of rebar, pumps, fences, and large metal{'\n'}
+              3. Tap START, then turn the boat slowly through a full circle{'\n'}
+              4. The ring fills as directions are covered — it finishes itself at 12/12{'\n'}
+              5. Check the verdict: GOOD means the field circle matches this area's{'\n'}
+              {'   '}expected ~{EXPECTED_RADIUS_UT} µT. POOR means re-run somewhere cleaner.
             </Text>
           </View>
         )}
@@ -116,50 +134,46 @@ export default function CalibrationScreen({ route, navigation }: Props) {
 
 // ── State-driven sub-components ───────────────────────────────────────────────
 
-function IdleBody({
-  state, calibrated, offX, offY, offZ, baseline, liveMag,
-  onStart, busy, disabled,
-}: {
-  state: string;
-  calibrated: boolean;
-  offX?: string; offY?: string; offZ?: string;
-  baseline?: string; liveMag?: string;
-  onStart: () => void;
-  busy: boolean;
-  disabled: boolean;
-}) {
-  const buttonLabel =
-    state === 'done'   ? '▶ RECALIBRATE'
-    : state === 'failed' ? '▶ RETRY'
-    : calibrated         ? '▶ RECALIBRATE'
-                         : '▶ START CALIBRATION';
-
+// 12 dots on a ring, lit as the firmware's sector bitmap fills in. The
+// dots are field-vector sectors, not compass directions — what matters
+// is that all of them light up, in any order.
+function CoverageRing({ mask }: { mask: number }) {
+  const SIZE = 180;
+  const R = 74;
+  const covered = countBits(mask);
+  const dots = [];
+  for (let i = 0; i < SECTOR_COUNT; i++) {
+    const lit = (mask & (1 << i)) !== 0;
+    const a = (i / SECTOR_COUNT) * 2 * Math.PI - Math.PI / 2;
+    dots.push(
+      <View
+        key={i}
+        style={[
+          styles.coverageDot,
+          {
+            left: SIZE / 2 + R * Math.cos(a) - 9,
+            top:  SIZE / 2 + R * Math.sin(a) - 9,
+            backgroundColor: lit ? Colors.accent : Colors.surfaceLight,
+          },
+        ]}
+      />
+    );
+  }
   return (
-    <>
-      <View style={styles.valuesBlock}>
-        <ValueRow label="Offset X" value={offX != null ? `${offX} µT` : '--'} />
-        <ValueRow label="Offset Y" value={offY != null ? `${offY} µT` : '--'} />
-        <ValueRow label="Offset Z" value={offZ != null ? `${offZ} µT` : '--'} />
-        <ValueRow label="Baseline" value={baseline != null && parseFloat(baseline) > 0 ? `${baseline} µT` : 'not calibrated'} />
-        <ValueRow label="Live |B|" value={liveMag != null ? `${liveMag} µT` : '--'} />
+    <View style={{ width: SIZE, height: SIZE, marginTop: 14 }}>
+      {dots}
+      <View style={styles.coverageCenter}>
+        <Text style={styles.coverageCount}>{covered}/{SECTOR_COUNT}</Text>
+        <Text style={styles.coverageCaption}>directions</Text>
       </View>
-
-      <TouchableOpacity
-        style={[styles.primaryBtn, (busy || disabled) && styles.primaryBtnDisabled]}
-        onPress={onStart}
-        disabled={busy || disabled}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.primaryBtnText}>{buttonLabel}</Text>
-      </TouchableOpacity>
-    </>
+    </View>
   );
 }
 
 function CollectingBody({
-  progress, liveMag, onAbort, busy,
+  mask, liveMag, onAbort, busy,
 }: {
-  progress: number;
+  mask: number;
   liveMag?: string;
   onAbort: () => void;
   busy: boolean;
@@ -169,14 +183,10 @@ function CollectingBody({
       <View style={styles.collectingBlock}>
         <Text style={styles.collectingTitle}>ROTATE THE BOAT</Text>
         <Text style={styles.collectingSub}>
-          Spin slowly through 2–3 full 360° turns on a flat surface.
+          Turn slowly through a full circle. Dots light up as each direction
+          is covered — if the ring stalls, keep turning. Finishes itself at 12/12.
         </Text>
-
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${Math.min(100, progress)}%` }]} />
-        </View>
-        <Text style={styles.progressText}>{progress}%</Text>
-
+        <CoverageRing mask={mask} />
         {liveMag != null && (
           <Text style={styles.liveMag}>live |B| = {liveMag} µT</Text>
         )}
@@ -194,6 +204,93 @@ function CollectingBody({
   );
 }
 
+// Post-cal verdict: the boat grades its own spin against the local field.
+function ResultsCard({
+  quality, radius, circ, justFinished,
+}: {
+  quality: 'good' | 'fair' | 'poor';
+  radius?: string;
+  circ?: string;
+  justFinished: boolean;
+}) {
+  const color =
+    quality === 'good' ? Colors.success
+    : quality === 'fair' ? Colors.warning
+    : Colors.danger;
+
+  return (
+    <View style={[styles.resultsCard, { borderColor: color }]}>
+      <View style={styles.resultsHeader}>
+        <Text style={[styles.resultsVerdict, { color }]}>{quality.toUpperCase()}</Text>
+        <Text style={styles.resultsHeaderLabel}>
+          {justFinished ? 'NEW CALIBRATION' : 'LAST CALIBRATION'}
+        </Text>
+      </View>
+      {radius != null && (
+        <ValueRow
+          label="Field radius"
+          value={`${radius} µT (expect ~${EXPECTED_RADIUS_UT})`}
+        />
+      )}
+      {circ != null && (
+        <ValueRow label="Lopsidedness" value={`${circ}% (soft iron)`} />
+      )}
+      <Text style={styles.resultsBlurb}>{qualityBlurb(quality)}</Text>
+      {quality !== 'poor' && (
+        <Text style={styles.verifyHint}>
+          VERIFY: point the bow at a known direction and compare HEADING below
+          with a compass app set to TRUE north (±10° is healthy).
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function IdleBody({
+  state, calibrated, offX, offY, offZ, baseline, liveMag, heading,
+  onStart, busy, disabled,
+}: {
+  state: string;
+  calibrated: boolean;
+  offX?: string; offY?: string; offZ?: string;
+  baseline?: string; liveMag?: string; heading?: string;
+  onStart: () => void;
+  busy: boolean;
+  disabled: boolean;
+}) {
+  const buttonLabel =
+    state === 'done'   ? '▶ RECALIBRATE'
+    : state === 'failed' ? '▶ RETRY'
+    : calibrated         ? '▶ RECALIBRATE'
+                         : '▶ START CALIBRATION';
+
+  return (
+    <>
+      <View style={styles.valuesBlock}>
+        <ValueRow label="Heading (true)" value={heading != null ? `${heading}°` : '--'} />
+        <ValueRow label="Live |B|" value={liveMag != null ? `${liveMag} µT` : '--'} />
+        <ValueRow
+          label="Expected |B|"
+          value={baseline != null && parseFloat(baseline) > 0 ? `${baseline} µT` : 'not calibrated'}
+        />
+        <ValueRow
+          label="Offsets"
+          value={offX != null ? `${offX} / ${offY} / ${offZ}` : '--'}
+        />
+      </View>
+
+      <TouchableOpacity
+        style={[styles.primaryBtn, (busy || disabled) && styles.primaryBtnDisabled]}
+        onPress={onStart}
+        disabled={busy || disabled}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.primaryBtnText}>{buttonLabel}</Text>
+      </TouchableOpacity>
+    </>
+  );
+}
+
 function ValueRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.row}>
@@ -205,10 +302,30 @@ function ValueRow({ label, value }: { label: string; value: string }) {
 
 // ── Display helpers ──────────────────────────────────────────────────────────
 
-function stateColor(state: string, calibrated: boolean): string {
+function countBits(mask: number): number {
+  let n = 0;
+  for (let i = 0; i < SECTOR_COUNT; i++) if (mask & (1 << i)) n++;
+  return n;
+}
+
+function qualityBlurb(quality: 'good' | 'fair' | 'poor'): string {
+  switch (quality) {
+    case 'good':
+      return 'Field circle matches the local earth field — heading should be trustworthy.';
+    case 'fair':
+      return 'Usable, but the field circle is off from what this area should read. '
+           + 'Worth re-running farther from metal if heading still looks wrong.';
+    case 'poor':
+      return 'Offsets were saved, but the field circle is the wrong size or badly '
+           + 'lopsided — something magnetic is distorting the sensor. Re-run the '
+           + 'cal in open water away from structures before trusting AUTO.';
+  }
+}
+
+function stateColor(state: string, calibrated: boolean, quality: string): string {
   switch (state) {
     case 'collecting': return Colors.accent;
-    case 'done':       return Colors.success;
+    case 'done':       return quality === 'poor' ? Colors.warning : Colors.success;
     case 'failed':     return Colors.danger;
     case 'idle':
     default:
@@ -218,7 +335,7 @@ function stateColor(state: string, calibrated: boolean): string {
 
 function stateHeadline(state: string, calibrated: boolean, fromNVS: boolean): string {
   switch (state) {
-    case 'collecting': return 'COLLECTING SAMPLES';
+    case 'collecting': return 'MEASURING ROTATION';
     case 'done':       return 'CALIBRATION COMPLETE';
     case 'failed':     return 'CALIBRATION FAILED';
     case 'idle':
@@ -246,6 +363,13 @@ const styles = StyleSheet.create({
   statusValue:   { fontSize: 22, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1, marginTop: 4 },
   failReason:    { color: Colors.danger, fontSize: 11, fontFamily: 'monospace', marginTop: 6 },
 
+  resultsCard:        { backgroundColor: Colors.surface, borderRadius: 4, borderWidth: 1, padding: 14, marginBottom: 12 },
+  resultsHeader:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  resultsVerdict:     { fontSize: 24, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
+  resultsHeaderLabel: { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', letterSpacing: 2, fontWeight: '700' },
+  resultsBlurb:       { color: Colors.textPrimary, fontSize: 12, fontFamily: 'monospace', lineHeight: 17, marginTop: 8 },
+  verifyHint:         { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', lineHeight: 16, marginTop: 8 },
+
   valuesBlock:   { backgroundColor: Colors.surface, borderRadius: 4, padding: 14, marginBottom: 16 },
   row:           { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
   rowLabel:      { color: Colors.textSecondary, fontSize: 13, fontFamily: 'monospace' },
@@ -254,10 +378,11 @@ const styles = StyleSheet.create({
   collectingBlock: { backgroundColor: Colors.surface, borderRadius: 4, padding: 18, marginBottom: 16, alignItems: 'center' },
   collectingTitle: { color: Colors.accent, fontSize: 16, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 3 },
   collectingSub:   { color: Colors.textSecondary, fontSize: 12, fontFamily: 'monospace', textAlign: 'center', marginTop: 6, paddingHorizontal: 12 },
-  progressTrack:   { width: '100%', height: 14, backgroundColor: Colors.surfaceLight, borderRadius: 7, marginTop: 18, overflow: 'hidden' },
-  progressFill:    { height: '100%', backgroundColor: Colors.accent },
-  progressText:    { color: Colors.textPrimary, fontSize: 28, fontFamily: 'monospace', fontWeight: '800', marginTop: 8 },
-  liveMag:         { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', marginTop: 4 },
+  coverageDot:     { position: 'absolute', width: 18, height: 18, borderRadius: 9 },
+  coverageCenter:  { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
+  coverageCount:   { color: Colors.textPrimary, fontSize: 30, fontFamily: 'monospace', fontWeight: '800' },
+  coverageCaption: { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', letterSpacing: 2 },
+  liveMag:         { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', marginTop: 12 },
 
   primaryBtn:        { backgroundColor: Colors.accent, padding: 16, borderRadius: 4, alignItems: 'center' },
   primaryBtnDisabled:{ opacity: 0.4 },
