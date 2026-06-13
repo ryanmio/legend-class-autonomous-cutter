@@ -148,6 +148,21 @@ static const float    DEFAULT_MAG_OFFSET_Y =  -0.45f;
 static const float    DEFAULT_MAG_OFFSET_Z = -17.70f;
 static const float    ALPHA = 0.98f;
 
+// Local geomagnetic facts (WMM, Chesapeake Bay area). Horizontal field
+// strength is the cal-quality yardstick; declination converts the mag
+// heading to true so it matches GPS bearings.
+static const float    MAG_DECLINATION_DEG     = -11.0f;  // 11° W: true = magnetic − 11°
+static const float    EXPECTED_HORIZ_FIELD_UT = 20.5f;
+
+// GPS course-over-ground heading trim. While driving straight and
+// forward fast enough for COG to be meaningful, a slow servo loop
+// absorbs whatever heading error remains after cal + declination.
+static const float    COG_TRIM_MIN_KTS      = 1.0f;
+static const float    COG_TRIM_MAX_TURN_DPS = 10.0f;
+static const float    COG_TRIM_GAIN         = 0.05f;   // per 1 Hz update ≈ 20 s time constant
+static const float    COG_TRIM_CLAMP_DEG    = 30.0f;
+static const uint32_t COG_TRIM_INTERVAL_MS  = 1000;
+
 // ── INA219 ──────────────────────────────────────────────────────────────────
 static const uint8_t INA219_ADDR = 0x41;
 
@@ -311,7 +326,7 @@ static float   livePidKd = DEFAULT_KD;
 // Loaded from NVS namespace "imu_cal" at boot. If NVS is empty, falls back
 // to DEFAULT_MAG_OFFSET_{X,Y,Z} so this firmware behaves identically to
 // pre-cal-feature firmware on first flash. /calibrate_mag/start triggers an
-// onboard plateau-detect cal procedure that overwrites these and saves.
+// onboard rotation-coverage cal that overwrites these and saves.
 enum MagCalState { MAG_CAL_IDLE, MAG_CAL_COLLECTING, MAG_CAL_DONE, MAG_CAL_FAILED };
 static MagCalState magCalState = MAG_CAL_IDLE;
 static const char* magCalStateName(MagCalState s) {
@@ -331,20 +346,38 @@ static bool     magFromNVS = false;     // true if we loaded a real cal at boot
 static float    calMinX, calMinY, calMinZ, calMaxX, calMaxY, calMaxZ;
 static int      calSampleCnt = 0;
 static unsigned long calStartMs = 0;
-static const int CAL_HIST_LEN = 5;
-static float    calHistX[CAL_HIST_LEN] = {}, calHistY[CAL_HIST_LEN] = {};
-static int      calHistIdx = 0;
-static unsigned long calLastHistMs = 0;
+// Rotation coverage: the horizontal field vector (chip Y/Z plane — chip X
+// is vertical) is binned into 30° sectors around the running circle
+// center. The cal finishes when every sector has been visited, so
+// progress reflects actual rotation, not elapsed time.
+static uint16_t calSectorMask = 0;
+static float    calBinCenterY = 0.0f, calBinCenterZ = 0.0f;
+static bool     calHavePrev = false;
+static float    calPrevX = 0.0f, calPrevY = 0.0f, calPrevZ = 0.0f;
+static char     magCalFailBuf[96] = "";
 static const char* magCalFailReason = "";
+// Cal quality results (persisted to NVS alongside the offsets)
+static float    magCalRadiusUT = 0.0f;  // mean horizontal circle radius from the spin
+static float    magCalCircPct  = 0.0f;  // Y-vs-Z radius mismatch (soft-iron indicator)
+enum MagCalQuality { MAG_QUAL_UNKNOWN = 0, MAG_QUAL_GOOD, MAG_QUAL_FAIR, MAG_QUAL_POOR };
+static uint8_t  magCalQuality  = MAG_QUAL_UNKNOWN;
+static const char* magCalQualityName(uint8_t q) {
+    return q == MAG_QUAL_GOOD ? "good"
+         : q == MAG_QUAL_FAIR ? "fair"
+         : q == MAG_QUAL_POOR ? "poor" : "unknown";
+}
 // Cached live mag magnitude (post-offset) — emitted in /telemetry for the
 // app's drift health check.
 static float    liveMagUT = 0.0f;
 
-// Cal tuning — same heuristics as test_22.
-static const unsigned long MAG_CAL_MIN_MS     = 10000;
-static const unsigned long MAG_CAL_TIMEOUT_MS = 60000;
-static const float         MAG_CAL_MIN_RANGE  = 20.0f;
-static const float         MAG_CAL_PLATEAU_UT = 1.0f;
+// Cal tuning. Coverage and range gates run on chip Y and Z — the
+// horizontal pair. Chip X (vertical) is excluded by design.
+static const unsigned long MAG_CAL_MIN_MS          = 10000;
+static const unsigned long MAG_CAL_TIMEOUT_MS      = 90000;
+static const float         MAG_CAL_MIN_RANGE       = 20.0f;  // µT, per horizontal axis
+static const int           MAG_CAL_SECTORS         = 12;
+static const float         MAG_CAL_SPIKE_UT        = 5.0f;   // per-axis sample-to-sample reject
+static const float         MAG_CAL_CENTER_SHIFT_UT = 3.0f;   // re-bin coverage if center drifts
 
 static Preferences         magPrefs;
 
@@ -507,6 +540,11 @@ static float    prevHeadingForD = 0;
 static float    headingRateDps  = 0.0f;
 static unsigned long lastImuUs  = 0;
 static bool     headingInit     = false;
+// GPS-COG heading trim: residual correction learned while underway.
+// Volatile by design — resets each boot and after recal; declination
+// covers the bulk, this absorbs what's left of the cal error.
+static float    cogTrimDeg      = 0.0f;
+static uint32_t lastCogTrimMs   = 0;
 
 // ── INA219 cache ────────────────────────────────────────────────────────────
 static float    busVoltage = 0.0f;
@@ -670,6 +708,9 @@ static void magCalLoadFromNVS() {
         magOffZ       = magPrefs.getFloat("off_z", DEFAULT_MAG_OFFSET_Z);
         magBaselineUT = magPrefs.getFloat("base_uT", 0.0f);
         magCalTs      = magPrefs.getUInt ("cal_ts", 0);
+        magCalRadiusUT = magPrefs.getFloat("rad_uT", 0.0f);
+        magCalCircPct  = magPrefs.getFloat("circ_pct", 0.0f);
+        magCalQuality  = (uint8_t)magPrefs.getUChar("quality", MAG_QUAL_UNKNOWN);
         magFromNVS = true;
     }
     magPrefs.end();
@@ -685,6 +726,9 @@ static void magCalSaveToNVS() {
     magPrefs.putFloat("off_z",   magOffZ);
     magPrefs.putFloat("base_uT", magBaselineUT);
     magPrefs.putUInt ("cal_ts",  magCalTs);
+    magPrefs.putFloat("rad_uT",   magCalRadiusUT);
+    magPrefs.putFloat("circ_pct", magCalCircPct);
+    magPrefs.putUChar("quality",  magCalQuality);
     magPrefs.end();
     magFromNVS = true;
     Serial.printf("[mag-cal] saved: off=(%.2f, %.2f, %.2f) base=%.2f uT\n",
@@ -695,24 +739,43 @@ static void magCalBegin() {
     calMinX =  1e9f; calMinY =  1e9f; calMinZ =  1e9f;
     calMaxX = -1e9f; calMaxY = -1e9f; calMaxZ = -1e9f;
     calSampleCnt = 0;
-    calHistIdx = 0;
-    calLastHistMs = 0;
-    for (int i = 0; i < CAL_HIST_LEN; i++) { calHistX[i] = 0; calHistY[i] = 0; }
+    calSectorMask = 0;
+    calBinCenterY = 0.0f; calBinCenterZ = 0.0f;
+    calHavePrev = false;
     calStartMs = millis();
     magCalFailReason = "";
     magCalState = MAG_CAL_COLLECTING;
-    Serial.println("[mag-cal] START — spin boat through 360°");
+    Serial.println("[mag-cal] START — rotate boat through a full 360°");
 }
 
 static void magCalFinishSuccess() {
+    // Chip X is vertical: a flat spin can't separate its offset from
+    // earth's vertical field, so the X center absorbs both. Heading on
+    // level water only uses Y/Z; the X term matters only under tilt.
     magOffX = (calMinX + calMaxX) / 2.0f;
     magOffY = (calMinY + calMaxY) / 2.0f;
     magOffZ = (calMinZ + calMaxZ) / 2.0f;
-    magBaselineUT = liveMagUT;  // magnitude at the final orientation
+
+    float radY = (calMaxY - calMinY) * 0.5f;
+    float radZ = (calMaxZ - calMinZ) * 0.5f;
+    magCalRadiusUT = (radY + radZ) * 0.5f;
+    magCalCircPct  = (magCalRadiusUT > 0.1f)
+                   ? fabsf(radY - radZ) / magCalRadiusUT * 100.0f : 100.0f;
+    float radErr = fabsf(magCalRadiusUT - EXPECTED_HORIZ_FIELD_UT) / EXPECTED_HORIZ_FIELD_UT;
+    magCalQuality = (radErr < 0.30f && magCalCircPct < 20.0f) ? MAG_QUAL_GOOD
+                  : (radErr < 0.50f && magCalCircPct < 35.0f) ? MAG_QUAL_FAIR
+                                                              : MAG_QUAL_POOR;
+    // Level-water |B| should sit near the circle radius at every heading —
+    // that's the health yardstick the app and MC gates check against.
+    magBaselineUT = magCalRadiusUT;
     magCalTs = millis() / 1000;
     magCalSaveToNVS();
+    headingInit = false;   // re-seed the fused heading from the new offsets
+    cogTrimDeg  = 0.0f;    // learned residual belongs to the old mag frame
     magCalState = MAG_CAL_DONE;
-    Serial.printf("[mag-cal] DONE  samples=%d\n", calSampleCnt);
+    Serial.printf("[mag-cal] DONE  samples=%d  radius=%.1f µT (expect ~%.1f)  circ=%.0f%%  quality=%s\n",
+                  calSampleCnt, magCalRadiusUT, EXPECTED_HORIZ_FIELD_UT,
+                  magCalCircPct, magCalQualityName(magCalQuality));
 }
 
 static void magCalFinishFail(const char* why) {
@@ -721,53 +784,81 @@ static void magCalFinishFail(const char* why) {
     Serial.printf("[mag-cal] FAILED: %s\n", why);
 }
 
+static int magCalSectorCount() {
+    int n = 0;
+    for (int i = 0; i < MAG_CAL_SECTORS; i++)
+        if (calSectorMask & (1u << i)) n++;
+    return n;
+}
+
 // Called from updateImu() every IMU sample. Cheap when state==idle/done.
 static void magCalTick(float rawX, float rawY, float rawZ) {
     if (magCalState != MAG_CAL_COLLECTING) return;
+
+    // Spike filter: a slow spin moves the field well under 1 µT per 20 ms
+    // sample, so a bigger jump is interference, not rotation.
+    if (calHavePrev &&
+        (fabsf(rawX - calPrevX) > MAG_CAL_SPIKE_UT ||
+         fabsf(rawY - calPrevY) > MAG_CAL_SPIKE_UT ||
+         fabsf(rawZ - calPrevZ) > MAG_CAL_SPIKE_UT)) {
+        calPrevX = rawX; calPrevY = rawY; calPrevZ = rawZ;
+        return;
+    }
+    calPrevX = rawX; calPrevY = rawY; calPrevZ = rawZ;
+    calHavePrev = true;
 
     if (rawX < calMinX) calMinX = rawX;  if (rawX > calMaxX) calMaxX = rawX;
     if (rawY < calMinY) calMinY = rawY;  if (rawY > calMaxY) calMaxY = rawY;
     if (rawZ < calMinZ) calMinZ = rawZ;  if (rawZ > calMaxZ) calMaxZ = rawZ;
     calSampleCnt++;
 
-    unsigned long elapsed = millis() - calStartMs;
-    if (millis() - calLastHistMs >= 1000) {
-        calLastHistMs = millis();
-        calHistX[calHistIdx % CAL_HIST_LEN] = calMaxX - calMinX;
-        calHistY[calHistIdx % CAL_HIST_LEN] = calMaxY - calMinY;
-        calHistIdx++;
+    // Sector coverage on the horizontal (chip Y/Z) circle. Binning waits
+    // until both ranges are credible enough to estimate a center; if the
+    // center estimate later drifts, coverage restarts — another turn
+    // refills it in seconds.
+    float rangeY = calMaxY - calMinY, rangeZ = calMaxZ - calMinZ;
+    if (rangeY > MAG_CAL_MIN_RANGE * 0.5f && rangeZ > MAG_CAL_MIN_RANGE * 0.5f) {
+        float cy = (calMinY + calMaxY) * 0.5f;
+        float cz = (calMinZ + calMaxZ) * 0.5f;
+        if (fabsf(cy - calBinCenterY) > MAG_CAL_CENTER_SHIFT_UT ||
+            fabsf(cz - calBinCenterZ) > MAG_CAL_CENTER_SHIFT_UT) {
+            calSectorMask = 0;
+            calBinCenterY = cy;
+            calBinCenterZ = cz;
+        }
+        float ang = atan2f(rawZ - cz, rawY - cy);          // -π..π
+        int sector = (int)((ang + PI) / (2.0f * PI) * MAG_CAL_SECTORS);
+        if (sector < 0) sector = 0;
+        if (sector >= MAG_CAL_SECTORS) sector = MAG_CAL_SECTORS - 1;
+        calSectorMask |= (1u << sector);
     }
+
+    unsigned long elapsed = millis() - calStartMs;
     if (elapsed > MAG_CAL_TIMEOUT_MS) {
-        magCalFinishFail("timeout — spin incomplete or magnetic interference");
+        if (rangeY < MAG_CAL_MIN_RANGE || rangeZ < MAG_CAL_MIN_RANGE) {
+            snprintf(magCalFailBuf, sizeof(magCalFailBuf),
+                     "weak signal: horiz range %.0f/%.0f uT (expect ~%.0f) - move away from metal",
+                     rangeY, rangeZ, MAG_CAL_MIN_RANGE * 2.0f);
+        } else {
+            snprintf(magCalFailBuf, sizeof(magCalFailBuf),
+                     "incomplete rotation: %d/%d directions covered - keep turning the boat",
+                     magCalSectorCount(), MAG_CAL_SECTORS);
+        }
+        magCalFinishFail(magCalFailBuf);
         return;
     }
-    if (elapsed > MAG_CAL_MIN_MS && calHistIdx >= CAL_HIST_LEN) {
-        float loX = calHistX[0], hiX = calHistX[0];
-        float loY = calHistY[0], hiY = calHistY[0];
-        for (int i = 1; i < CAL_HIST_LEN; i++) {
-            if (calHistX[i] < loX) loX = calHistX[i];  if (calHistX[i] > hiX) hiX = calHistX[i];
-            if (calHistY[i] < loY) loY = calHistY[i];  if (calHistY[i] > hiY) hiY = calHistY[i];
-        }
-        float growthX = hiX - loX, growthY = hiY - loY;
-        float rangeX  = calMaxX - calMinX, rangeY = calMaxY - calMinY;
-        if (growthX < MAG_CAL_PLATEAU_UT && growthY < MAG_CAL_PLATEAU_UT
-            && rangeX > MAG_CAL_MIN_RANGE && rangeY > MAG_CAL_MIN_RANGE) {
-            magCalFinishSuccess();
-        }
+    if (elapsed > MAG_CAL_MIN_MS
+        && calSectorMask == (uint16_t)((1u << MAG_CAL_SECTORS) - 1)
+        && rangeY > MAG_CAL_MIN_RANGE && rangeZ > MAG_CAL_MIN_RANGE) {
+        magCalFinishSuccess();
     }
 }
 
-// Percent based on max range vs CAL_MIN_RANGE — saturates at 100% once
-// ranges are credible; plateau detection finishes the cal shortly after.
+// Percent of the 360° rotation actually covered — sectors visited / total.
 static int magCalProgressPct() {
     if (magCalState == MAG_CAL_DONE) return 100;
     if (magCalState != MAG_CAL_COLLECTING) return 0;
-    float rX = calMaxX - calMinX, rY = calMaxY - calMinY;
-    float best = rX > rY ? rX : rY;
-    int pct = (int)(best / MAG_CAL_MIN_RANGE * 100.0f);
-    if (pct < 0)   pct = 0;
-    if (pct > 100) pct = 100;
-    return pct;
+    return magCalSectorCount() * 100 / MAG_CAL_SECTORS;
 }
 
 // ── IMU + complementary filter ─────────────────────────────────────────────
@@ -823,12 +914,40 @@ static void updateImu() {
     }
 }
 
+// Best estimate of TRUE heading: fused mag/gyro heading + declination +
+// the GPS-COG residual trim. This is what navigation steers with and
+// what telemetry reports — waypoint bearings are true, so heading must be.
+static float navHeadingDeg() {
+    float h = fusedHeading + MAG_DECLINATION_DEG + cogTrimDeg;
+    while (h <    0.0f) h += 360.0f;
+    while (h >= 360.0f) h -= 360.0f;
+    return h;
+}
+
+// Learn the residual heading error from GPS course-over-ground, 1 Hz.
+// Gated to moments when COG actually means heading: fix valid, fast
+// enough, driving roughly straight, and under forward thrust (COG flips
+// 180° in reverse). At rest the trim just holds its last value.
+static void updateCogTrim() {
+    if (millis() - lastCogTrimMs < COG_TRIM_INTERVAL_MS) return;
+    lastCogTrimMs = millis();
+    if (!headingInit || !gpsValid) return;
+    if (!gps.speed.isValid() || !gps.course.isValid()) return;
+    if (gps.speed.knots() < COG_TRIM_MIN_KTS) return;
+    if (fabsf(headingRateDps) > COG_TRIM_MAX_TURN_DPS) return;
+    if (((outPort + outStbd) / 2) <= NEUTRAL_US + 25) return;
+    float err = shortestPathError((float)gps.course.deg(), navHeadingDeg());
+    cogTrimDeg += COG_TRIM_GAIN * err;
+    if (cogTrimDeg >  COG_TRIM_CLAMP_DEG) cogTrimDeg =  COG_TRIM_CLAMP_DEG;
+    if (cogTrimDeg < -COG_TRIM_CLAMP_DEG) cogTrimDeg = -COG_TRIM_CLAMP_DEG;
+}
+
 // Heading-hold output. Uses livePidKp / livePidKd so /pid edits take
 // effect immediately — no reflash. D-term uses headingRateDps, which is
 // computed in updateImu() at the IMU cadence (see note at its decl).
 static uint16_t headingHoldUs(float target) {
     if (!headingInit) return NEUTRAL_US;
-    float err  = shortestPathError(target, fusedHeading);
+    float err  = shortestPathError(target, navHeadingDeg());
     float dErr = -headingRateDps;
     int v = (int)(NEUTRAL_US + livePidKp * err + livePidKd * dErr);
     if (v < RUDDER_MIN_US) v = RUDDER_MIN_US;
@@ -1129,13 +1248,13 @@ static void handleOptions() { addCORS(); server.send(204); }
 static void handleStatus() {
     addCORS();
     server.send(200, "application/json",
-        "{\"ok\":true,\"v\":\"test_29-pool2.5\",\"ip\":\"" + boatIP + "\"}");
+        "{\"ok\":true,\"v\":\"test_29-pool2.6-magcal2\",\"ip\":\"" + boatIP + "\"}");
 }
 
 static void handleTelemetry() {
     addCORS();
-    StaticJsonDocument<1280> doc;
-    doc["v"]            = "test_29-pool2.5";
+    StaticJsonDocument<1536> doc;
+    doc["v"]            = "test_29-pool2.6-magcal2";
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
@@ -1184,7 +1303,11 @@ static void handleTelemetry() {
     }
 
     char buf[24];
-    snprintf(buf, sizeof(buf), "%.1f", fusedHeading); doc["heading"] = buf;
+    // `heading` is the boat's best TRUE heading (mag + declination + COG
+    // trim) — directly comparable to `course` and `wp_bearing`.
+    snprintf(buf, sizeof(buf), "%.1f", navHeadingDeg()); doc["heading"]     = buf;
+    snprintf(buf, sizeof(buf), "%.1f", fusedHeading);    doc["heading_mag"] = buf;
+    snprintf(buf, sizeof(buf), "%.1f", cogTrimDeg);      doc["cog_trim"]    = buf;
     if (ina219OK) {
         snprintf(buf, sizeof(buf), "%.2f", busVoltage);     doc["batt_v"] = buf;
         snprintf(buf, sizeof(buf), "%.2f", shuntMa / 1000.0f); doc["batt_a"] = buf;
@@ -1232,14 +1355,20 @@ static void handleTelemetry() {
     doc["mag_calibrated"]   = magCalibratedFlag();
     doc["mag_cal_ts"]       = magCalTs;
     doc["mag_from_nvs"]     = magFromNVS;
+    if (magCalState == MAG_CAL_COLLECTING) doc["mag_cal_mask"] = calSectorMask;
     if (magCalState == MAG_CAL_FAILED) doc["mag_cal_fail"] = magCalFailReason;
+    doc["mag_cal_quality"] = magCalQualityName(magCalQuality);
+    if (magCalQuality != MAG_QUAL_UNKNOWN) {
+        snprintf(buf, sizeof(buf), "%.1f", magCalRadiusUT); doc["mag_cal_radius_uT"] = buf;
+        snprintf(buf, sizeof(buf), "%.0f", magCalCircPct);  doc["mag_cal_circ_pct"]  = buf;
+    }
     snprintf(buf, sizeof(buf), "%.2f", magOffX);       doc["mag_off_x"]       = buf;
     snprintf(buf, sizeof(buf), "%.2f", magOffY);       doc["mag_off_y"]       = buf;
     snprintf(buf, sizeof(buf), "%.2f", magOffZ);       doc["mag_off_z"]       = buf;
     snprintf(buf, sizeof(buf), "%.2f", magBaselineUT); doc["mag_baseline_uT"] = buf;
     snprintf(buf, sizeof(buf), "%.2f", liveMagUT);     doc["mag_uT"]          = buf;
 
-    char out[1280];
+    char out[1536];
     serializeJson(doc, out);
     server.send(200, "application/json", out);
 }
@@ -1730,7 +1859,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println();
-    Serial.println("test_29_pool_integration v test_29-pool2.5");
+    Serial.println("test_29_pool_integration v test_29-pool2.6-magcal2");
     sessionId = esp_random();   // app uses this to detect mid-flight reboots
 
     pinMode(PIN_NAV,    OUTPUT); digitalWrite(PIN_NAV,    LOW);
@@ -1864,6 +1993,7 @@ void loop() {
     updateRadarBurst();
     pollDepth();
     updatePosition();
+    updateCogTrim();
     server.handleClient();
 
     wifiMaintain();

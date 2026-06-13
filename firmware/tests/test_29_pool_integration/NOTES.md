@@ -1,6 +1,6 @@
 # test_29_pool_integration — Notes
 
-## Status: POOL-VERIFIED 2026-05-30 (run #2, firmware `test_29-pool2`); mag-cal feature added on top in `test_29-pool2.1-magcal`, cal gates pending; lake test next
+## Status: POOL-VERIFIED 2026-05-30 (run #2, firmware `test_29-pool2`); cal procedure reworked + true-heading fixes in `test_29-pool2.6-magcal2` (UNTESTED, MC2 gates pending — recal required after flash); lake test next
 
 ## What this sketch is
 
@@ -396,6 +396,9 @@ Also: stale SAFETY header / `/cruise` error text corrected to match the
 
 ### Heading reliability — analysis of 2026-06-05 harbor log
 
+**(Conclusion superseded — see the 2026-06-12 corrected analysis below.
+The motor/ESC attribution was wrong.)**
+
 `mission_logs/2026-06-05T15-26-05.csv` (595 rows): compass heading vs
 GPS course-over-ground while moving >0.8 kts (254 samples) shows
 median |error| ~36°, consistent +23° bias, stdev 39°. Live `mag_uT`
@@ -420,3 +423,89 @@ thrust at that level is insufficient in open water.
 | AR-5 | Set a waypoint, drive past it MANUALLY — `captured` stays false. Flip AUTO near it — capture fires normally. |
 | AR-6 | (Water) AUTO rudder visibly smoother than pool2.4; re-tune Kd if needed. |
 | AR-7 | (Water, operator) TX failsafe live: kill TX mid-AUTO, boat stops within ~4 s. Verifies the RX actually signals loss (known failsafe value on CH6 per operator). Restore TX, SwA UP to ACK. |
+
+## Heading root cause — corrected analysis 2026-06-12
+
+Re-analysis of the same 2026-06-05 harbor log, fitting heading−course
+error against course (the classic compass deviation curve, 160 samples
+> 1 kt):
+
+- **One-cycle sinusoid, 42° amplitude** — textbook residual hard-iron.
+  Error runs +60° heading north → −35° heading west. That implies
+  ~14 µT of leftover horizontal offset against the local ~20.5 µT
+  horizontal field, i.e. the cal itself was bad.
+- **Constant term +13.9° ≈ local declination (~11° W)** — the firmware
+  never converted magnetic heading to true, but steers toward true GPS
+  bearings. That alone is most of pool run #2's "~20° leftward" bias.
+- **Motor/ESC effect is minor**: |Δmag| at 15 throttle transitions with
+  steady heading averaged 2.2 µT vs 1.9 µT steady-state control —
+  statistically indistinguishable, worth ≲6° worst-case. The earlier
+  conclusion ("field changes while driving, static cal can't fix")
+  mis-attributed an orientation-dependent swing to throttle. At rest
+  the heading was stable within ±5–9°.
+- **Why the cal was bad**: `magCalTick` gated plateau/min-range on chip
+  X and Y — but chip X is VERTICAL (mount: X=up, Y=port, Z=stern). The
+  procedure demanded ≥20 µT of range on an axis a flat spin can't move,
+  and never validated chip Z, one of the two axes heading actually
+  uses. The cal that "passed" likely involved hand-tilting, which
+  contaminates min/max centers with the ~46 µT vertical field.
+
+## `test_29-pool2.6-magcal2` 2026-06-12 — cal rework + true heading (UNTESTED)
+
+Firmware changes:
+
+1. **Cal coverage rework.** Min/max collection stays, but the finish
+   condition is now rotation coverage: the horizontal field vector
+   (chip Y/Z) is binned into 12 × 30° sectors around the running circle
+   center; the cal completes when all 12 are visited and both
+   horizontal ranges exceed 20 µT. Progress = sectors covered, so the
+   app shows actual rotation, not a countdown. Plateau detection and
+   the vertical-axis gate are gone. Extras: ±5 µT sample-to-sample
+   spike filter; coverage re-bins if the center estimate drifts > 3 µT;
+   timeout raised to 90 s with specific fail reasons ("weak signal" vs
+   "incomplete rotation: N/12").
+2. **Cal quality verdict.** On finish the boat grades its own spin:
+   field-circle radius vs the expected local horizontal field
+   (~20.5 µT) and Y-vs-Z radius mismatch (soft iron). good / fair /
+   poor, persisted to NVS, reported in telemetry
+   (`mag_cal_quality`, `mag_cal_radius_uT`, `mag_cal_circ_pct`).
+   `mag_baseline_uT` is now the circle radius — the level-water |B|
+   the live `mag_uT` should sit near at every heading, which makes the
+   app's existing |B|-deviation warning meaningful.
+3. **Declination.** `MAG_DECLINATION_DEG = -11.0` (Chesapeake). The
+   `heading` field and AUTO steering now use TRUE heading; raw magnetic
+   stays visible as `heading_mag`.
+4. **GPS-COG trim.** 1 Hz servo loop nudges a `cog_trim` correction
+   (±30° clamp, ~20 s time constant) toward GPS course when: fix valid,
+   speed ≥ 1 kt, |turn rate| < 10°/s, forward thrust. Absorbs whatever
+   cal residual remains. Resets on boot and on recal; at rest it just
+   holds. Telemetry: `cog_trim`.
+
+App changes (one commit): CalibrationScreen rebuilt — 12-dot coverage
+ring driven by `mag_cal_mask` (dots only light when the boat actually
+rotates), post-cal results card with quality verdict + plain-language
+interpretation + verify hint; TelemetryScreen shows COG trim when
+nonzero; types updated.
+
+**Flash note: the OLD (bad) cal is still in NVS and will load on first
+boot of pool2.6 with quality "unknown". Re-run the calibration before
+trusting heading.** Heading will also read ~11° lower than pool2.5 on
+the same boat orientation — that's the declination fix, not a
+regression.
+
+### Bench-the-boat gates (MC2-*, before next water run)
+
+| Gate | What |
+|------|------|
+| MC2-1 | Flash `test_29-pool2.6-magcal2`. App Firmware row reads it. Manual drive, AUTO engage, bilge, depth, radar, audio smoke-test all unchanged. |
+| MC2-2 | Start cal from the app, hold the boat STILL — coverage ring stays near 0/12 and does NOT advance (this is the anti-countdown proof). |
+| MC2-3 | Rotate the boat slowly through a full circle — ring fills, cal self-finishes at 12/12, verdict + radius appear. Radius within ~30% of 20.5 µT ⇒ GOOD. |
+| MC2-4 | Let it time out once (90 s, partial spin) — fail reason names the missing coverage ("N/12 directions"). |
+| MC2-5 | Reboot. Cal + quality reload from NVS (`mag_from_nvs=true`, same verdict). |
+| MC2-6 | After a GOOD cal: heading vs phone compass (set to TRUE north) at 4 cardinal bow orientations, ±10°. Boat still: two consecutive readings differ < 5°. |
+| MC2-7 | Boat at rest, blip throttle to ~1700 µs — heading moves < 5° (motor-field sanity; analysis says ~2 µT ⇒ ≲6°). |
+| MC2-8 | (Water) Straight leg > 30 s at > 1 kt: `cog_trim` converges and stays small (within ±10° after a GOOD cal); `heading` ≈ `course` while underway. |
+| MC2-9 | Abort during collecting → state idle, NVS untouched. |
+
+MC2-6 supersedes MC-7/MC-8. The MC-5 "`mag_baseline_uT > 20`" gate is
+obsolete — baseline is now the horizontal radius, expected ≈ 20.5.
