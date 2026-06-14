@@ -509,3 +509,25 @@ regression.
 
 MC2-6 supersedes MC-7/MC-8. The MC-5 "`mag_baseline_uT > 20`" gate is
 obsolete — baseline is now the horizontal radius, expected ≈ 20.5.
+
+### Telemetry buffer + nav-light WiFi signal (review fixes, UNTESTED)
+
+Two low-risk additions from the test_29 code review; neither changes how
+the boat drives.
+
+1. **Telemetry buffer.** The mag-cal/COG fields roughly doubled the
+   field count, leaving the 1536-byte payload buffer near its limit — a
+   maxed-out message could truncate into invalid JSON and blank the app
+   (the only water-side telemetry surface). Bumped the JSON document and
+   output buffer to 2048, and added a serial WARN that fires only if a
+   payload ever exceeds 1800 bytes (`measureJson`). Quiet in normal use;
+   gives a real number to drive future field-trimming.
+2. **Nav-light WiFi signal.** `blinkNav()` pulses the nav LED at boot so
+   WiFi state is readable across the pool: 1 flash when scanning starts,
+   2 flashes once connected. Setup-only, LED off afterward.
+
+| Gate | What |
+|------|------|
+| TB-1 | Flash, watch nav LED at boot: 1 blink as it starts scanning, 2 blinks when WiFi connects. LED off after. |
+| TB-2 | App telemetry still parses and updates normally (no blank/stale screen). Serial shows NO `[telemetry] WARN` line during a full run with a waypoint set + cal idle. |
+| TB-3 | (Optional) Trigger a cal while a waypoint is set, confirm app still updates — this is the heaviest payload case. |

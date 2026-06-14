@@ -1154,9 +1154,20 @@ static String lastSsid;
 static String lastPass;
 static bool   wifiWasConnected = false;
 
+// Boot-time nav-light signal so the operator can read WiFi state across
+// the pool: 1 flash when scanning starts, 2 flashes once connected.
+// Setup-only (boat neutral on the bench); leaves the LED off afterward.
+static void blinkNav(int times) {
+    for (int i = 0; i < times; i++) {
+        digitalWrite(PIN_NAV, HIGH); delay(120);
+        digitalWrite(PIN_NAV, LOW);  delay(120);
+    }
+}
+
 static void wifiConnect() {
     Serial.println();
     Serial.println("[WiFi] Scanning…");
+    blinkNav(1);
     WiFi.disconnect(true);
     delay(100);
     WiFi.mode(WIFI_STA);
@@ -1203,6 +1214,7 @@ static void wifiConnect() {
             boatIP = WiFi.localIP().toString();
             wifiWasConnected = true;
             Serial.printf(" OK %s\n", boatIP.c_str());
+            blinkNav(2);
             return;
         }
         delay(500);
@@ -1253,7 +1265,7 @@ static void handleStatus() {
 
 static void handleTelemetry() {
     addCORS();
-    StaticJsonDocument<1536> doc;
+    StaticJsonDocument<2048> doc;
     doc["v"]            = "test_29-pool2.6-magcal2";
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
@@ -1368,7 +1380,13 @@ static void handleTelemetry() {
     snprintf(buf, sizeof(buf), "%.2f", magBaselineUT); doc["mag_baseline_uT"] = buf;
     snprintf(buf, sizeof(buf), "%.2f", liveMagUT);     doc["mag_uT"]          = buf;
 
-    char out[1536];
+    // Warn (over serial, only when near the edge) if the payload ever
+    // grows close to the buffer — a truncated message is invalid JSON the
+    // app can't parse, which would blind the operator. Quiet in normal use.
+    size_t jsonLen = measureJson(doc);
+    if (jsonLen > 1800) Serial.printf("[telemetry] WARN json=%u bytes near 2048 buffer\n", (unsigned)jsonLen);
+
+    char out[2048];
     serializeJson(doc, out);
     server.send(200, "application/json", out);
 }
