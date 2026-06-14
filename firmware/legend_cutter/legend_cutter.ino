@@ -2,22 +2,23 @@
  * legend_cutter.ino
  * Legend Class Autonomous Cutter — ESP32 firmware
  *
- * Direct port of tests/test_29_pool_integration (water-tested). The mode
- * FSM (MANUAL/AUTO/FAILSAFE) and the loop wiring live here; everything
+ * Faithful port of tests/test_29_pool_integration (the PASS'd
+ * test_29-pool2.6-magcal2 build — first autonomous waypoint capture). The
+ * mode FSM (MANUAL/AUTO/FAILSAFE) and the loop wiring live here; everything
  * else is owned by a single-purpose module.
  *
  * Mode FSM:
- *   - MANUAL    : rudder + ESCs follow CH1/CH2/CH3.
- *   - AUTO      : if waypoint+GPS valid and not captured, hold heading on
- *                 the haversine bearing with differential thrust; else
- *                 outputs neutral.
- *   - FAILSAFE  : SwD (CH6) sustained > 1500 µs for 500 ms, OR no iBUS
- *                 frames for 3 s. Outputs neutral. Cleared by flipping
- *                 SwA (CH7) to MANUAL position after RC returns.
+ *   - MANUAL    : rudder + ESCs follow CH1/CH2/CH3 (diff-thrust mixing).
+ *   - AUTO      : if waypoint+GPS valid and not captured, hold the haversine
+ *                 bearing on TRUE heading with differential thrust; else
+ *                 outputs neutral. Cruise capped at AUTO_CRUISE_CAP_US.
+ *   - FAILSAFE  : SwD (CH6) sustained > 1500 µs for 500 ms, OR no iBUS frames
+ *                 for 3 s. Outputs neutral. Cleared by flipping SwA (CH7) to
+ *                 MANUAL after RC returns.
  *
- * Safety: AUTO cruise cap 1750 µs; ESC hard floor MIN_REV_US / cap MAX_FWD_US
- * in motors.cpp. Captured waypoint freezes at neutral until operator
- * POSTs a new waypoint.
+ * Safety: AUTO cruise cap = AUTO_CRUISE_CAP_US (1800 µs = MAX_FWD_US); ESC
+ * hard floor/cap in motors.cpp. Captured waypoint freezes at neutral until
+ * the operator POSTs a new waypoint.
  */
 
 #include <Wire.h>
@@ -49,11 +50,23 @@ const char* vesselModeName() {
     }
     return "?";
 }
+bool vesselFailsafeAck() { return failsafeAckRequired; }
 
 static bool swcInManual() { return ibusChannel(IBUS_IDX_MODE) < MODE_MAN_BELOW_US; }
 static bool swcInAuto()   { return ibusChannel(IBUS_IDX_MODE) > MODE_AUTO_ABOVE_US; }
 
+static const char* modeNameOf(VesselMode m) {
+    switch (m) {
+      case MODE_MANUAL:   return "MANUAL";
+      case MODE_AUTO:     return "AUTO";
+      case MODE_FAILSAFE: return "FAILSAFE";
+    }
+    return "?";
+}
+
 static void updateMode() {
+    VesselMode prev = mode;
+
     if (!ibusEverGood()) {
         mode = MODE_MANUAL;
         guardAboveSinceMs = 0;
@@ -98,6 +111,15 @@ static void updateMode() {
     // SwA hysteresis: deadband holds current mode.
     if      (swcInManual()) mode = MODE_MANUAL;
     else if (swcInAuto())   mode = MODE_AUTO;
+
+    if (mode == MODE_AUTO && prev != MODE_AUTO) {
+        // Re-record the leg start at engage position — the crossing line must
+        // be perpendicular to the path AUTO will actually drive.
+        navResetLegStart();
+    }
+    if (mode != prev) {
+        Serial.printf("[MODE] %s → %s\n", modeNameOf(prev), modeNameOf(mode));
+    }
 }
 
 static void applyOutputs() {
@@ -107,11 +129,16 @@ static void applyOutputs() {
         return;
     }
     switch (mode) {
-      case MODE_MANUAL:
-        setRudder(mapRudderStickToServo(ibusChannel(IBUS_IDX_RUDDER)));
-        setEscs(computeThrottleUs(ibusChannel(IBUS_IDX_THROTTLE),
-                                  ibusChannel(IBUS_IDX_REVERSE)));
+      case MODE_MANUAL: {
+        uint16_t throttleUs = computeThrottleUs(ibusChannel(IBUS_IDX_THROTTLE),
+                                                ibusChannel(IBUS_IDX_REVERSE));
+        uint16_t rudderUs   = mapRudderStickToServo(ibusChannel(IBUS_IDX_RUDDER));
+        uint16_t portUs, stbdUs;
+        computePortStbd(throttleUs, rudderUs, portUs, stbdUs);
+        setRudder(rudderUs);
+        setEscsPortStbd(portUs, stbdUs);
         break;
+      }
 
       case MODE_AUTO: {
         if (navWpSet() && gpsValid() && !navCaptured()) {
@@ -123,6 +150,7 @@ static void applyOutputs() {
             setRudder(rudderUs);
             setEscsPortStbd(portUs, stbdUs);
         } else {
+            // No waypoint, no GPS, or already captured → safe-hold.
             setRudder(NEUTRAL_US);
             setEscs(NEUTRAL_US);
         }
@@ -184,11 +212,12 @@ void loop() {
     radarUpdate();
     sonarUpdate();
     gpsUpdate();
-    telemetryUpdate();
+    imuUpdateCogTrim();
+    telemetryUpdate();         // server.handleClient() + non-blocking wifi reconnect
 
     // Compute + apply.
     updateMode();
-    navUpdate();
-    weaponsUpdate();
+    navUpdate(mode == MODE_AUTO);
+    weaponsUpdate();           // CH5 knob → deck-gun pan servo (independent of mode)
     applyOutputs();
 }
