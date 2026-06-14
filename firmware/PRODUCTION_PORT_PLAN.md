@@ -153,6 +153,19 @@ something to defer.
     radar, sonar.
   - *Clean build + version* — full sketch compiles; `FIRMWARE_VERSION` →
     `0.4.0`.
+  - *Mechanical post-port diff (exit gate, must come back empty).* After
+    the port is written, generate an extracted diff of the value/contract
+    layer — config constants, telemetry JSON keys, HTTP/WS routes — between
+    the **newly-ported `legend_cutter/`** and test_29, both directions
+    (different-value-when-present AND missing/extra). This is *not* a
+    pre-port survey of the old stale values — we overwrite those from
+    test_29 regardless; it's a confirmation that what we just wrote matches.
+    The diff must be **empty**, except entries we *deliberately* dropped
+    (e.g. the extra `gun_pan_us`/`gps_simulated`/`ch_gun_pan` keys), which
+    are listed and justified. A careful port should already produce an empty
+    diff; this just guarantees it instead of trusting it. Logic/algorithm
+    parity is *not* covered by this — that still needs function-by-function
+    comparison.
   Keep a verification trail mapping test_29 facts to their new home so the
   parity claim is checkable, not asserted.
 
@@ -181,6 +194,7 @@ something to defer.
 - [ ] Stage 1 — app-contract parity (telemetry keys + routes; app unchanged)
 - [ ] Stage 1 — behavioral parity across all modules
 - [ ] Stage 1 — clean full-sketch compile; `FIRMWARE_VERSION` → `0.4.0`
+- [ ] Stage 1 — post-port mechanical diff (constants / keys / routes vs test_29) comes back empty, save deliberate drops
 - [ ] Stage 2 — operator bench-parity PASS
 - [ ] Stage 3 — `CLAUDE.md` + memory updated for the cutover
 - [ ] Stage 4 — operator water validation (begins v0.4.x development)
