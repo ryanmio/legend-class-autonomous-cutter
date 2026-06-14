@@ -119,8 +119,11 @@ something to defer.
   and audit current `legend_cutter/` against it. **Gate:** a written
   per-module gap/divergence map — missing / stale / wrong / **extra**
   (flag anything `legend_cutter/` does that test_29 does *not*; don't
-  silently keep or drop it). This sizes and orders everything after it —
-  no port code until it exists.
+  silently keep or drop it). This sizes and orders everything after it:
+  do the audit before writing port code, then **continue straight into
+  Stage 1** — run the port through without pausing for sign-off. (The
+  only natural stops are the operator gates at Stages 2 and 4, which need
+  hardware you don't have.)
 
 - **Stage 1 — Reconcile to parity (you decompose this).** Bring every
   `legend_cutter/` module into faithful parity with test_29, decomposed
