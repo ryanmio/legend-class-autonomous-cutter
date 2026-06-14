@@ -45,10 +45,14 @@ not happen again:
 ### Source of truth
 
 `firmware/tests/test_29_pool_integration/` at commit **`7b0f7cdd`**
-(current `HEAD`, the PASS'd `test_29-pool2.6-magcal2` build) is the
-**single source of truth**. Its `.ino`, `config.h`, `secrets.h`, and
-`NOTES.md` define correct behavior. Where `legend_cutter/` disagrees with
-test_29, **test_29 wins** — no exceptions, no "improvements."
+(the PASS'd `test_29-pool2.6-magcal2` build; test_29 firmware is unchanged
+since — later commits only touch this plan doc) is the **single source of
+truth**. It is a **single-file sketch**: all hardware constants, channel
+maps, and thresholds live inline in the `.ino` — **there is no test_29
+`config.h`** (that file exists only in `legend_cutter/`). Its `.ino`,
+`secrets.h`, and `NOTES.md` define correct behavior. Where `legend_cutter/`
+disagrees with test_29, **test_29 wins** — no exceptions, no
+"improvements."
 
 ## 3. Goals — what "done" means
 
@@ -79,9 +83,16 @@ test_29, **test_29 wins** — no exceptions, no "improvements."
   water-side operator surface. If reconciling `telemetry.cpp` is messier
   than rewriting it, a clean rewrite that reproduces the exact same wire
   contract is acceptable (operator has no preference on internals).
-- **`config.h` is the single source of hardware truth.** Reconcile it
-  first; everything downstream depends on it. The "hardware facts that
-  bite" in `CLAUDE.md` are mandatory checks: Mode-2 steering on CH1;
+- **The correct hardware values are the ones test_29 uses right now;
+  `config.h` is only where they get centralized in the production stack.**
+  test_29 is a single-file sketch — every hardware constant is inline in its
+  `.ino` (there is no test_29 `config.h`). Read those current values out of
+  the test_29 `.ino` and copy them into `legend_cutter/config.h`, verbatim,
+  so the production stack centralizes the exact values the boat runs today.
+  Do this first; everything downstream reads config.h. config.h is the
+  *home* for these facts in `legend_cutter/`, not the authority on what they
+  should be — when in doubt, the test_29 `.ino` wins. The "hardware facts
+  that bite" in `CLAUDE.md` are mandatory checks: Mode-2 steering on CH1;
   throttle rests at bottom (~1000 µs); DF1201S audio (AT @115200,
   pause+50 ms before play); BN-220 reversed wires (white=TX,
   `GPS_RX_PIN=17/GPS_TX_PIN=4`); IMU remap `mr_x=-mz,mr_y=-my,mr_z=-mx`;
@@ -128,9 +139,10 @@ something to defer.
 - **Stage 1 — Reconcile to parity (you decompose this).** Bring every
   `legend_cutter/` module into faithful parity with test_29, decomposed
   and sequenced as the audit dictates. Firm gates regardless of slicing:
-  - *Config first* — `config.h` is the hardware-truth dependency
-    everything reads; reconcile it before the modules that depend on it,
-    with no accidental drift from test_29.
+  - *Config first* — `legend_cutter/config.h` is the hardware-truth
+    dependency everything reads; reconcile it from the constants inline in
+    the test_29 `.ino` before the modules that depend on it, with no
+    accidental drift from test_29.
   - *App contract* — emitted telemetry JSON keys and HTTP/WS routes match
     test_29 exactly (rewrite `telemetry.cpp` if cleaner than reconciling —
     only the wire format is sacred); the app needs zero changes.
@@ -165,7 +177,7 @@ something to defer.
 ## 6. Milestone checklist (maintain your own finer list beneath these)
 
 - [ ] Stage 0 — `secrets.h` copied (uncommitted); per-module gap audit written
-- [ ] Stage 1 — config reconciled (no drift)
+- [ ] Stage 1 — `legend_cutter/config.h` reconciled from test_29 `.ino` constants (no drift)
 - [ ] Stage 1 — app-contract parity (telemetry keys + routes; app unchanged)
 - [ ] Stage 1 — behavioral parity across all modules
 - [ ] Stage 1 — clean full-sketch compile; `FIRMWARE_VERSION` → `0.4.0`
@@ -209,8 +221,11 @@ something to defer.
 > writing anything. **Start by producing the Stage 0 parity/gap audit —
 > do not write port code until the gap map exists.** Critical constraints:
 > the phone app is already done and must need zero changes, so telemetry
-> JSON keys and HTTP/WS routes must match test_29 exactly; `config.h` is
-> the single source of hardware truth and must be reconciled first; you
+> JSON keys and HTTP/WS routes must match test_29 exactly; test_29 is a
+> single-file sketch (hardware constants live inline in its `.ino` — there
+> is no test_29 `config.h`), so `legend_cutter/config.h` is the production
+> hardware-truth file and must be reconciled from those inline constants
+> first; you
 > cannot flash hardware, so the operator owns all PASS/FAIL verdicts —
 > never claim a behavior works without their confirmation. Work in staged,
 > subsystem-grouped commits. Surface any genuine ambiguity instead of
