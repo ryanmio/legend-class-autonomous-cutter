@@ -531,3 +531,114 @@ the boat drives.
 | TB-1 | Flash, watch nav LED at boot: 1 blink as it starts scanning, 2 blinks when WiFi connects. LED off after. |
 | TB-2 | App telemetry still parses and updates normally (no blank/stale screen). Serial shows NO `[telemetry] WARN` line during a full run with a waypoint set + cal idle. |
 | TB-3 | (Optional) Trigger a cal while a waypoint is set, confirm app still updates — this is the heaviest payload case. |
+
+## RESULTS — `test_29-pool2.6-magcal2` water test 2026-06-14 ✅ PASS
+
+**Headline: first-ever autonomous waypoint capture. The boat drove
+itself to a posted waypoint and captured it under AUTO — the project's
+topline goal of autonomous navigation is met.** This was a focused run
+on what the cal/heading rework set out to fix; previously-validated
+subsystems (radar, depth, audio, deck gun) were not re-exercised.
+
+What this run had to prove is that the boat holds a trustworthy heading —
+without it, AUTO can't steer to a GPS waypoint. The compass was being
+corrupted two ways: a missing magnetic→true conversion (local declination
+~11° W), and motor/metal field distortion that calibration corrects. The
+check is heading vs GPS `course` while moving: a sound compass tracks the
+direction the boat is actually traveling. It now does (~6°, was ~36°), and
+the boat reached and captured a waypoint on its own — that's the PASS.
+
+Four logs, all reporting firmware `test_29-pool2.6-magcal2`, GPS solid
+at 12 sats / fix throughout, heap steady ~200 kB, batt 15.1–15.9 V:
+
+| Log | Dur | What happened |
+|-----|-----|---------------|
+| `10-38-30` | 139 s | MANUAL shakedown, heading-health drive |
+| `10-43-21` | 56 s | short MANUAL |
+| `10-44-18` | 201 s | **AUTO navigation — waypoint captured (distance), twice** |
+| `10-53-08` | 213 s | AUTO + SwD failsafe drills + bilge auto-pump |
+
+### Heading root cause — FIXED (the whole point of this rework)
+
+- **TRUE heading / declination working.** `heading_mag − heading`
+  averaged **+10° to +12°** across all logs ≈ the local ~11° W
+  declination. Magnetic→true conversion is live and correct.
+- **Heading now tracks GPS course under power.** Median
+  `|heading − course|` while moving: **6.6° / 7.2° / 4.4°** across logs,
+  mean signed bias **+1.9° to +2.8°**. Compare the 2026-06-05 harbor log
+  that exposed the problem: median **36°**, **+23°** bias. The mag-cal
+  coverage rework + declination fix resolved the root cause from
+  "2026-06-12 corrected analysis."
+- **Cal quality GOOD, persisted.** All logs loaded `mag_calibrated=true`,
+  `mag_from_nvs=true`, quality **good**, radius **22.5 µT** (~10% above
+  the ~20.5 µT expected horizontal field — inside the GOOD band),
+  baseline 22.46. The new coverage-based cal produced a good spin that
+  survived reboot. Radius is the size of the field-reading circle a clean
+  spin traces; near the local ~20.5 µT means it wasn't contaminated by
+  tilt or nearby metal. Cal lives in NVS (power-off-surviving flash), so
+  no re-spin per power-up.
+- **GPS-COG trim behaved exactly as designed (MC2-8 ✅).** `cog_trim`
+  stayed small and converged: range **±2°**, mean **<1°**. The trim is a
+  slow corrector that absorbs any heading residual left after declination
+  + cal by leaning on GPS course during straight legs; staying near zero
+  means there was almost nothing left to absorb — a good-cal signature.
+
+### Autonomous navigation (`10-44-18`)
+
+Boat engaged AUTO toward the waypoint, held heading via differential
+thrust (ESCs ~1650–1676 µs cruise), and `captured`/`captured_by=distance`
+fired **twice** (t≈99 s and t≈141 s), each latching neutral (1500/1500)
+for ~3 s before resuming. Heading stayed locked to course through a full
+heading sweep (250° → 0° → 100°) as it ran the leg. This is the first
+log in the project showing AUTO actually reaching and capturing a point.
+
+### Failsafe (`10-53-08`)
+
+SwD-triggered failsafe entered cleanly 4× — outputs went to neutral
+(esc `1500`, rudder `1500`) every time, `failsafe_ack=true`, and each
+recovered to MANUAL on SwA. Note: `rc_age_ms` stayed 2–8 ms throughout,
+so these were **SwD-switch** failsafes, not frame-loss. **True TX-off /
+frame-loss failsafe was not tested this session** (still open, AR-7).
+
+### Other confirmations
+
+- **Bilge auto-pump** fired in `10-53-08`: `bilge_rear` wet → `pump=true`
+  cycle, no manual command — the auto-bilge path works.
+- **Nav lights** on during the run (operator confirmed).
+
+### MC2 gate disposition
+
+- **MC2-8 (water, the key gate): ✅ PASS** — straight legs show `cog_trim`
+  converged & small, `heading ≈ course` underway.
+- **MC2-1:** manual + AUTO + bilge + nav-lights confirmed; radar/depth/
+  audio/deck-gun not re-run (validated in prior tests, operator's call).
+- **MC2-2…5, MC2-9 (live cal procedure):** not captured in these logs —
+  cal was already GOOD in NVS (`cal_state=done` throughout). Procedure is
+  validated by its **result** (GOOD radius, accurate heading), not by a
+  recorded coverage-ring spin. Re-capture the live flow opportunistically.
+- **MC2-6 / MC2-7 (stationary cardinal & throttle-blip):** not isolated
+  in these logs; moving heading-vs-course accuracy is strong proxy
+  evidence.
+
+### Open items (NOT fixed here — for the next test)
+
+1. **AUTO steering oscillates ("bouncy" — operator-observed).** In the
+   AUTO leg the rudder reverses side **~54% of samples** and slams a
+   **rail (±170 µs) ~36% of the time** — classic under-damped PID. With
+   `Kp=3.0 / Kd=8.0` and a ~1 Hz heading update, the controller chases
+   each heading sample and zig-zags toward the waypoint instead of
+   smoothing in. **Next test: tame the PID** (lower Kp and/or raise Kd,
+   consider a heading deadband / rudder slew limit / faster heading
+   update). The boat still reached the waypoint, so this is a comfort/
+   efficiency fix, not a blocker.
+2. **`mag_cal_circ_pct` reads 0 after NVS restore** while radius and
+   quality restore fine — cosmetic persistence gap, not a heading issue.
+3. **`batt_a` reads 0.0** every log — current-sense not reporting
+   (pre-existing, out of this test's scope).
+4. **TX-off frame-loss failsafe** still unproven (AR-7) — only the SwD
+   switch path was exercised.
+
+**Verdict: PASS.** The cal/heading rework, true-heading conversion, and
+GPS-COG trim all did their jobs, and the boat navigated autonomously to a
+waypoint for the first time. Carry the PID-smoothing and the open items
+above into the next pool run.
