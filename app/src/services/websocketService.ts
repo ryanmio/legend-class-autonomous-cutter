@@ -71,3 +71,9 @@ export function isConnected(): boolean {
 export function getLastData(): TelemetryData | null {
   return _lastData;
 }
+
+// IP currently being polled (''. if disconnected). Used by the telemetry
+// logger to pull /history for gap backfill on reconnect.
+export function getCurrentIP(): string {
+  return currentIP;
+}

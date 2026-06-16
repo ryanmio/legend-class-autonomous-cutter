@@ -6,9 +6,15 @@
 //      public API as before; TelemetryScreen still controls it manually.
 //   2. Auto engine (initAutoLogger) — always-on subscriber that
 //      auto-starts the recorder when the boat is throttled up, and
-//      auto-saves the captured rows as a "flight" in storage when
-//      the boat goes away (telemetry lost / boat rebooted) or the
-//      operator manually stops.
+//      auto-saves the captured rows as a "flight" in storage.
+//
+//      Store-and-sync: a WiFi dropout no longer ends the flight. When
+//      telemetry resumes with the same session_id, the gap is detected
+//      (the boat's uptime jumped past the last frame we saw) and the
+//      missing records are pulled from the boat's /history ring and
+//      merged in — so the flight log stays unbroken across the outage.
+//      A flight is finalized only on a reboot (session_id change), a long
+//      unrecovered absence (boat truly gone), or a manual stop.
 //
 // Persistence:
 //   ${documentDirectory}flights/<id>.csv   — CSV body, one file per flight.
@@ -22,7 +28,8 @@ import { Share } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { TelemetryData } from '../types';
-import { subscribe } from './websocketService';
+import { subscribe, getCurrentIP } from './websocketService';
+import { fetchHistorySince, HistoryRecord } from './historyService';
 
 export interface LogRow extends TelemetryData {
   ts: number;             // ms since epoch when the frame was received
@@ -60,8 +67,16 @@ const MAX_ROWS = 7200;
 // Auto-engine tuning.
 const AUTO_ESC_DEADBAND_US   = 30;        // |esc_us - 1500| must exceed this
 const AUTO_ESC_DEBOUNCE_MS   = 500;       // ...for this long to auto-start
-const AUTO_LOST_THRESHOLD_MS = 60_000;    // 60 s of no frames = boat is gone
+// Boat truly gone → finalize so the flight isn't lost. Set well above any
+// realistic WiFi dropout: a blip is bridged by /history backfill, not by
+// ending the flight. Tied to the boat's ~20 min history ring — beyond it the
+// gap can't be fully recovered anyway. Manual stop ends a flight immediately.
+const AUTO_GONE_THRESHOLD_MS = 300_000;   // 5 min of no frames = boat is gone
 const AUTO_TICK_MS           = 5_000;     // how often to check for telemetry loss
+// Uptime jump (s) between two received frames that means we missed data and
+// should backfill the hole from /history. Normal cadence is ~1 s/frame.
+const GAP_TRIGGER_S          = 3;
+const BACKFILL_MAX_PAGES     = 50;
 
 // Stats tuning.
 // GPS jitter floor: per-step displacements under this are noise, not real
@@ -519,39 +534,130 @@ let autoLastSessionId: number | null = null;
 let autoLastFrameAt      = 0;
 let autoEscAboveSince: number | null = null;
 let autoTickHandle: ReturnType<typeof setInterval> | null = null;
+// uptime (s) of the previous frame we saw — used to spot a gap on reconnect.
+let autoPrevUptimeS: number | null = null;
+let backfillInProgress   = false;
 
 function autoOnFrame(data: TelemetryData) {
   const now = Date.now();
   autoLastFrameAt = now;
 
-  // 1. Session-change detection (boat rebooted while we stayed connected).
+  // 1. Reboot detection (session_id changed). A reboot is a hard flight
+  //    boundary — the boat's history ring is cleared, so we can't backfill
+  //    across it. Finalize the pre-reboot flight.
+  let rebooted = false;
   if (data.session_id != null) {
     if (autoLastSessionId != null && data.session_id !== autoLastSessionId) {
+      rebooted = true;
       if (unsubscribe) stop();  // saves current flight, halts recorder
     }
     autoLastSessionId = data.session_id;
   }
+  if (rebooted) autoPrevUptimeS = null;
 
   // 2. Throttle-up detection — ESC commanded out of neutral for the
   //    debounce window. Uses the boat's commanded ESC µs (not raw CH3)
   //    so MANUAL forward, MANUAL reverse-via-right-stick, and AUTO
   //    cruise all trigger uniformly.
+  let justStarted = false;
   if (data.esc_us != null && Math.abs(data.esc_us - 1500) > AUTO_ESC_DEADBAND_US) {
     if (autoEscAboveSince == null) autoEscAboveSince = now;
     if (!unsubscribe && (now - autoEscAboveSince) >= AUTO_ESC_DEBOUNCE_MS) {
       clear();   // ensure clean buffer for the new flight
       start();
+      justStarted = true;  // don't backfill pre-flight history into a fresh flight
     }
   } else {
     autoEscAboveSince = null;
   }
+
+  // 3. Gap backfill — if a flight is running and this frame's uptime jumped
+  //    well past the previous frame's, we missed data (a WiFi dropout we just
+  //    recovered from). Pull the hole from the boat's /history ring and merge
+  //    it in. This frame is the wall-clock anchor for converting record
+  //    uptimes to timestamps.
+  if (
+    unsubscribe && !rebooted && !justStarted &&
+    data.uptime != null && autoPrevUptimeS != null &&
+    data.uptime - autoPrevUptimeS > GAP_TRIGGER_S
+  ) {
+    void backfillGap(autoPrevUptimeS * 1000, data.uptime * 1000, now, data.session_id ?? null, data.v);
+  }
+
+  if (data.uptime != null) autoPrevUptimeS = data.uptime;
+}
+
+// Pull every record in (sinceMs, now] from the boat and merge the ones we're
+// missing into the running flight. Guarded so only one runs at a time.
+async function backfillGap(
+  sinceMs: number,
+  anchorUptimeMs: number,
+  anchorWallMs: number,
+  expectSessionId: number | null,
+  version?: string,
+): Promise<void> {
+  if (backfillInProgress) return;
+  const ip = getCurrentIP();
+  if (!ip) return;
+  backfillInProgress = true;
+  try {
+    const { sessionId, records } = await fetchHistorySince(ip, sinceMs, BACKFILL_MAX_PAGES);
+    // If the boat rebooted between the anchor frame and our fetch, the ring is
+    // a different flight — don't merge across the boundary.
+    if (expectSessionId != null && sessionId !== expectSessionId) return;
+    if (!unsubscribe) return;  // flight ended (e.g. manual stop) while fetching
+    mergeBackfill(records, anchorUptimeMs, anchorWallMs, version);
+  } catch (e) {
+    console.warn('[telemetryLogger] backfill failed', e);
+  } finally {
+    backfillInProgress = false;
+  }
+}
+
+// Insert backfilled records into `rows`, skipping any second already covered by
+// a live frame, then re-sort by timestamp. Each record's wall-clock ts is
+// derived from the anchor frame: ts = anchorWall - (anchorUptime - recUptime).
+function mergeBackfill(
+  records: HistoryRecord[],
+  anchorUptimeMs: number,
+  anchorWallMs: number,
+  version?: string,
+): void {
+  if (records.length === 0) return;
+
+  const seenSec = new Set<number>();
+  for (const r of rows) {
+    const u = (r as unknown as { uptime?: number }).uptime;
+    if (typeof u === 'number') seenSec.add(Math.round(u));
+  }
+
+  let added = 0;
+  for (const rec of records) {
+    const sec = Math.round(rec.uptime_ms / 1000);
+    if (seenSec.has(sec)) continue;  // already have a live frame for this second
+    seenSec.add(sec);
+
+    const { seq, uptime_ms, ...fields } = rec;
+    void seq;
+    const ts = anchorWallMs - (anchorUptimeMs - uptime_ms);
+    const row = { ...fields, ts, uptime: sec, v: version ?? '' } as unknown as LogRow;
+    rows.push(row);
+    added++;
+  }
+
+  if (added === 0) return;
+  rows.sort((a, b) => a.ts - b.ts);
+  if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
+  notifyCount();
 }
 
 function autoTick() {
-  // Telemetry-loss detection. Only relevant while a flight is running.
+  // Boat-gone detection. Only relevant while a flight is running. A short/
+  // medium WiFi dropout is bridged by /history backfill, not by ending the
+  // flight, so the threshold is deliberately long.
   if (!unsubscribe) return;
   if (autoLastFrameAt === 0) return;
-  if (Date.now() - autoLastFrameAt > AUTO_LOST_THRESHOLD_MS) {
+  if (Date.now() - autoLastFrameAt > AUTO_GONE_THRESHOLD_MS) {
     stop();  // saves the flight
   }
 }

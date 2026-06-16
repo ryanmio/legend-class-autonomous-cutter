@@ -121,7 +121,37 @@ binary record above — that's where "trim unused fields" actually pays off. Do
 contract (parity-checked vs the test_29 oracle, near its 2 KB cap), and trimming
 it is a separate, app-breaking change with its own risk. Two schemas, decoupled.
 
-## Recommendation
+## Status — IMPLEMENTED (branch `telemetry-store-and-sync`)
+
+Both halves are built and verified. Where the implementation differs from the
+sketch above: the `/history` query is by **`since_ms` (record uptime)**, not
+`since=<seq>` — the app already knows the boat's `uptime` from every live frame
+but never sees a `seq`, so uptime is the natural cursor (`seq` is still in each
+record for ordering). Records are returned as JSON objects with the same field
+names as `/telemetry`, so they merge straight into a flight. Dedup is by
+**second**, not `seq`, for the same reason (live rows carry uptime, not seq).
+
+**Firmware (v0.5.0)** — new `histlog` module: a 1200-record RAM ring (~20 min)
+of compact per-second samples, recorded every loop regardless of WiFi.
+`GET /history?since_ms=<uptimeMs>` serves the gap, oldest-first, paged at 100
+records (chunked send, no large buffer). Live `/telemetry` untouched;
+`parity_check` shows only the new `/history` route. `arduino-cli compile`:
+globals 30% of RAM, 229 KB free.
+
+**App** — `historyService.ts` pages `/history`; `telemetryLogger.ts` auto engine
+reworked: the 60 s flight-split is gone. A flight ends only on a reboot
+(`session_id` change), a 5 min unrecovered absence (`AUTO_GONE_THRESHOLD_MS`),
+or manual stop. On reconnect, a jump in the boat's `uptime` between frames
+triggers a backfill that merges the missing records into the running flight
+(ts derived from the live anchor frame). `tsc` clean (one unrelated pre-existing
+error in `HelmScreen.tsx` left as-is).
+
+The 5 min absence timeout is the accepted trade-off: a real end-of-session
+(boat powered off) auto-saves within 5 min instead of the old 60 s — use the
+app's manual stop for an immediate save. That longer timeout is exactly what
+lets a long WiFi outage be bridged instead of splitting the flight.
+
+## Recommendation (original plan — followed)
 
 Build it, in this order, but as **two shippable steps**:
 
