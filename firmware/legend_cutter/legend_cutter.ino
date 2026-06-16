@@ -36,6 +36,7 @@
 #include "lights.h"
 #include "weapons.h"
 #include "telemetry.h"
+#include "histlog.h"
 
 enum VesselMode { MODE_MANUAL, MODE_AUTO, MODE_FAILSAFE };
 static VesselMode mode                = MODE_MANUAL;
@@ -196,6 +197,7 @@ void setup() {
     else              Serial.println("[AUDIO] WARN: DF1201S did not ACK — /audio disabled.");
 
     telemetryBegin();
+    histlogBegin();
 
     Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",
         DEFAULT_CRUISE_US, AUTO_CRUISE_CAP_US, DEFAULT_KP, DEFAULT_KD, CAPTURE_RADIUS_M);
@@ -214,6 +216,7 @@ void loop() {
     gpsUpdate();
     imuUpdateCogTrim();
     telemetryUpdate();         // server.handleClient() + non-blocking wifi reconnect
+    histlogUpdate();           // rate-limited capture into the RAM history ring
 
     // Compute + apply.
     updateMode();

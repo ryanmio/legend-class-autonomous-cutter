@@ -5,6 +5,7 @@
 // Endpoints (all CORS-enabled):
 //   GET  /status
 //   GET  /telemetry
+//   GET  /history           ?since_ms=<uptimeMs>  (store-and-sync gap backfill)
 //   POST /cruise            {us | pct}
 //   POST /waypoint          {lat,lon}  (lat:null,lon:null clears)
 //   POST /pid               {kp?, kd?}

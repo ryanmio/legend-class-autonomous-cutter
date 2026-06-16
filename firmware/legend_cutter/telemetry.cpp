@@ -20,6 +20,7 @@
 #include "radar.h"
 #include "lights.h"
 #include "weapons.h"
+#include "histlog.h"
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -556,6 +557,107 @@ static void handleDepth() {
     server.send(200, "application/json", out);
 }
 
+// ── /history (store-and-sync gap backfill) ──────────────────────────────────
+// GET /history?since_ms=<uptimeMs> → records with uptimeMs > since_ms, oldest
+// first, capped at HISTLOG_PAGE_MAX. Response:
+//   {"session_id":N,"more":bool,"records":[ {…compact telemetry…}, … ]}
+// The app pages by re-requesting with since_ms = the last record's uptime_ms,
+// and finalizes the flight (rather than backfilling) when session_id changes.
+// Record keys + value types mirror /telemetry so the app slots them straight
+// into the same flight log; invalid fields are omitted, exactly as live.
+static void appendHistRecord(String& out, const HistRecord* r) {
+    char buf[320];
+    const char* modeStr = (r->mode == 1) ? "MANUAL"
+                        : (r->mode == 2) ? "AUTO"
+                        : (r->mode == 3) ? "FAILSAFE" : "IDLE";
+    bool fix = r->flags & HIST_F_GPS_FIX;
+    snprintf(buf, sizeof(buf),
+        "{\"seq\":%lu,\"uptime_ms\":%lu,\"mode\":\"%s\","
+        "\"esc_us\":%d,\"rudder_us\":%d,\"heading\":\"%.1f\","
+        "\"gps_fix\":%s,\"sats\":%u",
+        (unsigned long)r->seq, (unsigned long)r->uptimeMs, modeStr,
+        r->escUs, r->rudderUs, r->heading10 / 10.0f,
+        fix ? "true" : "false", r->sats);
+    out += buf;
+
+    if (fix) {
+        snprintf(buf, sizeof(buf), ",\"lat\":\"%.6f\",\"lon\":\"%.6f\"",
+                 r->lat1e7 / 1e7, r->lon1e7 / 1e7);
+        out += buf;
+    }
+    if (r->speedKts100 != INT16_MIN) {
+        snprintf(buf, sizeof(buf), ",\"speed_kts\":\"%.1f\"", r->speedKts100 / 100.0f); out += buf;
+    }
+    if (r->course10 != INT16_MIN) {
+        snprintf(buf, sizeof(buf), ",\"course\":\"%.1f\"", r->course10 / 10.0f); out += buf;
+    }
+    if (r->battCv != INT16_MIN) {
+        snprintf(buf, sizeof(buf), ",\"batt_v\":\"%.2f\",\"batt_a\":\"%.2f\"",
+                 r->battCv / 100.0f, r->battCa / 100.0f);
+        out += buf;
+    }
+    if (r->depthCm >= 0) {
+        snprintf(buf, sizeof(buf), ",\"depth_m\":\"%.2f\"", r->depthCm / 100.0f); out += buf;
+    }
+    snprintf(buf, sizeof(buf), ",\"wp_set\":%s,\"captured\":%s",
+             (r->flags & HIST_F_WP_SET)  ? "true" : "false",
+             (r->flags & HIST_F_CAPTURED) ? "true" : "false");
+    out += buf;
+    if (r->wpDist10 >= 0) {
+        snprintf(buf, sizeof(buf), ",\"wp_dist_m\":\"%.1f\"", r->wpDist10 / 10.0f); out += buf;
+    }
+    snprintf(buf, sizeof(buf), ",\"pump\":%s,\"failsafe_ack\":%s}",
+             (r->flags & HIST_F_PUMP)         ? "true" : "false",
+             (r->flags & HIST_F_FAILSAFE_ACK) ? "true" : "false");
+    out += buf;
+}
+
+static void handleHistory() {
+    addCORS();
+
+    uint32_t since = 0;
+    if (server.hasArg("since_ms")) since = strtoul(server.arg("since_ms").c_str(), NULL, 10);
+
+    // Chunked send so we never build the whole page in one big buffer.
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+
+    char head[80];
+    snprintf(head, sizeof(head), "{\"session_id\":%lu,\"more\":", (unsigned long)sessionId);
+
+    uint16_t n = histlogCount();
+    uint16_t sent = 0;
+    bool     more = false;
+    String   recsOut;                 // accumulates a few records, flushed in batches
+    recsOut.reserve(2048);
+
+    // Decide `more` up front so it can go in the header chunk: count how many
+    // records qualify; if that exceeds the page cap, there's a next page.
+    for (uint16_t i = 0; i < n; i++) {
+        const HistRecord* r = histlogAt(i);
+        if (r && r->uptimeMs > since) {
+            if (sent >= HISTLOG_PAGE_MAX) { more = true; break; }
+            sent++;
+        }
+    }
+
+    server.sendContent(head);
+    server.sendContent(more ? "true,\"records\":[" : "false,\"records\":[");
+
+    uint16_t emitted = 0;
+    for (uint16_t i = 0; i < n && emitted < HISTLOG_PAGE_MAX; i++) {
+        const HistRecord* r = histlogAt(i);
+        if (!r || r->uptimeMs <= since) continue;
+        if (emitted > 0) recsOut += ',';
+        appendHistRecord(recsOut, r);
+        emitted++;
+        if (recsOut.length() > 1536) { server.sendContent(recsOut); recsOut = ""; }
+    }
+    if (recsOut.length()) server.sendContent(recsOut);
+    server.sendContent("]}");
+    server.sendContent("");           // terminate chunked response
+}
+
 void telemetryBegin() {
     sessionId = esp_random();   // app uses this to detect mid-flight reboots
     wifiConnect();
@@ -564,6 +666,8 @@ void telemetryBegin() {
     server.on("/status",    HTTP_OPTIONS, handleOptions);
     server.on("/telemetry", HTTP_GET,     handleTelemetry);
     server.on("/telemetry", HTTP_OPTIONS, handleOptions);
+    server.on("/history",   HTTP_GET,     handleHistory);
+    server.on("/history",   HTTP_OPTIONS, handleOptions);
     server.on("/cruise",    HTTP_POST,    handleCruise);
     server.on("/cruise",    HTTP_OPTIONS, handleOptions);
     server.on("/waypoint",  HTTP_POST,    handleWaypoint);

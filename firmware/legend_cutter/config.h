@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.4.0"
+#define FIRMWARE_VERSION "0.5.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -215,3 +215,16 @@ static const float MAX_WP_DIST_M    = 1000.0f;
 // design — if neither connects, autopilot + RC failsafe still work; HTTP/
 // telemetry are simply absent until the network returns.
 static const uint16_t HTTP_PORT = 80;
+
+// ── Onboard telemetry history (store-and-sync) ─────────────────────────────
+// RAM ring buffer of compact per-second records, recorded continuously
+// regardless of WiFi state. On reconnect the app pulls the gap via
+// GET /history?since_ms=<uptimeMs> so the flight log stays unbroken across a
+// WiFi dropout. RAM-only by design: a reboot clears it, but the app already
+// treats a reboot (session_id change) as a flight boundary, so nothing the
+// system keeps today is lost. CAPACITY records × ~36 B ≈ the RAM footprint.
+//   1200 @ 1 Hz ≈ 20 min of history (~43 KB static).
+static const uint16_t HISTLOG_CAPACITY    = 1200;
+static const uint32_t HISTLOG_INTERVAL_MS = 1000;
+// Max records returned per /history response; the app pages with since_ms.
+static const uint16_t HISTLOG_PAGE_MAX    = 100;
