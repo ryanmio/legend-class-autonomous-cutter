@@ -20,6 +20,57 @@ matters more once records are being buffered and synced.
 
 ---
 
+# In plain terms (what's new, beginner view)
+
+**The problem this fixes:** if WiFi dropped during a run, that stretch of data
+was gone forever, and a long drop split your trip into two separate logs.
+
+**The two changes that fix it:**
+
+1. **The boat now keeps a rolling ~20-minute record of itself** (in memory),
+   even when no phone is connected. So the data still *exists* during a dropout
+   instead of vanishing.
+2. **When the phone reconnects, it asks the boat "what did I miss?"** and stitches
+   those readings into the current trip. A WiFi drop no longer ends a trip — only
+   a boat restart, a manual Stop, or 5 minutes of total silence does.
+
+**Result:** one continuous log per outing, with WiFi dropouts filled in, instead
+of logs full of holes or split in two.
+
+### What "save" means here
+
+"Save" = the **phone** writing the trip to a file in its own storage (the flight
+list you can open and export as CSV). It does *not* mean pulling data off the
+boat. The boat's onboard record is only a **short-term backup buffer** for
+filling gaps; the real, permanent log always lives on the phone.
+
+### The 5-minute trade-off
+
+The phone can't tell "boat powered off" from "WiFi blipped" — both look like
+silence. So it waits 5 minutes of silence before declaring a trip finished
+(up from the old 60 s). That longer wait is exactly what lets a long WiFi outage
+be bridged instead of splitting the trip. The cost: a real end-of-session
+auto-saves within 5 min instead of 1 — hit **Stop** in the app for an instant
+save. No data is lost either way; it's only about *when* the file gets written.
+
+### Crash-safety
+
+The in-progress trip lives in the phone's memory until it's saved. If the phone
+closes the app to free memory before then, that could lose the trip — so while
+recording, the phone also mirrors it to a draft file every 30 seconds and
+recovers it on next launch. Worst case you lose the last ~30 seconds, not the
+whole trip.
+
+### The one honest limitation
+
+The phone's log is only complete if it **reconnects before you power off** — the
+gap-fill happens on reconnect. If WiFi drops *and* you immediately kill the
+boat's power without ever reconnecting, that last gap is lost (the boat's backup
+buffer dies with the power). In normal use — WiFi comes back while you're still
+running — everything gets filled in.
+
+---
+
 # Explored design (2026-06-15)
 
 ## Decision
