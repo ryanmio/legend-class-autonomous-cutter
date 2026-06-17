@@ -60,6 +60,13 @@ export interface FlightMeta {
 const FLIGHTS_INDEX_KEY  = 'flights:index';
 const LEGACY_FLIGHT_KEY  = 'flight:';  // AsyncStorage key prefix for v1 bodies
 const FLIGHT_DIR         = (FileSystem.documentDirectory ?? '') + 'flights/';
+// Crash-safety: the in-progress flight is mirrored here on a timer while
+// recording, so a kill/eviction before finalize loses at most the last
+// checkpoint interval (not the whole flight). Cleared on finalize/clear,
+// recovered into a real flight on next launch. Not in the flights index, so
+// it never shows in the flight list. Leading underscore keeps it out of the
+// way of timestamp-named flight files.
+const DRAFT_PATH         = FLIGHT_DIR + '_draft.csv';
 
 // Cap at 7200 rows ≈ 2 hours @ 1 Hz. Drops oldest when full.
 const MAX_ROWS = 7200;
@@ -77,6 +84,8 @@ const AUTO_TICK_MS           = 5_000;     // how often to check for telemetry lo
 // should backfill the hole from /history. Normal cadence is ~1 s/frame.
 const GAP_TRIGGER_S          = 3;
 const BACKFILL_MAX_PAGES     = 50;
+// How often the running flight is mirrored to the draft file (crash-safety).
+const CHECKPOINT_MS          = 30_000;
 
 // Stats tuning.
 // GPS jitter floor: per-step displacements under this are noise, not real
@@ -96,6 +105,7 @@ function notifyRunning() { for (const fn of runningListeners) fn(unsubscribe !==
 
 export function start() {
   if (unsubscribe) return;
+  lastCheckpointAt = 0;   // checkpoint on the next tick, not 30 s in
   unsubscribe = subscribe((data) => {
     rows.push({ ts: Date.now(), ...data });
     if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
@@ -119,6 +129,7 @@ export function stop() {
 // recording — matches the existing TelemetryScreen CLEAR button.
 export function clear() {
   rows = [];
+  deleteDraft().catch(() => {});   // don't let a stale draft resurrect discarded rows
   notifyCount();
 }
 
@@ -525,6 +536,57 @@ async function finalizeAndSave(): Promise<void> {
   const index = await readIndex();
   index.push({ id, startTs, endTs, rowCount: snapshot.length, storage: 'fs', ...stats });
   await writeIndex(index);
+  await deleteDraft();   // the flight is now persisted properly
+}
+
+// ── Crash-safety draft (mirror in-progress flight to disk) ──────────────────
+
+// Best-effort mirror of the current buffer. Called on a timer while recording.
+async function checkpointDraft(): Promise<void> {
+  if (rows.length === 0) return;
+  try {
+    await ensureFlightDir();
+    await FileSystem.writeAsStringAsync(DRAFT_PATH, rowsToCSV(rows));
+  } catch (e) {
+    console.warn('[telemetryLogger] draft checkpoint failed', e);
+  }
+}
+
+async function deleteDraft(): Promise<void> {
+  try { await FileSystem.deleteAsync(DRAFT_PATH, { idempotent: true }); } catch {}
+}
+
+// On launch, turn any leftover draft (app killed mid-flight last time) into a
+// real saved flight, then remove it. Idempotent: if a flight with the derived
+// id already exists, just drop the draft.
+async function recoverDraft(): Promise<void> {
+  let csv: string | null = null;
+  try {
+    const info = await FileSystem.getInfoAsync(DRAFT_PATH);
+    if (!info.exists) return;
+    csv = await FileSystem.readAsStringAsync(DRAFT_PATH);
+  } catch {
+    return;
+  }
+  const parsed = csv ? parseCSV(csv) : [];
+  if (parsed.length === 0) { await deleteDraft(); return; }
+
+  try {
+    const startTs = tsMs(parsed[0].ts);
+    const endTs   = tsMs(parsed[parsed.length - 1].ts);
+    const id      = new Date(startTs).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const index   = await readIndex();
+    if (!index.some((m) => m.id === id)) {
+      await writeFlightFile(id, csv as string);
+      const stats = computeStats(parsed);
+      index.push({ id, startTs, endTs, rowCount: parsed.length, storage: 'fs', ...stats });
+      await writeIndex(index);
+    }
+  } catch (e) {
+    console.warn('[telemetryLogger] draft recovery failed', e);
+    return;   // leave the draft for a future retry rather than losing it
+  }
+  await deleteDraft();
 }
 
 // ── Auto engine ────────────────────────────────────────────────────────────
@@ -651,13 +713,24 @@ function mergeBackfill(
   notifyCount();
 }
 
+let lastCheckpointAt = 0;
+
 function autoTick() {
-  // Boat-gone detection. Only relevant while a flight is running. A short/
-  // medium WiFi dropout is bridged by /history backfill, not by ending the
-  // flight, so the threshold is deliberately long.
+  // Only relevant while a flight is running.
   if (!unsubscribe) return;
+
+  // Crash-safety: mirror the in-progress flight to disk periodically so an app
+  // kill/eviction before finalize loses at most CHECKPOINT_MS of data.
+  const now = Date.now();
+  if (now - lastCheckpointAt >= CHECKPOINT_MS) {
+    lastCheckpointAt = now;
+    void checkpointDraft();
+  }
+
+  // Boat-gone detection. A short/medium WiFi dropout is bridged by /history
+  // backfill, not by ending the flight, so the threshold is deliberately long.
   if (autoLastFrameAt === 0) return;
-  if (Date.now() - autoLastFrameAt > AUTO_GONE_THRESHOLD_MS) {
+  if (now - autoLastFrameAt > AUTO_GONE_THRESHOLD_MS) {
     stop();  // saves the flight
   }
 }
@@ -667,6 +740,7 @@ function autoTick() {
 export function initAutoLogger() {
   if (autoInitialized) return;
   autoInitialized = true;
+  void recoverDraft();   // salvage a flight the app was killed mid-recording
   subscribe(autoOnFrame);
   autoTickHandle = setInterval(autoTick, AUTO_TICK_MS);
 }

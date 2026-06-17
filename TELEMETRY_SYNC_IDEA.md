@@ -151,6 +151,16 @@ The 5 min absence timeout is the accepted trade-off: a real end-of-session
 app's manual stop for an immediate save. That longer timeout is exactly what
 lets a long WiFi outage be bridged instead of splitting the flight.
 
+**Crash-safety (draft checkpoint).** The in-progress flight lives in phone RAM
+until it's finalized to a file. If the OS evicts the app before then (likely
+over hours, certain over days), that flight would be lost — and the longer 5 min
+timeout widened that window. So while recording, the flight is mirrored to a
+`_draft.csv` on disk every 30 s (on the timer that already runs); on next launch
+any leftover draft is recovered into a real saved flight and removed. Worst-case
+loss is the last ~30 s, not the whole flight. Reuses the existing file/CSV/stats
+helpers — no new dependencies. (No AppState background-save hook; the periodic
+checkpoint covers it with far less complexity.)
+
 ## Recommendation (original plan — followed)
 
 Build it, in this order, but as **two shippable steps**:
