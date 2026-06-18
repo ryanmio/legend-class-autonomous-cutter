@@ -35,7 +35,11 @@ was gone forever, and a long drop split your trip into two separate logs.
    a boat restart, a manual Stop, or 5 minutes of total silence does.
 
 **Result:** one continuous log per outing, with WiFi dropouts filled in, instead
-of logs full of holes or split in two.
+of logs full of holes or split in two. This also covers **switching apps** — e.g.
+leaving the helm app to record a video, then returning: the boat kept recording
+the whole time, and the app backfills the gap (depth points included) on return.
+The app is foreground-aware, so time spent in another app isn't mistaken for the
+boat going away.
 
 ### What "save" means here
 
@@ -196,6 +200,14 @@ or manual stop. On reconnect, a jump in the boat's `uptime` between frames
 triggers a backfill that merges the missing records into the running flight
 (ts derived from the live anchor frame). `tsc` clean (one unrelated pre-existing
 error in `HelmScreen.tsx` left as-is).
+
+**Foreground-aware (app backgrounding).** The same backfill path covers the app
+being backgrounded (switching to the camera, etc.), not just the boat losing
+WiFi — both look like "frames stopped" and both recover on resume. An `AppState`
+listener gives the boat-gone timer a fresh window on return to foreground and
+`autoTick` only judges "gone" while foregrounded, so a long app-switch can't be
+mistaken for the boat leaving (which would otherwise split the flight). No new
+dependency — `AppState` is React Native core.
 
 The 5 min absence timeout is the accepted trade-off: a real end-of-session
 (boat powered off) auto-saves within 5 min instead of the old 60 s — use the

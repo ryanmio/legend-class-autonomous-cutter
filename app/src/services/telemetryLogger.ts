@@ -24,7 +24,7 @@
 // Legacy AsyncStorage layout (flight:<id> → CSV body) is migrated on
 // first listFlights() call after upgrade.
 
-import { Share } from 'react-native';
+import { Share, AppState, AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { TelemetryData } from '../types';
@@ -599,6 +599,24 @@ let autoTickHandle: ReturnType<typeof setInterval> | null = null;
 // uptime (s) of the previous frame we saw — used to spot a gap on reconnect.
 let autoPrevUptimeS: number | null = null;
 let backfillInProgress   = false;
+// Foreground state. While the app is backgrounded (e.g. you switch to the
+// camera) iOS freezes its poll timer, so it stops hearing the boat even though
+// the boat is fine and still recording. We must not mistake that silence for
+// "boat gone": the gap is backfilled frame-driven once polling resumes, exactly
+// like a WiFi dropout. See onAppStateChange + autoTick.
+let appState: AppStateStatus = 'active';
+let appStateSub: { remove: () => void } | null = null;
+
+function onAppStateChange(next: AppStateStatus) {
+  const wasActive = appState === 'active';
+  appState = next;
+  if (next === 'active' && !wasActive && unsubscribe) {
+    // Returned to foreground: the silence while away wasn't the boat leaving,
+    // so give it a fresh boat-gone window. The missed records (incl. depth) are
+    // pulled in when the next poll frame arrives and autoOnFrame sees the jump.
+    autoLastFrameAt = Date.now();
+  }
+}
 
 function autoOnFrame(data: TelemetryData) {
   const now = Date.now();
@@ -729,6 +747,10 @@ function autoTick() {
 
   // Boat-gone detection. A short/medium WiFi dropout is bridged by /history
   // backfill, not by ending the flight, so the threshold is deliberately long.
+  // Only judge "gone" while foregrounded: a backgrounded app isn't polling, so
+  // its silence says nothing about the boat. (Also covers the first tick after
+  // resume firing before onAppStateChange — appState still reads non-active.)
+  if (appState !== 'active') return;
   if (autoLastFrameAt === 0) return;
   if (now - autoLastFrameAt > AUTO_GONE_THRESHOLD_MS) {
     stop();  // saves the flight
@@ -742,6 +764,8 @@ export function initAutoLogger() {
   autoInitialized = true;
   void recoverDraft();   // salvage a flight the app was killed mid-recording
   subscribe(autoOnFrame);
+  appState = AppState.currentState ?? 'active';
+  appStateSub = AppState.addEventListener('change', onAppStateChange);
   autoTickHandle = setInterval(autoTick, AUTO_TICK_MS);
 }
 
@@ -749,5 +773,6 @@ export function initAutoLogger() {
 // the tick interval can be torn down cleanly if needed.
 export function shutdownAutoLogger() {
   if (autoTickHandle) { clearInterval(autoTickHandle); autoTickHandle = null; }
+  if (appStateSub) { appStateSub.remove(); appStateSub = null; }
   autoInitialized = false;
 }
