@@ -5,7 +5,9 @@
 //   (2) crossing: boat passes the perpendicular line at the waypoint
 //       (prevents endless circling when GPS noise is close to the
 //        capture radius).
-// Cleared on a new /waypoint.
+// Cleared on a new /waypoint. Capture detection + leg-start recording run
+// only while AUTO is driving the leg — passing the waypoint in MANUAL must
+// not mark the leg complete.
 
 #include "navigation.h"
 #include "config.h"
@@ -20,8 +22,8 @@ static float      wpBearing  = 0.0f;
 static bool       captured   = false;
 static CapturedBy capBy      = CAPTURED_BY_NONE;
 
-// Leg-start (first GPS fix after /waypoint). Used for crossing trigger
-// and exposed for app visualisation.
+// Leg-start (recorded on the first AUTO fix after /waypoint or AUTO engage).
+// Used for the crossing trigger and exposed for app visualisation.
 static bool  startValid = false;
 static float startLat   = 0.0f;
 static float startLon   = 0.0f;
@@ -66,13 +68,26 @@ static bool hasCrossedTarget() {
     return (px * ax + py * ay) >= legMag2;
 }
 
-void navSetWaypoint(float lat, float lon) {
+bool navTrySetWaypoint(float lat, float lon, float* outDistM) {
+    // Fat-finger guard — only checkable when we know where the boat is.
+    // The no-fix case is backstopped in navUpdate().
+    if (gpsValid()) {
+        float d = haversineDistM(gpsLat(), gpsLon(), lat, lon);
+        if (d > MAX_WP_DIST_M) {
+            if (outDistM) *outDistM = d;
+            Serial.printf("[WP] REJECTED lat=%.6f lon=%.6f — %.0f m away (max %.0f)\n",
+                          lat, lon, d, MAX_WP_DIST_M);
+            return false;
+        }
+    }
     wpLat      = lat;
     wpLon      = lon;
     wpSet      = true;
-    captured   = false;
+    captured   = false;     // a new waypoint always reopens the run
     capBy      = CAPTURED_BY_NONE;
-    startValid = false;   // re-record leg start on next GPS update
+    startValid = false;     // re-record leg start on next GPS update
+    Serial.printf("[WP] set lat=%.6f lon=%.6f\n", wpLat, wpLon);
+    return true;
 }
 
 void navClearWaypoint() {
@@ -82,9 +97,16 @@ void navClearWaypoint() {
     startValid = false;
     wpDistM    = 0.0f;
     wpBearing  = 0.0f;
+    Serial.println("[WP] cleared");
 }
 
-void navUpdate() {
+void navResetLegStart() {
+    // Re-record the leg start at the AUTO-engage position — the crossing line
+    // must be perpendicular to the path AUTO will actually drive.
+    startValid = false;
+}
+
+void navUpdate(bool inAuto) {
     if (!wpSet || !gpsValid()) {
         wpDistM   = 0.0f;
         wpBearing = 0.0f;
@@ -96,21 +118,43 @@ void navUpdate() {
     wpDistM   = haversineDistM(boatLat, boatLon, wpLat, wpLon);
     wpBearing = haversineBearing(boatLat, boatLon, wpLat, wpLon);
 
+    // Backstop for the fat-finger guard: a waypoint accepted before the first
+    // GPS fix gets distance-checked here once position is known.
+    if (wpDistM > MAX_WP_DIST_M) {
+        Serial.printf("[WP] auto-cleared — %.0f m away (max %.0f)\n", wpDistM, MAX_WP_DIST_M);
+        wpSet      = false;
+        captured   = false;
+        capBy      = CAPTURED_BY_NONE;
+        startValid = false;
+        wpDistM    = 0.0f;
+        wpBearing  = 0.0f;
+        return;
+    }
+
+    // Capture detection is armed only while AUTO is driving the leg.
+    // MANUAL/FAILSAFE still get live dist/bearing telemetry above.
+    if (!inAuto) return;
+
     if (!startValid) {
         startLat   = boatLat;
         startLon   = boatLon;
         startValid = true;
+        Serial.printf("[WP] leg start recorded: %.6f, %.6f → %.6f, %.6f\n",
+                      startLat, startLon, wpLat, wpLon);
     }
 
     if (captured) return;
+
     if (wpDistM < CAPTURE_RADIUS_M) {
         captured = true;
         capBy    = CAPTURED_BY_DISTANCE;
+        Serial.printf("[WP] captured by DISTANCE (dist=%.1f m). Outputs neutral.\n", wpDistM);
         return;
     }
     if (hasCrossedTarget()) {
         captured = true;
         capBy    = CAPTURED_BY_CROSSING;
+        Serial.printf("[WP] captured by CROSSING (dist=%.1f m, missed radius). Outputs neutral.\n", wpDistM);
     }
 }
 

@@ -1,6 +1,9 @@
 // telemetry.cpp
-// WiFi (home first, hotspot second, no AP fallback) + HTTP server with the
-// full /telemetry JSON and all command endpoints. Mirrors test_29 1:1.
+// WiFi (scan-first: home → any "iPhone" hotspot → blind fallback; no AP) +
+// non-blocking in-loop reconnect, plus the HTTP server with the full
+// /telemetry JSON and all command endpoints. Wire contract mirrors the PASS'd
+// test_29 build 1:1 (key set, key order, routes) — the phone app is firmware-
+// agnostic only as long as that holds.
 
 #include "telemetry.h"
 #include "config.h"
@@ -17,40 +20,120 @@
 #include "radar.h"
 #include "lights.h"
 #include "weapons.h"
+#include "histlog.h"
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
 
-// Provided by legend_cutter.ino — current vessel mode label.
+// Provided by legend_cutter.ino — current vessel mode label + failsafe ack.
 extern const char* vesselModeName();
+extern bool        vesselFailsafeAck();
 
 static WebServer server(HTTP_PORT);
 static String    boatIP;
-static uint16_t  cruiseUs = DEFAULT_CRUISE_US;
+static uint16_t  cruiseUs  = DEFAULT_CRUISE_US;
 static uint32_t  sessionId = 0;     // hardware-random, set once in telemetryBegin()
 
 uint16_t    telemetryCruiseUs() { return cruiseUs; }
 const char* telemetryBoatIP()   { return boatIP.c_str(); }
 
-// ── WiFi ───────────────────────────────────────────────────────────────────
-static bool tryConnect(const char* ssid, const char* pass, int timeoutSecs) {
-    WiFi.begin(ssid, pass);
-    Serial.printf("[WiFi] Trying %s", ssid);
-    for (int i = 0; i < timeoutSecs * 2; i++) {
+// ── WiFi (scan-first connect + non-blocking maintain, ported from test_29) ──
+static String lastSsid;
+static String lastPass;
+static bool   wifiWasConnected = false;
+
+// Boot-time nav-light signal so the operator can read WiFi state across the
+// pool: 1 flash when scanning starts, 2 flashes once connected. Setup-only
+// (boat neutral on the bench); leaves the LED off afterward.
+static void blinkNav(int times) {
+    for (int i = 0; i < times; i++) {
+        digitalWrite(PIN_NAV, HIGH); delay(120);
+        digitalWrite(PIN_NAV, LOW);  delay(120);
+    }
+}
+
+static void wifiConnect() {
+    Serial.println();
+    Serial.println("[WiFi] Scanning…");
+    blinkNav(1);
+    WiFi.disconnect(true);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    int n = WiFi.scanNetworks();
+    Serial.printf("[WiFi] %d networks found\n", n);
+
+    String ssid;
+    String pass;
+    bool foundHome = false;
+
+    for (int i = 0; i < n; i++) {
+        String s = WiFi.SSID(i);
+        Serial.printf("  [%d] '%s' RSSI=%d\n", i, s.c_str(), WiFi.RSSI(i));
+        if (s == SECRET_HOME_SSID) {
+            ssid = s; pass = SECRET_HOME_PASS; foundHome = true;
+            Serial.printf("[WiFi] matched home: %s\n", s.c_str());
+            break;
+        }
+    }
+
+    if (!foundHome) {
+        for (int i = 0; i < n; i++) {
+            String s = WiFi.SSID(i);
+            if (s.indexOf("iPhone") >= 0 || s == SECRET_HOTSPOT_SSID) {
+                ssid = s; pass = SECRET_HOTSPOT_PASS;
+                Serial.printf("[WiFi] matched hotspot: %s\n", s.c_str());
+                break;
+            }
+        }
+    }
+
+    if (ssid.length() == 0) {
+        ssid = SECRET_HOTSPOT_SSID;
+        pass = SECRET_HOTSPOT_PASS;
+        Serial.printf("[WiFi] no scan match — blind-connecting: %s\n", ssid.c_str());
+    }
+
+    lastSsid = ssid;
+    lastPass = pass;
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    Serial.print("[WiFi] connecting");
+    for (int i = 0; i < 40; i++) {       // 20 s
         if (WiFi.status() == WL_CONNECTED) {
             boatIP = WiFi.localIP().toString();
-            Serial.printf(" OK  %s\n", boatIP.c_str());
-            return true;
+            wifiWasConnected = true;
+            Serial.printf(" OK %s\n", boatIP.c_str());
+            blinkNav(2);
+            return;
         }
         delay(500);
         Serial.print(".");
     }
-    Serial.println(" FAIL");
-    WiFi.disconnect(true);
-    delay(100);
-    return false;
+    Serial.printf(" FAIL (status=%d)\n", WiFi.status());
+}
+
+// Non-blocking reconnect, called every loop. On WiFi loss it re-issues
+// WiFi.begin() (returns immediately) at most once per 30 s using the boot
+// credentials. No scan, no delay — outputs/iBUS/failsafe keep running.
+static void wifiMaintain() {
+    if (WiFi.status() == WL_CONNECTED) {
+        if (!wifiWasConnected) {
+            wifiWasConnected = true;
+            boatIP = WiFi.localIP().toString();
+            Serial.printf("[WiFi] reconnected: %s\n", boatIP.c_str());
+        }
+        return;
+    }
+    if (wifiWasConnected) {
+        wifiWasConnected = false;
+        Serial.println("[WiFi] lost — retrying in background; boat unaffected");
+    }
+    static uint32_t lastAttemptMs = 0;
+    if (millis() - lastAttemptMs >= 30000 && lastSsid.length() > 0) {
+        lastAttemptMs = millis();
+        WiFi.begin(lastSsid.c_str(), lastPass.c_str());
+    }
 }
 
 // ── CORS ───────────────────────────────────────────────────────────────────
@@ -71,13 +154,14 @@ static void handleStatus() {
 
 static void handleTelemetry() {
     addCORS();
-    StaticJsonDocument<1536> doc;
+    StaticJsonDocument<2048> doc;
     doc["v"]            = FIRMWARE_VERSION;
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
     doc["mode"]         = vesselModeName();
     doc["cruise_us"]    = cruiseUs;
+    doc["failsafe_ack"] = vesselFailsafeAck();
     doc["rc_ever_good"] = ibusEverGood();
     doc["rc_age_ms"]    = ibusEverGood() ? (millis() - ibusLastFrameMs()) : 0;
     doc["rudder_us"]    = motorsRudderUs();
@@ -89,63 +173,63 @@ static void handleTelemetry() {
     doc["ch_guard"]     = ibusChannel(IBUS_IDX_FAILSAFE_GUARD);
     doc["ch_gun_pan"]   = ibusChannel(IBUS_IDX_GUN_PAN);
     doc["gun_pan_us"]   = weaponsGunPanUs();
-
     doc["nav_on"]       = lightsState(LED_NAV);
     doc["bridge_on"]    = lightsState(LED_BRIDGE);
     doc["deck_on"]      = lightsState(LED_DECK);
-
     doc["audio_ok"]     = audioAvailable();
-
-    doc["bilge_fwd"]      = bilgeFwdWet();
-    doc["bilge_mid"]      = bilgeMidWet();
-    doc["bilge_rear"]     = bilgeRearWet();
-    doc["pump"]           = bilgePumpOn();
-    doc["pump_manual"]    = bilgePumpManual();
-    doc["pump_stuck"]     = bilgeStuck();
-    BilgePhase phase      = bilgePumpPhase();
-    doc["pump_phase"]     = (phase == BILGE_PHASE_ON)    ? "on"
-                          : (phase == BILGE_PHASE_PAUSE) ? "pause"
-                          : "off";
+    doc["bilge_fwd"]    = bilgeFwdWet();
+    doc["bilge_mid"]    = bilgeMidWet();
+    doc["bilge_rear"]   = bilgeRearWet();
+    doc["pump"]         = bilgePumpOn();
+    doc["pump_manual"]  = bilgePumpManual();
+    doc["pump_stuck"]   = bilgeStuck();
+    BilgePhase phase    = bilgePumpPhase();
+    doc["pump_phase"]   = (phase == BILGE_PHASE_ON)    ? "on"
+                        : (phase == BILGE_PHASE_PAUSE) ? "pause"
+                        : "off";
     if (phase != BILGE_PHASE_OFF) {
         doc["pump_cycle"]    = bilgePumpCycle();
         doc["pump_phase_ms"] = bilgePumpPhaseMs();
     }
-
     doc["radar_on"]       = radarOn();
     doc["radar_speed"]    = radarSpeed();
     doc["radar_burst_ms"] = radarBurstMs();
     doc["radar_pause_ms"] = radarPauseMs();
 
     doc["depth_mode"] = (sonarMode() == DEPTH_RUN) ? "run" : "off";
-    char buf[24];
     if (sonarLastDepthM() >= 0.0f) {
-        snprintf(buf, sizeof(buf), "%.2f", sonarLastDepthM());
-        doc["depth_m"] = buf;
+        char dbuf[12];
+        snprintf(dbuf, sizeof(dbuf), "%.2f", sonarLastDepthM());
+        doc["depth_m"] = dbuf;
     }
     if (sonarLastReadMs() > 0) {
         doc["depth_age_ms"] = millis() - sonarLastReadMs();
     }
 
-    snprintf(buf, sizeof(buf), "%.1f", imuHeading()); doc["heading"] = buf;
+    char buf[24];
+    // `heading` is the boat's best TRUE heading (mag + declination + COG
+    // trim) — directly comparable to `course` and `wp_bearing`.
+    snprintf(buf, sizeof(buf), "%.1f", imuHeadingTrue()); doc["heading"]     = buf;
+    snprintf(buf, sizeof(buf), "%.1f", imuHeadingMag());  doc["heading_mag"] = buf;
+    snprintf(buf, sizeof(buf), "%.1f", imuCogTrim());     doc["cog_trim"]    = buf;
     if (batteryAvailable()) {
         snprintf(buf, sizeof(buf), "%.2f", batteryVolts()); doc["batt_v"] = buf;
         snprintf(buf, sizeof(buf), "%.2f", batteryAmps());  doc["batt_a"] = buf;
     }
 
-    doc["gps_fix"]       = gpsValid();
-    doc["gps_simulated"] = gpsSimulated();
+    // Position
+    doc["gps_fix"] = gpsValid();
     if (gpsValid()) {
         snprintf(buf, sizeof(buf), "%.6f", gpsLat()); doc["lat"] = buf;
         snprintf(buf, sizeof(buf), "%.6f", gpsLon()); doc["lon"] = buf;
     }
-    if (!gpsSimulated()) {
-        doc["sats"] = (int)gpsSats();
-        if (gpsSpeedValid())  { snprintf(buf, sizeof(buf), "%.1f", gpsSpeedKnots()); doc["speed_kts"] = buf; }
-        if (gpsCourseValid()) { snprintf(buf, sizeof(buf), "%.1f", gpsCourseDeg());  doc["course"]    = buf; }
-    }
+    doc["sats"] = (int)gpsSats();
+    if (gpsSpeedValid())  { snprintf(buf, sizeof(buf), "%.1f", gpsSpeedKnots()); doc["speed_kts"] = buf; }
+    if (gpsCourseValid()) { snprintf(buf, sizeof(buf), "%.1f", gpsCourseDeg());  doc["course"]    = buf; }
 
-    doc["wp_set"]      = navWpSet();
-    doc["captured"]    = navCaptured();
+    // Waypoint
+    doc["wp_set"]   = navWpSet();
+    doc["captured"] = navCaptured();
     CapturedBy cb = navCapturedBy();
     doc["captured_by"] = (cb == CAPTURED_BY_DISTANCE) ? "distance"
                        : (cb == CAPTURED_BY_CROSSING) ? "crossing"
@@ -163,10 +247,35 @@ static void handleTelemetry() {
         }
     }
 
+    // PID (current live values)
     snprintf(buf, sizeof(buf), "%.2f", pidKp()); doc["pid_kp"] = buf;
     snprintf(buf, sizeof(buf), "%.2f", pidKd()); doc["pid_kd"] = buf;
 
-    char out[1536];
+    // ── Mag calibration / health ─────────────────────────────────────────
+    doc["mag_cal_state"]    = imuMagCalStateName();
+    doc["mag_cal_progress"] = imuMagCalProgressPct();
+    doc["mag_calibrated"]   = imuMagCalibrated();
+    doc["mag_cal_ts"]       = imuMagCalTs();
+    doc["mag_from_nvs"]     = imuMagFromNVS();
+    if (imuMagCalCollecting()) doc["mag_cal_mask"] = imuMagCalMask();
+    if (imuMagCalFailed())     doc["mag_cal_fail"] = imuMagCalFailReason();
+    doc["mag_cal_quality"] = imuMagCalQualityName();
+    if (imuMagCalQualityKnown()) {
+        snprintf(buf, sizeof(buf), "%.1f", imuMagCalRadiusUT()); doc["mag_cal_radius_uT"] = buf;
+        snprintf(buf, sizeof(buf), "%.0f", imuMagCalCircPct());  doc["mag_cal_circ_pct"]  = buf;
+    }
+    snprintf(buf, sizeof(buf), "%.2f", imuMagOffX());       doc["mag_off_x"]       = buf;
+    snprintf(buf, sizeof(buf), "%.2f", imuMagOffY());       doc["mag_off_y"]       = buf;
+    snprintf(buf, sizeof(buf), "%.2f", imuMagOffZ());       doc["mag_off_z"]       = buf;
+    snprintf(buf, sizeof(buf), "%.2f", imuMagBaselineUT()); doc["mag_baseline_uT"] = buf;
+    snprintf(buf, sizeof(buf), "%.2f", imuLiveMagUT());     doc["mag_uT"]          = buf;
+
+    // A truncated payload is invalid JSON the app can't parse — warn (only
+    // near the edge) so the operator isn't silently blinded.
+    size_t jsonLen = measureJson(doc);
+    if (jsonLen > 1800) Serial.printf("[telemetry] WARN json=%u bytes near 2048 buffer\n", (unsigned)jsonLen);
+
+    char out[2048];
     serializeJson(doc, out);
     server.send(200, "application/json", out);
 }
@@ -183,8 +292,10 @@ static void handleCruise() {
     if (req.containsKey("us")) {
         int us = req["us"].as<int>();
         if (us < NEUTRAL_US || us > MAX_FWD_US) {
-            server.send(400, "application/json",
-                "{\"ok\":false,\"err\":\"us out of [1500..1800]\"}");
+            char err[80];
+            snprintf(err, sizeof(err),
+                "{\"ok\":false,\"err\":\"us out of [%u..%u]\"}", NEUTRAL_US, MAX_FWD_US);
+            server.send(400, "application/json", err);
             return;
         }
         newUs = (uint16_t)us;
@@ -217,6 +328,7 @@ static void handleWaypoint() {
     StaticJsonDocument<128> req;
     if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
 
+    // {"lat":null,"lon":null} → clear waypoint and reset capture latch.
     if (req["lat"].isNull() || req["lon"].isNull()) {
         navClearWaypoint();
         server.send(200, "application/json", "{\"ok\":true,\"cleared\":true}");
@@ -228,7 +340,14 @@ static void handleWaypoint() {
     }
     float lat = req["lat"].as<float>();
     float lon = req["lon"].as<float>();
-    navSetWaypoint(lat, lon);
+    float d   = 0.0f;
+    if (!navTrySetWaypoint(lat, lon, &d)) {
+        char err[96];
+        snprintf(err, sizeof(err),
+            "{\"ok\":false,\"err\":\"waypoint %.0f m away (max %.0f m)\"}", d, MAX_WP_DIST_M);
+        server.send(400, "application/json", err);
+        return;
+    }
 
     StaticJsonDocument<128> resp;
     resp["ok"]  = true;
@@ -252,16 +371,14 @@ static void handlePid() {
     if (req.containsKey("kp")) {
         kp = req["kp"].as<float>();
         if (kp < 0.0f || kp > 20.0f) {
-            server.send(400, "application/json",
-                "{\"ok\":false,\"err\":\"kp out of [0..20]\"}");
+            server.send(400, "application/json", "{\"ok\":false,\"err\":\"kp out of [0..20]\"}");
             return;
         }
     }
     if (req.containsKey("kd")) {
         kd = req["kd"].as<float>();
         if (kd < 0.0f || kd > 30.0f) {
-            server.send(400, "application/json",
-                "{\"ok\":false,\"err\":\"kd out of [0..30]\"}");
+            server.send(400, "application/json", "{\"ok\":false,\"err\":\"kd out of [0..30]\"}");
             return;
         }
     }
@@ -276,29 +393,31 @@ static void handlePid() {
     server.send(200, "application/json", out);
 }
 
-static void handleSimGps() {
+static void handleCalibrateMagStart() {
     addCORS();
     if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
     if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
 
-    StaticJsonDocument<128> req;
-    if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
-    if (!req.containsKey("lat") || !req.containsKey("lon")) {
-        server.send(400, "text/plain", "Need lat and lon");
+    if (imuMagCalCollecting()) {
+        server.send(200, "application/json",
+            "{\"ok\":true,\"state\":\"collecting\",\"note\":\"already running\"}");
         return;
     }
-    float lat = req["lat"].as<float>();
-    float lon = req["lon"].as<float>();
-    gpsSimSet(lat, lon);
+    imuMagCalBegin();
+    server.send(200, "application/json", "{\"ok\":true,\"state\":\"collecting\"}");
+}
 
-    StaticJsonDocument<128> resp;
-    resp["ok"]            = true;
-    resp["lat"]           = lat;
-    resp["lon"]           = lon;
-    resp["gps_simulated"] = true;
-    char out[128];
-    serializeJson(resp, out);
-    server.send(200, "application/json", out);
+static void handleCalibrateMagAbort() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    if (!imuMagCalAbort()) {
+        server.send(200, "application/json",
+            "{\"ok\":true,\"state\":\"idle\",\"note\":\"not collecting\"}");
+        return;
+    }
+    server.send(200, "application/json", "{\"ok\":true,\"state\":\"idle\"}");
 }
 
 static void handleLed() {
@@ -327,8 +446,7 @@ static void handleAudio() {
     if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
 
     if (!audioAvailable()) {
-        server.send(503, "application/json",
-            "{\"ok\":false,\"err\":\"DF1201S not initialised\"}");
+        server.send(503, "application/json", "{\"ok\":false,\"err\":\"DF1201S not initialised\"}");
         return;
     }
 
@@ -387,10 +505,15 @@ static void handleRadar() {
     uint32_t b  = radarBurstMs();
     uint32_t p  = radarPauseMs();
 
-    if (req.containsKey("on"))       on = req["on"].as<bool>();
-    if (req.containsKey("speed"))    s  = (uint8_t)req["speed"].as<int>();
-    if (req.containsKey("burst_ms")) b  = (uint32_t)req["burst_ms"].as<long>();
-    if (req.containsKey("pause_ms")) p  = (uint32_t)req["pause_ms"].as<long>();
+    if (req.containsKey("on")) on = req["on"].as<bool>();
+    if (req.containsKey("speed")) {
+        int v = req["speed"].as<int>();
+        if (v < 0)   v = 0;
+        if (v > 100) v = 100;
+        s = (uint8_t)v;
+    }
+    if (req.containsKey("burst_ms")) b = (uint32_t)req["burst_ms"].as<long>();
+    if (req.containsKey("pause_ms")) p = (uint32_t)req["pause_ms"].as<long>();
     radarSet(on, s, b, p);
 
     StaticJsonDocument<160> resp;
@@ -417,8 +540,7 @@ static void handleDepth() {
     else if (!strcmp(m, "check")) sonarPingNow();
     else if (!strcmp(m, "run"))   sonarSetMode(DEPTH_RUN);
     else {
-        server.send(400, "application/json",
-            "{\"ok\":false,\"err\":\"mode must be stop|check|run\"}");
+        server.send(400, "application/json", "{\"ok\":false,\"err\":\"mode must be stop|check|run\"}");
         return;
     }
 
@@ -426,36 +548,132 @@ static void handleDepth() {
     resp["ok"]   = true;
     resp["mode"] = (sonarMode() == DEPTH_RUN) ? "run" : "off";
     if (sonarLastDepthM() >= 0.0f) {
-        char buf[12];
-        snprintf(buf, sizeof(buf), "%.2f", sonarLastDepthM());
-        resp["depth_m"] = buf;
+        char dbuf[12];
+        snprintf(dbuf, sizeof(dbuf), "%.2f", sonarLastDepthM());
+        resp["depth_m"] = dbuf;
     }
     char out[128];
     serializeJson(resp, out);
     server.send(200, "application/json", out);
 }
 
-void telemetryBegin() {
-    sessionId = esp_random();   // app uses this to detect mid-flight reboots
-    WiFi.mode(WIFI_STA);
-    if (!tryConnect(SECRET_HOME_SSID, SECRET_HOME_PASS, 10)) {
-        if (!tryConnect(SECRET_HOTSPOT_SSID, SECRET_HOTSPOT_PASS, 10)) {
-            Serial.println("[WiFi] no network — operating without HTTP. RC + autopilot still active.");
+// ── /history (store-and-sync gap backfill) ──────────────────────────────────
+// GET /history?since_ms=<uptimeMs> → records with uptimeMs > since_ms, oldest
+// first, capped at HISTLOG_PAGE_MAX. Response:
+//   {"session_id":N,"more":bool,"records":[ {…compact telemetry…}, … ]}
+// The app pages by re-requesting with since_ms = the last record's uptime_ms,
+// and finalizes the flight (rather than backfilling) when session_id changes.
+// Record keys + value types mirror /telemetry so the app slots them straight
+// into the same flight log; invalid fields are omitted, exactly as live.
+static void appendHistRecord(String& out, const HistRecord* r) {
+    char buf[320];
+    const char* modeStr = (r->mode == 1) ? "MANUAL"
+                        : (r->mode == 2) ? "AUTO"
+                        : (r->mode == 3) ? "FAILSAFE" : "IDLE";
+    bool fix = r->flags & HIST_F_GPS_FIX;
+    snprintf(buf, sizeof(buf),
+        "{\"seq\":%lu,\"uptime_ms\":%lu,\"mode\":\"%s\","
+        "\"esc_us\":%d,\"rudder_us\":%d,\"heading\":\"%.1f\","
+        "\"gps_fix\":%s,\"sats\":%u",
+        (unsigned long)r->seq, (unsigned long)r->uptimeMs, modeStr,
+        r->escUs, r->rudderUs, r->heading10 / 10.0f,
+        fix ? "true" : "false", r->sats);
+    out += buf;
+
+    if (fix) {
+        snprintf(buf, sizeof(buf), ",\"lat\":\"%.6f\",\"lon\":\"%.6f\"",
+                 r->lat1e7 / 1e7, r->lon1e7 / 1e7);
+        out += buf;
+    }
+    if (r->speedKts100 != INT16_MIN) {
+        snprintf(buf, sizeof(buf), ",\"speed_kts\":\"%.1f\"", r->speedKts100 / 100.0f); out += buf;
+    }
+    if (r->course10 != INT16_MIN) {
+        snprintf(buf, sizeof(buf), ",\"course\":\"%.1f\"", r->course10 / 10.0f); out += buf;
+    }
+    if (r->battCv != INT16_MIN) {
+        snprintf(buf, sizeof(buf), ",\"batt_v\":\"%.2f\",\"batt_a\":\"%.2f\"",
+                 r->battCv / 100.0f, r->battCa / 100.0f);
+        out += buf;
+    }
+    if (r->depthCm >= 0) {
+        snprintf(buf, sizeof(buf), ",\"depth_m\":\"%.2f\"", r->depthCm / 100.0f); out += buf;
+    }
+    snprintf(buf, sizeof(buf), ",\"wp_set\":%s,\"captured\":%s",
+             (r->flags & HIST_F_WP_SET)  ? "true" : "false",
+             (r->flags & HIST_F_CAPTURED) ? "true" : "false");
+    out += buf;
+    if (r->wpDist10 >= 0) {
+        snprintf(buf, sizeof(buf), ",\"wp_dist_m\":\"%.1f\"", r->wpDist10 / 10.0f); out += buf;
+    }
+    snprintf(buf, sizeof(buf), ",\"pump\":%s,\"failsafe_ack\":%s}",
+             (r->flags & HIST_F_PUMP)         ? "true" : "false",
+             (r->flags & HIST_F_FAILSAFE_ACK) ? "true" : "false");
+    out += buf;
+}
+
+static void handleHistory() {
+    addCORS();
+
+    uint32_t since = 0;
+    if (server.hasArg("since_ms")) since = strtoul(server.arg("since_ms").c_str(), NULL, 10);
+
+    // Chunked send so we never build the whole page in one big buffer.
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+
+    char head[80];
+    snprintf(head, sizeof(head), "{\"session_id\":%lu,\"more\":", (unsigned long)sessionId);
+
+    uint16_t n = histlogCount();
+    uint16_t sent = 0;
+    bool     more = false;
+    String   recsOut;                 // accumulates a few records, flushed in batches
+    recsOut.reserve(2048);
+
+    // Decide `more` up front so it can go in the header chunk: count how many
+    // records qualify; if that exceeds the page cap, there's a next page.
+    for (uint16_t i = 0; i < n; i++) {
+        const HistRecord* r = histlogAt(i);
+        if (r && r->uptimeMs > since) {
+            if (sent >= HISTLOG_PAGE_MAX) { more = true; break; }
+            sent++;
         }
     }
+
+    server.sendContent(head);
+    server.sendContent(more ? "true,\"records\":[" : "false,\"records\":[");
+
+    uint16_t emitted = 0;
+    for (uint16_t i = 0; i < n && emitted < HISTLOG_PAGE_MAX; i++) {
+        const HistRecord* r = histlogAt(i);
+        if (!r || r->uptimeMs <= since) continue;
+        if (emitted > 0) recsOut += ',';
+        appendHistRecord(recsOut, r);
+        emitted++;
+        if (recsOut.length() > 1536) { server.sendContent(recsOut); recsOut = ""; }
+    }
+    if (recsOut.length()) server.sendContent(recsOut);
+    server.sendContent("]}");
+    server.sendContent("");           // terminate chunked response
+}
+
+void telemetryBegin() {
+    sessionId = esp_random();   // app uses this to detect mid-flight reboots
+    wifiConnect();
 
     server.on("/status",    HTTP_GET,     handleStatus);
     server.on("/status",    HTTP_OPTIONS, handleOptions);
     server.on("/telemetry", HTTP_GET,     handleTelemetry);
     server.on("/telemetry", HTTP_OPTIONS, handleOptions);
+    server.on("/history",   HTTP_GET,     handleHistory);
+    server.on("/history",   HTTP_OPTIONS, handleOptions);
     server.on("/cruise",    HTTP_POST,    handleCruise);
     server.on("/cruise",    HTTP_OPTIONS, handleOptions);
     server.on("/waypoint",  HTTP_POST,    handleWaypoint);
     server.on("/waypoint",  HTTP_OPTIONS, handleOptions);
     server.on("/pid",       HTTP_POST,    handlePid);
     server.on("/pid",       HTTP_OPTIONS, handleOptions);
-    server.on("/sim_gps",   HTTP_POST,    handleSimGps);
-    server.on("/sim_gps",   HTTP_OPTIONS, handleOptions);
     server.on("/led",       HTTP_POST,    handleLed);
     server.on("/led",       HTTP_OPTIONS, handleOptions);
     server.on("/audio",     HTTP_POST,    handleAudio);
@@ -466,10 +684,17 @@ void telemetryBegin() {
     server.on("/radar",     HTTP_OPTIONS, handleOptions);
     server.on("/depth",     HTTP_POST,    handleDepth);
     server.on("/depth",     HTTP_OPTIONS, handleOptions);
+    server.on("/calibrate_mag/start", HTTP_POST,    handleCalibrateMagStart);
+    server.on("/calibrate_mag/start", HTTP_OPTIONS, handleOptions);
+    server.on("/calibrate_mag/abort", HTTP_POST,    handleCalibrateMagAbort);
+    server.on("/calibrate_mag/abort", HTTP_OPTIONS, handleOptions);
     server.begin();
     if (boatIP.length()) {
         Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
     }
 }
 
-void telemetryUpdate() { server.handleClient(); }
+void telemetryUpdate() {
+    server.handleClient();
+    wifiMaintain();
+}

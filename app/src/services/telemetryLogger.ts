@@ -6,9 +6,15 @@
 //      public API as before; TelemetryScreen still controls it manually.
 //   2. Auto engine (initAutoLogger) — always-on subscriber that
 //      auto-starts the recorder when the boat is throttled up, and
-//      auto-saves the captured rows as a "flight" in storage when
-//      the boat goes away (telemetry lost / boat rebooted) or the
-//      operator manually stops.
+//      auto-saves the captured rows as a "flight" in storage.
+//
+//      Store-and-sync: a WiFi dropout no longer ends the flight. When
+//      telemetry resumes with the same session_id, the gap is detected
+//      (the boat's uptime jumped past the last frame we saw) and the
+//      missing records are pulled from the boat's /history ring and
+//      merged in — so the flight log stays unbroken across the outage.
+//      A flight is finalized only on a reboot (session_id change), a long
+//      unrecovered absence (boat truly gone), or a manual stop.
 //
 // Persistence:
 //   ${documentDirectory}flights/<id>.csv   — CSV body, one file per flight.
@@ -18,11 +24,12 @@
 // Legacy AsyncStorage layout (flight:<id> → CSV body) is migrated on
 // first listFlights() call after upgrade.
 
-import { Share } from 'react-native';
+import { Share, AppState, AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { TelemetryData } from '../types';
-import { subscribe } from './websocketService';
+import { subscribe, getCurrentIP } from './websocketService';
+import { fetchHistorySince, HistoryRecord } from './historyService';
 
 export interface LogRow extends TelemetryData {
   ts: number;             // ms since epoch when the frame was received
@@ -53,6 +60,13 @@ export interface FlightMeta {
 const FLIGHTS_INDEX_KEY  = 'flights:index';
 const LEGACY_FLIGHT_KEY  = 'flight:';  // AsyncStorage key prefix for v1 bodies
 const FLIGHT_DIR         = (FileSystem.documentDirectory ?? '') + 'flights/';
+// Crash-safety: the in-progress flight is mirrored here on a timer while
+// recording, so a kill/eviction before finalize loses at most the last
+// checkpoint interval (not the whole flight). Cleared on finalize/clear,
+// recovered into a real flight on next launch. Not in the flights index, so
+// it never shows in the flight list. Leading underscore keeps it out of the
+// way of timestamp-named flight files.
+const DRAFT_PATH         = FLIGHT_DIR + '_draft.csv';
 
 // Cap at 7200 rows ≈ 2 hours @ 1 Hz. Drops oldest when full.
 const MAX_ROWS = 7200;
@@ -60,8 +74,18 @@ const MAX_ROWS = 7200;
 // Auto-engine tuning.
 const AUTO_ESC_DEADBAND_US   = 30;        // |esc_us - 1500| must exceed this
 const AUTO_ESC_DEBOUNCE_MS   = 500;       // ...for this long to auto-start
-const AUTO_LOST_THRESHOLD_MS = 60_000;    // 60 s of no frames = boat is gone
+// Boat truly gone → finalize so the flight isn't lost. Set well above any
+// realistic WiFi dropout: a blip is bridged by /history backfill, not by
+// ending the flight. Tied to the boat's ~20 min history ring — beyond it the
+// gap can't be fully recovered anyway. Manual stop ends a flight immediately.
+const AUTO_GONE_THRESHOLD_MS = 300_000;   // 5 min of no frames = boat is gone
 const AUTO_TICK_MS           = 5_000;     // how often to check for telemetry loss
+// Uptime jump (s) between two received frames that means we missed data and
+// should backfill the hole from /history. Normal cadence is ~1 s/frame.
+const GAP_TRIGGER_S          = 3;
+const BACKFILL_MAX_PAGES     = 50;
+// How often the running flight is mirrored to the draft file (crash-safety).
+const CHECKPOINT_MS          = 30_000;
 
 // Stats tuning.
 // GPS jitter floor: per-step displacements under this are noise, not real
@@ -81,6 +105,7 @@ function notifyRunning() { for (const fn of runningListeners) fn(unsubscribe !==
 
 export function start() {
   if (unsubscribe) return;
+  lastCheckpointAt = 0;   // checkpoint on the next tick, not 30 s in
   unsubscribe = subscribe((data) => {
     rows.push({ ts: Date.now(), ...data });
     if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
@@ -104,6 +129,7 @@ export function stop() {
 // recording — matches the existing TelemetryScreen CLEAR button.
 export function clear() {
   rows = [];
+  deleteDraft().catch(() => {});   // don't let a stale draft resurrect discarded rows
   notifyCount();
 }
 
@@ -510,6 +536,57 @@ async function finalizeAndSave(): Promise<void> {
   const index = await readIndex();
   index.push({ id, startTs, endTs, rowCount: snapshot.length, storage: 'fs', ...stats });
   await writeIndex(index);
+  await deleteDraft();   // the flight is now persisted properly
+}
+
+// ── Crash-safety draft (mirror in-progress flight to disk) ──────────────────
+
+// Best-effort mirror of the current buffer. Called on a timer while recording.
+async function checkpointDraft(): Promise<void> {
+  if (rows.length === 0) return;
+  try {
+    await ensureFlightDir();
+    await FileSystem.writeAsStringAsync(DRAFT_PATH, rowsToCSV(rows));
+  } catch (e) {
+    console.warn('[telemetryLogger] draft checkpoint failed', e);
+  }
+}
+
+async function deleteDraft(): Promise<void> {
+  try { await FileSystem.deleteAsync(DRAFT_PATH, { idempotent: true }); } catch {}
+}
+
+// On launch, turn any leftover draft (app killed mid-flight last time) into a
+// real saved flight, then remove it. Idempotent: if a flight with the derived
+// id already exists, just drop the draft.
+async function recoverDraft(): Promise<void> {
+  let csv: string | null = null;
+  try {
+    const info = await FileSystem.getInfoAsync(DRAFT_PATH);
+    if (!info.exists) return;
+    csv = await FileSystem.readAsStringAsync(DRAFT_PATH);
+  } catch {
+    return;
+  }
+  const parsed = csv ? parseCSV(csv) : [];
+  if (parsed.length === 0) { await deleteDraft(); return; }
+
+  try {
+    const startTs = tsMs(parsed[0].ts);
+    const endTs   = tsMs(parsed[parsed.length - 1].ts);
+    const id      = new Date(startTs).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const index   = await readIndex();
+    if (!index.some((m) => m.id === id)) {
+      await writeFlightFile(id, csv as string);
+      const stats = computeStats(parsed);
+      index.push({ id, startTs, endTs, rowCount: parsed.length, storage: 'fs', ...stats });
+      await writeIndex(index);
+    }
+  } catch (e) {
+    console.warn('[telemetryLogger] draft recovery failed', e);
+    return;   // leave the draft for a future retry rather than losing it
+  }
+  await deleteDraft();
 }
 
 // ── Auto engine ────────────────────────────────────────────────────────────
@@ -519,39 +596,163 @@ let autoLastSessionId: number | null = null;
 let autoLastFrameAt      = 0;
 let autoEscAboveSince: number | null = null;
 let autoTickHandle: ReturnType<typeof setInterval> | null = null;
+// uptime (s) of the previous frame we saw — used to spot a gap on reconnect.
+let autoPrevUptimeS: number | null = null;
+let backfillInProgress   = false;
+// Foreground state. While the app is backgrounded (e.g. you switch to the
+// camera) iOS freezes its poll timer, so it stops hearing the boat even though
+// the boat is fine and still recording. We must not mistake that silence for
+// "boat gone": the gap is backfilled frame-driven once polling resumes, exactly
+// like a WiFi dropout. See onAppStateChange + autoTick.
+let appState: AppStateStatus = 'active';
+let appStateSub: { remove: () => void } | null = null;
+
+function onAppStateChange(next: AppStateStatus) {
+  const wasActive = appState === 'active';
+  appState = next;
+  if (next === 'active' && !wasActive && unsubscribe) {
+    // Returned to foreground: the silence while away wasn't the boat leaving,
+    // so give it a fresh boat-gone window. The missed records (incl. depth) are
+    // pulled in when the next poll frame arrives and autoOnFrame sees the jump.
+    autoLastFrameAt = Date.now();
+  }
+}
 
 function autoOnFrame(data: TelemetryData) {
   const now = Date.now();
   autoLastFrameAt = now;
 
-  // 1. Session-change detection (boat rebooted while we stayed connected).
+  // 1. Reboot detection (session_id changed). A reboot is a hard flight
+  //    boundary — the boat's history ring is cleared, so we can't backfill
+  //    across it. Finalize the pre-reboot flight.
+  let rebooted = false;
   if (data.session_id != null) {
     if (autoLastSessionId != null && data.session_id !== autoLastSessionId) {
+      rebooted = true;
       if (unsubscribe) stop();  // saves current flight, halts recorder
     }
     autoLastSessionId = data.session_id;
   }
+  if (rebooted) autoPrevUptimeS = null;
 
   // 2. Throttle-up detection — ESC commanded out of neutral for the
   //    debounce window. Uses the boat's commanded ESC µs (not raw CH3)
   //    so MANUAL forward, MANUAL reverse-via-right-stick, and AUTO
   //    cruise all trigger uniformly.
+  let justStarted = false;
   if (data.esc_us != null && Math.abs(data.esc_us - 1500) > AUTO_ESC_DEADBAND_US) {
     if (autoEscAboveSince == null) autoEscAboveSince = now;
     if (!unsubscribe && (now - autoEscAboveSince) >= AUTO_ESC_DEBOUNCE_MS) {
       clear();   // ensure clean buffer for the new flight
       start();
+      justStarted = true;  // don't backfill pre-flight history into a fresh flight
     }
   } else {
     autoEscAboveSince = null;
   }
+
+  // 3. Gap backfill — if a flight is running and this frame's uptime jumped
+  //    well past the previous frame's, we missed data (a WiFi dropout we just
+  //    recovered from). Pull the hole from the boat's /history ring and merge
+  //    it in. This frame is the wall-clock anchor for converting record
+  //    uptimes to timestamps.
+  if (
+    unsubscribe && !rebooted && !justStarted &&
+    data.uptime != null && autoPrevUptimeS != null &&
+    data.uptime - autoPrevUptimeS > GAP_TRIGGER_S
+  ) {
+    void backfillGap(autoPrevUptimeS * 1000, data.uptime * 1000, now, data.session_id ?? null, data.v);
+  }
+
+  if (data.uptime != null) autoPrevUptimeS = data.uptime;
 }
 
+// Pull every record in (sinceMs, now] from the boat and merge the ones we're
+// missing into the running flight. Guarded so only one runs at a time.
+async function backfillGap(
+  sinceMs: number,
+  anchorUptimeMs: number,
+  anchorWallMs: number,
+  expectSessionId: number | null,
+  version?: string,
+): Promise<void> {
+  if (backfillInProgress) return;
+  const ip = getCurrentIP();
+  if (!ip) return;
+  backfillInProgress = true;
+  try {
+    const { sessionId, records } = await fetchHistorySince(ip, sinceMs, BACKFILL_MAX_PAGES);
+    // If the boat rebooted between the anchor frame and our fetch, the ring is
+    // a different flight — don't merge across the boundary.
+    if (expectSessionId != null && sessionId !== expectSessionId) return;
+    if (!unsubscribe) return;  // flight ended (e.g. manual stop) while fetching
+    mergeBackfill(records, anchorUptimeMs, anchorWallMs, version);
+  } catch (e) {
+    console.warn('[telemetryLogger] backfill failed', e);
+  } finally {
+    backfillInProgress = false;
+  }
+}
+
+// Insert backfilled records into `rows`, skipping any second already covered by
+// a live frame, then re-sort by timestamp. Each record's wall-clock ts is
+// derived from the anchor frame: ts = anchorWall - (anchorUptime - recUptime).
+function mergeBackfill(
+  records: HistoryRecord[],
+  anchorUptimeMs: number,
+  anchorWallMs: number,
+  version?: string,
+): void {
+  if (records.length === 0) return;
+
+  const seenSec = new Set<number>();
+  for (const r of rows) {
+    const u = (r as unknown as { uptime?: number }).uptime;
+    if (typeof u === 'number') seenSec.add(Math.round(u));
+  }
+
+  let added = 0;
+  for (const rec of records) {
+    const sec = Math.round(rec.uptime_ms / 1000);
+    if (seenSec.has(sec)) continue;  // already have a live frame for this second
+    seenSec.add(sec);
+
+    const { seq, uptime_ms, ...fields } = rec;
+    void seq;
+    const ts = anchorWallMs - (anchorUptimeMs - uptime_ms);
+    const row = { ...fields, ts, uptime: sec, v: version ?? '' } as unknown as LogRow;
+    rows.push(row);
+    added++;
+  }
+
+  if (added === 0) return;
+  rows.sort((a, b) => a.ts - b.ts);
+  if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
+  notifyCount();
+}
+
+let lastCheckpointAt = 0;
+
 function autoTick() {
-  // Telemetry-loss detection. Only relevant while a flight is running.
+  // Only relevant while a flight is running.
   if (!unsubscribe) return;
+
+  // Crash-safety: mirror the in-progress flight to disk periodically so an app
+  // kill/eviction before finalize loses at most CHECKPOINT_MS of data.
+  const now = Date.now();
+  if (now - lastCheckpointAt >= CHECKPOINT_MS) {
+    lastCheckpointAt = now;
+    void checkpointDraft();
+  }
+
+  // Boat-gone detection. A short/medium WiFi dropout is bridged by /history
+  // backfill, not by ending the flight, so the threshold is deliberately long.
+  // Only judge "gone" while foregrounded: a backgrounded app isn't polling, so
+  // its silence says nothing about the boat. (Also covers the first tick after
+  // resume firing before onAppStateChange — appState still reads non-active.)
+  if (appState !== 'active') return;
   if (autoLastFrameAt === 0) return;
-  if (Date.now() - autoLastFrameAt > AUTO_LOST_THRESHOLD_MS) {
+  if (now - autoLastFrameAt > AUTO_GONE_THRESHOLD_MS) {
     stop();  // saves the flight
   }
 }
@@ -561,7 +762,10 @@ function autoTick() {
 export function initAutoLogger() {
   if (autoInitialized) return;
   autoInitialized = true;
+  void recoverDraft();   // salvage a flight the app was killed mid-recording
   subscribe(autoOnFrame);
+  appState = AppState.currentState ?? 'active';
+  appStateSub = AppState.addEventListener('change', onAppStateChange);
   autoTickHandle = setInterval(autoTick, AUTO_TICK_MS);
 }
 
@@ -569,5 +773,6 @@ export function initAutoLogger() {
 // the tick interval can be torn down cleanly if needed.
 export function shutdownAutoLogger() {
   if (autoTickHandle) { clearInterval(autoTickHandle); autoTickHandle = null; }
+  if (appStateSub) { appStateSub.remove(); appStateSub = null; }
   autoInitialized = false;
 }
