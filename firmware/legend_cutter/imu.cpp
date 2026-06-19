@@ -346,15 +346,44 @@ void imuUpdateCogTrim() {
 }
 
 // Heading-hold output. D-term uses headingRateDps from imuUpdate() (IMU
-// cadence), not a loop-rate recompute.
+// cadence), not a loop-rate recompute. Slew limiting prevents instant
+// full-deflection steps; deadband suppresses rudder hunting near setpoint.
+static uint16_t lastAutoRudder = NEUTRAL_US;
+static uint32_t lastSlewMs     = 0;
+
 uint16_t imuHeadingHoldUs(float target) {
-    if (!headingInit) return NEUTRAL_US;
+    if (!headingInit) {
+        lastAutoRudder = NEUTRAL_US;
+        return NEUTRAL_US;
+    }
     float err  = shortestPathError(target, imuHeadingTrue());
     float dErr = -headingRateDps;
-    int v = (int)(NEUTRAL_US + livePidKp * err + livePidKd * dErr);
-    if (v < RUDDER_MIN_US) v = RUDDER_MIN_US;
-    if (v > RUDDER_MAX_US) v = RUDDER_MAX_US;
-    return (uint16_t)v;
+
+    int desired;
+    if (fabsf(err) < AUTO_HEADING_DEADBAND_DEG) {
+        desired = NEUTRAL_US;
+    } else {
+        desired = (int)(NEUTRAL_US + livePidKp * err + livePidKd * dErr);
+        if (desired < (int)RUDDER_MIN_US) desired = (int)RUDDER_MIN_US;
+        if (desired > (int)RUDDER_MAX_US) desired = (int)RUDDER_MAX_US;
+    }
+
+    uint32_t now = millis();
+    float    dt  = (now - lastSlewMs) * 0.001f;
+    lastSlewMs = now;
+    if (dt > 0.5f) {            // AUTO was disengaged — reset slew state
+        lastAutoRudder = NEUTRAL_US;
+        dt = 0.0f;
+    }
+    int maxDelta = (int)(AUTO_RUDDER_SLEW_US_PER_S * dt + 0.5f);
+    int delta    = desired - (int)lastAutoRudder;
+    if (delta >  maxDelta) delta =  maxDelta;
+    if (delta < -maxDelta) delta = -maxDelta;
+    int v = (int)lastAutoRudder + delta;
+    if (v < (int)RUDDER_MIN_US) v = (int)RUDDER_MIN_US;
+    if (v > (int)RUDDER_MAX_US) v = (int)RUDDER_MAX_US;
+    lastAutoRudder = (uint16_t)v;
+    return lastAutoRudder;
 }
 
 void  setPidGains(float kp, float kd) { livePidKp = kp; livePidKd = kd; }

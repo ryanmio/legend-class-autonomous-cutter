@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.5.0"
+#define FIRMWARE_VERSION "0.5.1"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -97,8 +97,12 @@ static const uint32_t GPS_BAUD   = 9600;
 // ── IMU (ICM-20948) + heading hold ─────────────────────────────────────────
 static const uint32_t IMU_UPDATE_INTERVAL_MS = 20;
 // Default heading-hold gains; live-tunable via POST /pid.
-static const float    DEFAULT_KP   = 3.0f;
+static const float    DEFAULT_KP   = 1.5f;
 static const float    DEFAULT_KD   = 8.0f;
+// AUTO steering smoothing: deadband suppresses hunting near setpoint;
+// slew caps how fast the rudder servo can move (µs/s, 0→full in ~2 s).
+static const float    AUTO_HEADING_DEADBAND_DEG  = 5.0f;
+static const float    AUTO_RUDDER_SLEW_US_PER_S  = 85.0f;
 // Default mag offsets — used only as the fallback when NVS holds no cal, so
 // flashing produces zero behavior change pre-cal. Real cal via
 // /calibrate_mag/start overwrites these and saves to NVS.
