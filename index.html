@@ -335,7 +335,7 @@
     </a>
     <nav>
       <a href="#capabilities">Capabilities</a>
-      <a href="#modesim">How it works</a>
+      <a href="#navsim">How it works</a>
       <a href="#hardware">Hardware</a>
       <a class="repo" href="https://github.com/ryanmio/legend-class-autonomous-cutter">Repo ↗</a>
     </nav>
@@ -463,59 +463,13 @@
   </div>
 </section>
 
-<div class="rule" role="presentation"></div>
-
-<!-- ====================== MODE ARBITRATION ====================== -->
-<section class="sim modes" id="modesim">
-  <div class="wrap">
-    <div class="sec-head"><span class="no">02</span><h2>Who has control</h2></div>
-    <p class="lede">Three states, one rule — the transmitter sits at the top of the priority stack.
-      Flip the mode switch and the human takes over instantly; lose the RC link and the boat fails
-      safe on its own. Below, that arbitration, on a loop.</p>
-
-    <div class="sim-wrap">
-      <div class="mode-stage">
-        <div class="mstate" data-s="MANUAL">
-          <span class="mdot"></span>
-          <div class="mbody"><h3>Manual</h3><p>Sticks drive rudder and throttle directly.</p></div>
-          <span class="mflag">standby</span>
-        </div>
-        <div class="mstate" data-s="AUTO">
-          <span class="mdot"></span>
-          <div class="mbody"><h3>Auto</h3><p>Holds heading to the waypoint by rudder + differential thrust.</p></div>
-          <span class="mflag">standby</span>
-        </div>
-        <div class="mstate fail" data-s="FAILSAFE">
-          <span class="mdot"></span>
-          <div class="mbody"><h3>Failsafe</h3><p>Throttle zero, rudder centered. Latches until the helm is taken.</p></div>
-          <span class="mflag">standby</span>
-        </div>
-        <div class="mode-narr" id="m-narr">—</div>
-      </div>
-
-      <div class="sim-read" aria-hidden="true">
-        <div class="top">
-          <span class="label">Control surface</span>
-          <span class="mode"><span class="dot"></span><span id="m-state">—</span></span>
-        </div>
-        <div class="rows">
-          <div class="row"><span class="k">Mode switch (SwA)</span><span class="v"><span class="pill" id="m-swa">—</span></span></div>
-          <div class="row"><span class="k">RC link</span><span class="v"><span class="pill" id="m-link">—</span></span></div>
-          <div class="row"><span class="k">Throttle</span><span class="v" id="m-thr">—</span></div>
-          <div class="row"><span class="k">Rudder</span><span class="v" id="m-rud">—</span></div>
-        </div>
-        <div class="foot">Mode-arbitration FSM · illustration</div>
-      </div>
-    </div>
-  </div>
-</section>
 
 <div class="rule" role="presentation"></div>
 
 <!-- ====================== NAV SIM ====================== -->
 <section class="sim" id="navsim">
   <div class="wrap">
-    <div class="sec-head"><span class="no">03</span><h2>How it holds a waypoint</h2></div>
+    <div class="sec-head"><span class="no">02</span><h2>How it holds a waypoint</h2></div>
     <p class="lede">The boat steers toward a posted waypoint with its twin rudders and differential
       thrust, captures it once inside a set radius, then advances to the next. Below is that logic,
       simulated.</p>
@@ -544,46 +498,13 @@
   </div>
 </section>
 
-<div class="rule" role="presentation"></div>
-
-<!-- ====================== STEERING SIM ====================== -->
-<section class="sim" id="steersim">
-  <div class="wrap">
-    <div class="sec-head"><span class="no">04</span><h2>How it steers</h2></div>
-    <p class="lede">Heading-hold turns a compass error into a steering command: the twin rudders
-      deflect and the port and starboard motors split thrust until the bow swings onto the target
-      bearing — then a deadband holds it steady. Below, that loop, simulated.</p>
-
-    <div class="sim-wrap">
-      <div class="plotter">
-        <div class="tag"><span class="pin">●</span> Simulation — not live telemetry</div>
-        <canvas id="steer" role="img" aria-label="Animated simulation of heading-hold steering: a compass rose with the boat at the center swinging its bow onto a target bearing, twin rudders deflecting and port/starboard thrust splitting to make the turn."></canvas>
-      </div>
-
-      <div class="sim-read" aria-hidden="true">
-        <div class="top">
-          <span class="label">Helm readout</span>
-          <span class="mode"><span class="dot"></span><span>HDG HOLD</span></span>
-        </div>
-        <div class="rows">
-          <div class="row"><span class="k">Heading</span><span class="v"><span id="s-hdg">—</span><em>°</em></span></div>
-          <div class="row"><span class="k">Target</span><span class="v"><span id="s-tgt">—</span><em>°</em></span></div>
-          <div class="row"><span class="k">Error</span><span class="v"><span id="s-err">—</span><em>°</em></span></div>
-          <div class="row"><span class="k">Rudder</span><span class="v" id="s-rud">—</span></div>
-          <div class="row"><span class="k">Thrust P / S</span><span class="v" id="s-thr">—</span></div>
-        </div>
-        <div class="foot">Heading-hold steering loop · figures synthetic</div>
-      </div>
-    </div>
-  </div>
-</section>
 
 <div class="rule" role="presentation"></div>
 
 <!-- ====================== DEPTH SIM ====================== -->
 <section class="sim depth" id="depthsim">
   <div class="wrap">
-    <div class="sec-head"><span class="no">05</span><h2>How it maps the bottom</h2></div>
+    <div class="sec-head"><span class="no">03</span><h2>How it maps the bottom</h2></div>
     <p class="lede">In AUTO the boat runs a grid of waypoints, and a hull-mounted echo sounder takes
       one reading directly beneath it at each GPS fix — logged against position. The track itself
       builds the area into a depth map. Below, that survey, simulated.</p>
@@ -607,6 +528,43 @@
           <div class="row"><span class="k">Soundings</span><span class="v" id="d-samp">0</span></div>
         </div>
         <div class="foot">Waypoint-driven echo-sounder survey · figures synthetic</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="rule" role="presentation"></div>
+
+<!-- ====================== MODE ARBITRATION ====================== -->
+<section class="sim modes" id="modesim">
+  <div class="wrap">
+    <div class="sec-head"><span class="no">04</span><h2>Who has control</h2></div>
+    <p class="lede">Three states, one rule — the transmitter sits at the top of the priority stack.
+      Flip the mode switch and the human takes over instantly; lose the RC link and the boat fails
+      safe on its own. Below, that arbitration, on a loop.</p>
+
+    <div class="sim-wrap">
+      <div class="plotter">
+        <div class="tag"><span class="pin">●</span> Transmitter — illustration</div>
+        <canvas id="tx" role="img" aria-label="Stylized RC transmitter: the SwA mode switch flips between AUTO and MANUAL, a failsafe-guard switch, the throttle and rudder sticks, and an RC-link indicator that drops out to trigger failsafe."></canvas>
+      </div>
+      <div class="mode-stage">
+        <div class="mstate" data-s="MANUAL">
+          <span class="mdot"></span>
+          <div class="mbody"><h3>Manual</h3><p>Sticks drive rudder and throttle directly.</p></div>
+          <span class="mflag">standby</span>
+        </div>
+        <div class="mstate" data-s="AUTO">
+          <span class="mdot"></span>
+          <div class="mbody"><h3>Auto</h3><p>Holds heading to the waypoint by rudder + differential thrust.</p></div>
+          <span class="mflag">standby</span>
+        </div>
+        <div class="mstate fail" data-s="FAILSAFE">
+          <span class="mdot"></span>
+          <div class="mbody"><h3>Failsafe</h3><p>Throttle zero, rudder centered. Latches until the helm is taken.</p></div>
+          <span class="mflag">standby</span>
+        </div>
+        <div class="mode-narr" id="m-narr">—</div>
       </div>
     </div>
   </div>
@@ -647,7 +605,7 @@
 <!-- ====================== HARDWARE ====================== -->
 <section class="hw" id="hardware">
   <div class="wrap">
-    <div class="sec-head"><span class="no">06</span><h2>Hardware stack</h2></div>
+    <div class="sec-head"><span class="no">05</span><h2>Hardware stack</h2></div>
     <div class="spec">
       <div class="group">
         <span class="label">Compute &amp; control</span>
@@ -1045,181 +1003,143 @@
   else { requestAnimationFrame(frame); }
 })();
 
-/* Heading-hold steering — compass error -> twin-rudder deflection + differential thrust -> turn.
-   Synthetic; mirrors the firmware loop (deadband + slewed rudder, lower Kp). */
-(function () {
-  var canvas = document.getElementById('steer');
-  if (!canvas) return;
-  var ctx = canvas.getContext('2d');
 
-  var TARGETS = [35, 120, 250, 310, 175, 70];      // commanded headings, cycled
-  var DWELL = 3.4;                                 // seconds per commanded heading
-  var KP = 0.045, DEADBAND = 3, MAX_YAW = 46;      // control: gain, deadband (deg), max yaw (deg/s)
-  var RUD_SLEW = 2.4, CRUISE = 1700, DIFF = 120;   // rudder slew (per s), cruise us, max thrust split
-  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  var hdg = TARGETS[0], ti = 1, target = TARGETS[1], dwell = 0, rud = 0;  // rud: -1..1 (smoothed)
-
-  var ox, oy, plotW, plotH, dpr = 1;
-  function resize() {
-    var r = canvas.getBoundingClientRect();
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = r.width * dpr; canvas.height = r.height * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ox = 0; oy = 0; plotW = r.width; plotH = r.height;
-  }
-
-  var els = {
-    hdg: document.getElementById('s-hdg'), tgt: document.getElementById('s-tgt'),
-    err: document.getElementById('s-err'), rud: document.getElementById('s-rud'),
-    thr: document.getElementById('s-thr')
-  };
-
-  function shortest(a) { return ((a + 540) % 360) - 180; }
-
-  function step(dt) {
-    dwell += dt;
-    if (dwell >= DWELL) { dwell = 0; ti = (ti + 1) % TARGETS.length; target = TARGETS[ti]; }
-
-    var err = shortest(target - hdg);
-    var cmd = Math.abs(err) < DEADBAND ? 0 : Math.max(-1, Math.min(1, KP * err));
-    rud += Math.max(-RUD_SLEW * dt, Math.min(RUD_SLEW * dt, cmd - rud));   // slew toward command
-    hdg = (hdg + rud * MAX_YAW * dt + 360) % 360;
-
-    if (els.hdg) {
-      var rudUs = Math.round(1500 + rud * 170);
-      var ang = Math.round(Math.abs(rud) * 30);
-      els.hdg.textContent = String(Math.round(hdg)).padStart(3, '0');
-      els.tgt.textContent = String(Math.round(target)).padStart(3, '0');
-      els.err.textContent = (err >= 0 ? '+' : '') + Math.round(err);
-      els.rud.textContent = Math.abs(rud) < 0.02 ? 'centered' : ang + '° ' + (rud > 0 ? 'STBD' : 'PORT');
-      els.thr.textContent = Math.round(CRUISE + rud * DIFF) + ' / ' + Math.round(CRUISE - rud * DIFF);
-    }
-  }
-
-  // compass bearing -> screen point on a ring of radius R about (cx,cy)
-  function ring(cx, cy, R, deg) { var a = deg * Math.PI / 180; return [cx + R * Math.sin(a), cy - R * Math.cos(a)]; }
-
-  function draw() {
-    var r = canvas.getBoundingClientRect();
-    ctx.clearRect(0, 0, r.width, r.height);
-    var cx = ox + plotW / 2, cy = oy + plotH / 2, R = Math.min(plotW, plotH) / 2 - 26;
-
-    // compass rose
-    ctx.strokeStyle = 'rgba(140,150,159,.28)'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.stroke();
-    ctx.font = '600 10px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    for (var d = 0; d < 360; d += 30) {
-      var p0 = ring(cx, cy, R, d), p1 = ring(cx, cy, R - (d % 90 ? 6 : 11), d);
-      ctx.strokeStyle = 'rgba(140,150,159,' + (d % 90 ? '.28' : '.5') + ')';
-      ctx.beginPath(); ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.stroke();
-    }
-    var card = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' };
-    ctx.fillStyle = '#8C969F';
-    for (var k in card) { var pc = ring(cx, cy, R - 22, +k); ctx.fillText(card[k], pc[0], pc[1]); }
-
-    // target bearing marker (teal)
-    var tp = ring(cx, cy, R, target);
-    ctx.strokeStyle = '#38E1C2'; ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(tp[0], tp[1]); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = '#38E1C2'; ctx.beginPath(); ctx.arc(tp[0], tp[1], 4, 0, 7); ctx.fill();
-
-    // boat at center, rotated to heading
-    ctx.save();
-    ctx.translate(cx, cy); ctx.rotate(hdg * Math.PI / 180); ctx.scale(1.4, 1.4);
-    var rudAng = rud * 30 * Math.PI / 180;
-    // hull
-    ctx.fillStyle = '#ECEFF2'; ctx.strokeStyle = 'rgba(18,22,27,.5)'; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, -34); ctx.quadraticCurveTo(11, -18, 11, 8); ctx.lineTo(9, 26);
-    ctx.lineTo(-9, 26); ctx.lineTo(-11, 8); ctx.quadraticCurveTo(-11, -18, 0, -34); ctx.closePath();
-    ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#003A8C'; ctx.fillRect(-5, -8, 10, 16);   // deckhouse
-    // port/stbd thrust wash (length ~ thrust); red = more thrust
-    function wash(localX, us) {
-      var len = (us - 1500) / (1800 - 1500) * 26 + 6;
-      ctx.strokeStyle = 'rgba(228,0,43,.7)'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(localX, 27); ctx.lineTo(localX, 27 + len); ctx.stroke();
-    }
-    wash(-6, CRUISE + rud * DIFF); wash(6, CRUISE - rud * DIFF);
-    // twin rudders, deflected
-    ctx.strokeStyle = '#12161B'; ctx.lineWidth = 2.4;
-    [-6, 6].forEach(function (lx) {
-      ctx.save(); ctx.translate(lx, 26); ctx.rotate(rudAng);
-      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 9); ctx.stroke(); ctx.restore();
-    });
-    ctx.restore();
-
-    // heading lubber line on the ring (where the bow points)
-    var bp = ring(cx, cy, R, hdg);
-    ctx.fillStyle = '#E4002B'; ctx.beginPath(); ctx.arc(bp[0], bp[1], 4, 0, 7); ctx.fill();
-
-    // readout caption
-    ctx.fillStyle = '#5C656E'; ctx.font = '600 9px "Space Mono", monospace';
-    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText('● TARGET', ox + 14, oy + plotH - 26);
-    ctx.fillStyle = '#E4002B'; ctx.fillText('● BOW', ox + 14, oy + plotH - 13);
-  }
-
-  var last = 0;
-  function frame(ts) {
-    var dt = last ? Math.min(0.05, (ts - last) / 1000) : 0.016; last = ts;
-    step(dt); draw();
-    requestAnimationFrame(frame);
-  }
-
-  resize();
-  window.addEventListener('resize', resize);
-  if (reduced) { for (var s = 0; s < 30; s++) step(0.05); requestAnimationFrame(function () { resize(); draw(); }); }
-  else { requestAnimationFrame(frame); }
-})();
-
-/* Mode arbitration — auto-playing scenario through MANUAL / AUTO / FAILSAFE.
-   Transmitter is top of the priority stack; link loss fails safe and latches. */
+/* Mode arbitration — auto-playing scenario through MANUAL / AUTO / FAILSAFE,
+   with a stylized transmitter showing the switches and the RC link. Illustration. */
 (function () {
   var root = document.getElementById('modesim');
   if (!root) return;
+  var canvas = root.querySelector('#tx');
+  var ctx = canvas && canvas.getContext('2d');
   var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   var STEPS = [
-    { state: 'AUTO', swa: ['AUTO', 'ok'], link: ['OK', 'ok'], thr: 'cruise', rud: 'steering',
-      narr: 'AUTO engaged — holding heading toward the posted waypoint.' },
-    { state: 'MANUAL', swa: ['MANUAL', ''], link: ['OK', 'ok'], thr: 'sticks', rud: 'sticks',
-      narr: 'Mode switch → MANUAL. The helm seizes control the same loop cycle — no "are you sure".' },
-    { state: 'AUTO', swa: ['AUTO', 'ok'], link: ['OK', 'ok'], thr: 'cruise', rud: 'steering',
-      narr: 'Switch back to AUTO — autonomy resumes the mission.' },
-    { state: 'FAILSAFE', swa: ['AUTO', 'ok'], link: ['LOST', 'bad'], thr: 'ZERO', rud: 'centered',
-      narr: 'RC link lost — FAILSAFE: throttle to zero, rudder centered. It does not coast off.' },
-    { state: 'FAILSAFE', swa: ['AUTO', 'ok'], link: ['OK', 'ok'], thr: 'ZERO', rud: 'centered',
-      narr: 'Link is back — but FAILSAFE latches. It will not silently re-arm autonomy.' },
-    { state: 'MANUAL', swa: ['MANUAL', ''], link: ['OK', 'ok'], thr: 'sticks', rud: 'sticks',
-      narr: 'Flip to MANUAL to clear FAILSAFE — control returns to the transmitter.' }
+    { state: 'AUTO', swaAuto: true, link: true, narr: 'AUTO engaged — holding heading toward the posted waypoint.' },
+    { state: 'MANUAL', swaAuto: false, link: true, narr: 'Mode switch → MANUAL. The helm seizes control the same loop cycle — no "are you sure".' },
+    { state: 'AUTO', swaAuto: true, link: true, narr: 'Switch back to AUTO — autonomy resumes the mission.' },
+    { state: 'FAILSAFE', swaAuto: true, link: false, narr: 'RC link lost — FAILSAFE: throttle to zero, rudder centered. It does not coast off.' },
+    { state: 'FAILSAFE', swaAuto: true, link: true, narr: 'Link is back — but FAILSAFE latches. It will not silently re-arm autonomy.' },
+    { state: 'MANUAL', swaAuto: false, link: true, narr: 'Flip to MANUAL to clear FAILSAFE — control returns to the transmitter.' }
   ];
 
   var cards = root.querySelectorAll('.mstate');
-  var el = {
-    narr: root.querySelector('#m-narr'), state: root.querySelector('#m-state'),
-    swa: root.querySelector('#m-swa'), link: root.querySelector('#m-link'),
-    thr: root.querySelector('#m-thr'), rud: root.querySelector('#m-rud'),
-    pill: root.querySelector('.top .mode')
-  };
+  var narrEl = root.querySelector('#m-narr');
+  var cur = STEPS[0], swaAnim = 1;
 
   function apply(st) {
+    cur = st;
     for (var i = 0; i < cards.length; i++) {
       var on = cards[i].getAttribute('data-s') === st.state;
       cards[i].classList.toggle('active', on);
       cards[i].querySelector('.mflag').textContent = on ? 'active' : 'standby';
     }
-    el.narr.textContent = st.narr;
-    el.state.textContent = st.state;
-    el.pill.classList.toggle('fail', st.state === 'FAILSAFE');
-    el.swa.textContent = st.swa[0]; el.swa.className = 'pill ' + st.swa[1];
-    el.link.textContent = st.link[0]; el.link.className = 'pill ' + st.link[1];
-    el.thr.textContent = st.thr; el.rud.textContent = st.rud;
+    if (narrEl) narrEl.textContent = st.narr;
   }
 
-  var i = 0; apply(STEPS[0]);
-  if (!reduced) setInterval(function () { i = (i + 1) % STEPS.length; apply(STEPS[i]); }, 2600);
+  // ---- transmitter graphic ----
+  var ox = 0, oy = 0, plotW = 1, plotH = 1, dpr = 1, pulse = 0;
+  function resize() {
+    if (!canvas) return;
+    var r = canvas.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    plotW = r.width; plotH = r.height;
+  }
+  function rr(x, y, w, h, r) {
+    ctx.beginPath(); ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+  function swDraw(cx, ty, h, up, hi, label) {
+    rr(cx - 5, ty, 10, h, 5);
+    ctx.fillStyle = hi ? 'rgba(56,225,194,.12)' : 'rgba(255,255,255,.05)'; ctx.fill();
+    ctx.strokeStyle = hi ? 'rgba(56,225,194,.6)' : 'rgba(140,150,159,.4)'; ctx.lineWidth = 1; ctx.stroke();
+    var ky = ty + (1 - up) * (h - 12) + 6;
+    ctx.beginPath(); ctx.arc(cx, ky, 5.5, 0, 7); ctx.fillStyle = hi ? '#38E1C2' : '#8C969F'; ctx.fill();
+    ctx.fillStyle = hi ? '#38E1C2' : '#5C656E'; ctx.font = '600 8px "Space Mono", monospace'; ctx.textAlign = 'center';
+    ctx.fillText(label, cx, ty + h + 12);
+  }
+  function stick(cx, cy, r, dx, dy, label) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fillStyle = 'rgba(255,255,255,.04)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(140,150,159,.4)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = 'rgba(140,150,159,.18)';
+    ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx + dx * r * 0.62, cy + dy * r * 0.62, 5, 0, 7); ctx.fillStyle = '#ECEFF2'; ctx.fill();
+    ctx.fillStyle = '#5C656E'; ctx.font = '600 8px "Space Mono", monospace'; ctx.textAlign = 'center';
+    ctx.fillText(label, cx, cy + r + 13);
+  }
+  function draw() {
+    if (!ctx) return;
+    var r = canvas.getBoundingClientRect();
+    ctx.clearRect(0, 0, r.width, r.height);
+    var m = 16, BX = ox + m, BY = oy + m + 8, BW = plotW - 2 * m, BH = plotH - 2 * m - 8;
+
+    rr(BX, BY, BW, BH, 16); ctx.fillStyle = '#1f2731'; ctx.fill();
+    ctx.strokeStyle = '#2b3540'; ctx.lineWidth = 1.5; ctx.stroke();
+
+    // switches: SwA (MODE), B, C, SwD (F/S)
+    var sy = BY + BH * 0.15, sh = BH * 0.17;
+    var xs = [0.12, 0.21, 0.30, 0.39].map(function (f) { return BX + BW * f; });
+    swDraw(xs[0], sy, sh, swaAnim, true, 'SwA');
+    swDraw(xs[1], sy, sh, 1, false, 'B');
+    swDraw(xs[2], sy, sh, 1, false, 'C');
+    swDraw(xs[3], sy, sh, 1, true, 'SwD');
+    ctx.fillStyle = '#8C969F'; ctx.font = '600 7.5px "Space Mono", monospace'; ctx.textAlign = 'center';
+    ctx.fillText('MODE', xs[0], sy + sh + 23);
+    ctx.fillText('F/S', xs[3], sy + sh + 23);
+    ctx.fillStyle = swaAnim > 0.5 ? '#38E1C2' : '#ECEFF2'; ctx.font = '700 9px "Space Mono", monospace';
+    ctx.fillText(swaAnim > 0.5 ? 'AUTO' : 'MAN', xs[0], sy - 9);
+
+    // screen: current state
+    var scw = BW * 0.34, sch = BH * 0.2, scx = BX + BW * 0.56, scy = BY + BH * 0.14;
+    rr(scx, scy, scw, sch, 6); ctx.fillStyle = '#0c1014'; ctx.fill();
+    if (cur.state === 'FAILSAFE') { ctx.strokeStyle = 'rgba(228,0,43,' + (0.45 + 0.4 * Math.sin(pulse * 3)) + ')'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    var col = cur.state === 'AUTO' ? '#38E1C2' : cur.state === 'FAILSAFE' ? '#E4002B' : '#ECEFF2';
+    ctx.fillStyle = col; ctx.font = '700 ' + Math.round(sch * 0.46) + 'px "Saira Semi Condensed", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(cur.state, scx + scw / 2, scy + sch / 2);
+    ctx.textBaseline = 'alphabetic';
+
+    // antenna + RC link (top-right)
+    var ax = BX + BW - 16, ay = BY - 2;
+    ctx.lineWidth = 2; ctx.strokeStyle = cur.link ? '#38E1C2' : '#E4002B';
+    ctx.beginPath(); ctx.moveTo(ax, ay + 16); ctx.lineTo(ax, ay - 4); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ax, ay - 6, 2.5, 0, 7); ctx.fillStyle = ctx.strokeStyle; ctx.fill();
+    if (cur.link) {
+      for (var w = 0; w < 3; w++) {
+        ctx.globalAlpha = 0.5 - w * 0.12 + 0.28 * Math.sin(pulse * 2 - w);
+        ctx.strokeStyle = '#38E1C2'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(ax, ay - 6, 6 + w * 5, -Math.PI * 0.78, -Math.PI * 0.22); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.strokeStyle = '#E4002B'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(ax + 5, ay - 14); ctx.lineTo(ax + 15, ay - 4); ctx.moveTo(ax + 15, ay - 14); ctx.lineTo(ax + 5, ay - 4); ctx.stroke();
+    }
+
+    // sticks (Mode 2): left throttle rests low, right rudder centered
+    var gy = BY + BH * 0.66, gr = BH * 0.19;
+    stick(BX + BW * 0.31, gy, gr, 0, 1, 'THROTTLE');
+    stick(BX + BW * 0.69, gy, gr, 0, 0, 'RUDDER');
+  }
+
+  function frame() {
+    pulse += 0.03;
+    var t = cur.swaAuto ? 1 : 0;
+    if (swaAnim !== t) { swaAnim += (t - swaAnim) * 0.18; if (Math.abs(t - swaAnim) < 0.01) swaAnim = t; }
+    draw(); requestAnimationFrame(frame);
+  }
+
+  apply(STEPS[0]); swaAnim = 1;
+  if (canvas) { resize(); window.addEventListener('resize', resize); }
+  if (!reduced) {
+    var si = 0;
+    setInterval(function () { si = (si + 1) % STEPS.length; apply(STEPS[si]); }, 2600);
+    if (canvas) requestAnimationFrame(frame);
+  } else if (canvas) {
+    requestAnimationFrame(function () { resize(); draw(); });
+  }
 })();
 </script>
 
