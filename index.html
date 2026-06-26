@@ -208,6 +208,57 @@
   @media (max-width: 860px) { .cap-grid { grid-template-columns: repeat(2, 1fr); } }
   @media (max-width: 520px) { .cap-grid { grid-template-columns: 1fr; } }
 
+  /* =====================  NAV SIM / DEPTH SIM  ===================== */
+  .sim { background: var(--ink); }
+  .sim.depth { background: var(--ink-2); }
+  .sim.depth .sim-read { background: var(--ink); }
+  .sim .lede { max-width: 60ch; color: #C7CDD3; font-size: clamp(16px, 1.3vw, 18px); margin-top: -16px; margin-bottom: 4px; }
+  .sim-wrap { margin-top: 40px; display: grid; grid-template-columns: 1.5fr 1fr; gap: 18px; align-items: stretch; }
+  @media (max-width: 840px) { .sim-wrap { grid-template-columns: 1fr; } }
+
+  .plotter {
+    position: relative; border: 1px solid var(--ink-3); overflow: hidden;
+    background: radial-gradient(120% 100% at 50% 0%, var(--ink-2), var(--ink) 70%);
+    aspect-ratio: 3 / 2;
+  }
+  .plotter canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .plotter .tag {
+    position: absolute; left: 14px; top: 12px; z-index: 2;
+    font-family: var(--fs-mono); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--haze);
+  }
+  .plotter .tag .pin { color: var(--signal); }
+  .plotter::before, .plotter::after { content: ""; position: absolute; width: 16px; height: 16px; border: 2px solid var(--cg-red); z-index: 2; }
+  .plotter::before { left: 12px; top: 12px; border-right: 0; border-bottom: 0; }
+  .plotter::after  { right: 12px; bottom: 12px; border-left: 0; border-top: 0; }
+
+  .sim-read {
+    border: 1px solid var(--ink-3); background: var(--ink-2);
+    background-image: repeating-linear-gradient(0deg, rgba(255,255,255,.012) 0 1px, transparent 1px 30px);
+    display: flex; flex-direction: column;
+  }
+  .sim-read .top {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 18px; border-bottom: 1px solid var(--ink-3);
+  }
+  .sim-read .top .label { color: var(--deck); }
+  .sim-read .mode {
+    font-family: var(--fs-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--signal); display: flex; align-items: center; gap: 8px;
+  }
+  .sim-read .mode .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--signal); box-shadow: 0 0 10px var(--signal); }
+  .sim-read .rows { padding: 6px 0; flex: 1; }
+  .sim-read .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 11px 18px; font-family: var(--fs-mono);
+  }
+  .sim-read .row .k { font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--haze); }
+  .sim-read .row .v { font-size: 19px; color: var(--deck); font-variant-numeric: tabular-nums; }
+  .sim-read .row .v em { font-style: normal; color: var(--haze); font-size: .6em; margin-left: 3px; }
+  .sim-read .foot {
+    padding: 12px 18px; border-top: 1px solid var(--ink-3);
+    font-family: var(--fs-mono); font-size: 10.5px; letter-spacing: .06em; color: var(--haze-dim);
+  }
+
   /* =====================  HARDWARE  ===================== */
   .hw { background: var(--ink); }
   .spec { margin-top: 38px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px 56px; }
@@ -260,7 +311,13 @@
 <!-- ====================== HERO ====================== -->
 <section class="hero" id="top" style="padding-block: 0;">
 
-  <img class="hero-bg" src="assets/hero.jpg" alt="Legend Cutter underway" />
+  <!-- HERO IMAGE — when the shot is ready, replace the placeholder div below with:
+         <img class="hero-bg" src="assets/hero.jpg" alt="Legend Cutter underway" />
+       The .hero-overlay gradient and .hero-stripes (raked USCG stripes) already sit on top. -->
+  <div class="hero-bg hero-bg-ph" aria-hidden="true">
+    <div class="glow"></div>
+    <span class="hero-bg-ph-label">Hero image — coming soon</span>
+  </div>
   <div class="hero-overlay" aria-hidden="true"></div>
   <div class="hero-stripes" aria-hidden="true"><b class="red"></b><b class="blu"></b></div>
 
@@ -372,6 +429,73 @@
   </div>
 </section>
 
+<div class="rule" role="presentation"></div>
+
+<!-- ====================== NAV SIM ====================== -->
+<section class="sim" id="navsim">
+  <div class="wrap">
+    <div class="sec-head"><span class="no">02</span><h2>How it holds a waypoint</h2></div>
+    <p class="lede">The boat steers toward a posted waypoint by differential thrust, captures it
+      once inside a set radius, then advances to the next. Below is that logic, simulated.</p>
+
+    <div class="sim-wrap">
+      <div class="plotter">
+        <div class="tag"><span class="pin">●</span> Simulation — not live telemetry</div>
+        <canvas id="plot" role="img" aria-label="Animated simulation of a boat steering between waypoints, capturing each within a radius and advancing to the next."></canvas>
+      </div>
+
+      <div class="sim-read" aria-hidden="true">
+        <div class="top">
+          <span class="label">Nav readout</span>
+          <span class="mode"><span class="dot"></span><span id="r-mode">AUTO</span></span>
+        </div>
+        <div class="rows">
+          <div class="row"><span class="k">Heading</span><span class="v"><span id="r-hdg">—</span><em>°</em></span></div>
+          <div class="row"><span class="k">Speed</span><span class="v"><span id="r-spd">—</span><em>kt</em></span></div>
+          <div class="row"><span class="k">Target</span><span class="v">WP <span id="r-wp">—</span></span></div>
+          <div class="row"><span class="k">Distance to WP</span><span class="v"><span id="r-dist">—</span><em>m</em></span></div>
+          <div class="row"><span class="k">Captured</span><span class="v" id="r-cap">0</span></div>
+        </div>
+        <div class="foot">Illustration of the capture-by-distance loop · figures synthetic</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="rule" role="presentation"></div>
+
+<!-- ====================== DEPTH SIM ====================== -->
+<section class="sim depth" id="depthsim">
+  <div class="wrap">
+    <div class="sec-head"><span class="no">03</span><h2>How it maps the bottom</h2></div>
+    <p class="lede">In AUTO the boat runs a grid of waypoints, and a hull-mounted echo sounder takes
+      one reading directly beneath it at each GPS fix — logged against position. The track itself
+      builds the area into a depth map. Below, that survey, simulated.</p>
+
+    <div class="sim-wrap">
+      <div class="plotter">
+        <div class="tag"><span class="pin">●</span> Simulation — not live telemetry</div>
+        <canvas id="depth" role="img" aria-label="Top-down animated simulation of a boat running a serpentine grid of waypoints, leaving a track behind it and sounding the depth directly beneath it to build a colored depth map of the area."></canvas>
+      </div>
+
+      <div class="sim-read" aria-hidden="true">
+        <div class="top">
+          <span class="label">Survey readout</span>
+          <span class="mode"><span class="dot"></span><span>AUTO · SONAR</span></span>
+        </div>
+        <div class="rows">
+          <div class="row"><span class="k">Depth</span><span class="v"><span id="d-depth">—</span><em>m</em></span></div>
+          <div class="row"><span class="k">Max depth</span><span class="v"><span id="d-max">—</span><em>m</em></span></div>
+          <div class="row"><span class="k">Waypoint</span><span class="v"><span id="d-wp">—</span></span></div>
+          <div class="row"><span class="k">Coverage</span><span class="v"><span id="d-surv">—</span><em>%</em></span></div>
+          <div class="row"><span class="k">Soundings</span><span class="v" id="d-samp">0</span></div>
+        </div>
+        <div class="foot">Waypoint-driven echo-sounder survey · figures synthetic</div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ====================== GALLERY ====================== -->
 <section style="padding-block: 0; background: var(--ink);">
   <div class="wrap" style="padding-top: clamp(40px,5vw,64px); padding-bottom: clamp(64px,9vw,120px);">
@@ -407,7 +531,7 @@
 <!-- ====================== HARDWARE ====================== -->
 <section class="hw" id="hardware">
   <div class="wrap">
-    <div class="sec-head"><span class="no">02</span><h2>Hardware stack</h2></div>
+    <div class="sec-head"><span class="no">04</span><h2>Hardware stack</h2></div>
     <div class="spec">
       <div class="group">
         <span class="label">Compute &amp; control</span>
@@ -462,6 +586,349 @@
     </div>
   </div>
 </footer>
+
+<script>
+/* Waypoint-hold simulation — synthetic data, no real coordinates.
+   A boat steers toward each waypoint, captures it within a radius, advances. */
+(function () {
+  var canvas = document.getElementById('plot');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+
+  // colors pulled from the page palette
+  var C = { ink2:'#1A2027', ink3:'#232C35', haze:'#8C969F', hazeDim:'#5C656E',
+            deck:'#ECEFF2', red:'#E4002B', signal:'#38E1C2' };
+
+  // abstract field (units ~ "meters", purely illustrative)
+  var FW = 120, FH = 80, MARGIN = 16, CAP_R = 7;
+  var WPS = [ {x:28,y:56}, {x:62,y:66}, {x:98,y:44}, {x:74,y:18}, {x:32,y:22} ];
+
+  var boat = { x: WPS[0].x, y: WPS[0].y, hdg: 70, spd: 0 };
+  var target = 1, captured = 0, capFlash = 0, trail = [];
+  var CRUISE = 11;           // field units / sec
+  var TURN = 110;            // deg / sec max
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var scale = 1, ox = 0, oy = 0, dpr = 1;
+  function resize() {
+    var r = canvas.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.min((r.width - MARGIN * 2) / FW, (r.height - MARGIN * 2) / FH);
+    ox = (r.width - FW * scale) / 2;
+    oy = (r.height - FH * scale) / 2;
+  }
+  function sx(x) { return ox + x * scale; }
+  function sy(y) { return oy + (FH - y) * scale; }  // y-up -> canvas
+
+  var els = {
+    mode: document.getElementById('r-mode'), hdg: document.getElementById('r-hdg'),
+    spd: document.getElementById('r-spd'), wp: document.getElementById('r-wp'),
+    dist: document.getElementById('r-dist'), cap: document.getElementById('r-cap')
+  };
+
+  function step(dt) {
+    var t = WPS[target];
+    var dx = t.x - boat.x, dy = t.y - boat.y;
+    var dist = Math.hypot(dx, dy);
+
+    // compass bearing to target (0 = +y / north, 90 = +x / east)
+    var bearing = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+    var diff = ((bearing - boat.hdg + 540) % 360) - 180;
+    var turn = Math.max(-TURN * dt, Math.min(TURN * dt, diff));
+    boat.hdg = (boat.hdg + turn + 360) % 360;
+
+    // ease speed; slow into sharp turns
+    var want = CRUISE * (Math.abs(diff) > 55 ? 0.55 : 1);
+    boat.spd += (want - boat.spd) * Math.min(1, dt * 2.5);
+
+    var hr = boat.hdg * Math.PI / 180;
+    boat.x += Math.sin(hr) * boat.spd * dt;
+    boat.y += Math.cos(hr) * boat.spd * dt;
+
+    if (dist < CAP_R) { captured++; capFlash = 1; target = (target + 1) % WPS.length; }
+    if (capFlash > 0) capFlash = Math.max(0, capFlash - dt * 1.6);
+
+    trail.push({ x: boat.x, y: boat.y });
+    if (trail.length > 90) trail.shift();
+
+    if (els.mode) {
+      els.hdg.textContent = String(Math.round(boat.hdg)).padStart(3, '0');
+      els.spd.textContent = (boat.spd * 0.30 + 0.05).toFixed(1);
+      els.wp.textContent = (target + 1) + ' / ' + WPS.length;
+      els.dist.textContent = dist.toFixed(1);
+      els.cap.textContent = captured;
+    }
+  }
+
+  function draw() {
+    var r = canvas.getBoundingClientRect();
+    ctx.clearRect(0, 0, r.width, r.height);
+
+    // grid
+    ctx.strokeStyle = 'rgba(255,255,255,.04)'; ctx.lineWidth = 1;
+    for (var gx = 0; gx <= FW; gx += 15) { ctx.beginPath(); ctx.moveTo(sx(gx), sy(0)); ctx.lineTo(sx(gx), sy(FH)); ctx.stroke(); }
+    for (var gy = 0; gy <= FH; gy += 15) { ctx.beginPath(); ctx.moveTo(sx(0), sy(gy)); ctx.lineTo(sx(FW), sy(gy)); ctx.stroke(); }
+
+    // planned route (closed loop, dashed)
+    ctx.setLineDash([4, 6]); ctx.strokeStyle = 'rgba(140,150,159,.45)'; ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    for (var i = 0; i < WPS.length; i++) { var p = WPS[i]; i ? ctx.lineTo(sx(p.x), sy(p.y)) : ctx.moveTo(sx(p.x), sy(p.y)); }
+    ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+
+    // trail
+    if (trail.length > 1) {
+      for (var j = 1; j < trail.length; j++) {
+        ctx.strokeStyle = 'rgba(56,225,194,' + (j / trail.length * 0.9) + ')';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(sx(trail[j - 1].x), sy(trail[j - 1].y)); ctx.lineTo(sx(trail[j].x), sy(trail[j].y)); ctx.stroke();
+      }
+    }
+
+    // waypoints
+    for (var k = 0; k < WPS.length; k++) {
+      var w = WPS[k], active = k === target;
+      ctx.beginPath(); ctx.arc(sx(w.x), sy(w.y), 4, 0, 7);
+      ctx.fillStyle = active ? C.signal : C.hazeDim; ctx.fill();
+      if (active) {
+        ctx.strokeStyle = 'rgba(56,225,194,' + (0.35 + capFlash * 0.6) + ')';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(sx(w.x), sy(w.y), CAP_R * scale * (1 + capFlash * 0.6), 0, 7); ctx.stroke();
+      }
+      ctx.fillStyle = C.haze; ctx.font = '600 10px "Space Mono", monospace';
+      ctx.fillText((k + 1), sx(w.x) + 8, sy(w.y) - 6);
+    }
+
+    // boat (triangle pointing along heading)
+    ctx.save();
+    ctx.translate(sx(boat.x), sy(boat.y)); ctx.rotate(boat.hdg * Math.PI / 180);
+    ctx.fillStyle = C.red;
+    ctx.beginPath(); ctx.moveTo(0, -9); ctx.lineTo(6, 7); ctx.lineTo(0, 4); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  var last = 0;
+  function frame(ts) {
+    var dt = last ? Math.min(0.05, (ts - last) / 1000) : 0.016; last = ts;
+    step(dt); draw();
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+  if (reduced) {
+    // static representative frame: pre-roll a partial route, then draw after layout
+    for (var s = 0; s < 280; s++) step(0.05);
+    requestAnimationFrame(function () { resize(); draw(); });
+  } else {
+    requestAnimationFrame(frame);
+  }
+})();
+
+/* Depth-mapping simulation — the boat runs a grid of waypoints (serpentine lawnmower),
+   leaving a track, and takes one sounding directly beneath it. Soundings build a banded,
+   contoured depth chart of the area. Synthetic seabed + figures; no real bathymetry. */
+(function () {
+  var canvas = document.getElementById('depth');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+
+  var FW = 160, FH = 104, COLS = 26, ROWS = 10;     // ROWS = survey lanes
+  var SPEED = 124;                                  // boat marches straight between grid waypoints
+  var DMIN = 0.4, DMAX = 8.0, NB = 7;               // depth band count (chart zones)
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function gss(nx, ny, cx, cy, sx, sy) { var ax = (nx - cx) / sx, ay = (ny - cy) / sy; return Math.exp(-(ax * ax + ay * ay)); }
+  function floorD(x, y) {                            // bold synthetic seabed: deep basin, pockets, shoals
+    var nx = x / FW, ny = y / FH;
+    var d = 1.4 + 1.6 * ny
+              + 5.2 * gss(nx, ny, 0.62, 0.58, 0.30, 0.34)
+              + 1.4 * gss(nx, ny, 0.18, 0.74, 0.16, 0.22)
+              - 1.8 * gss(nx, ny, 0.30, 0.30, 0.22, 0.22)
+              - 1.3 * gss(nx, ny, 0.82, 0.18, 0.14, 0.16)
+              + 0.5 * Math.sin(nx * 4.0 + 1.0) * Math.cos(ny * 3.0);
+    return Math.max(DMIN, Math.min(DMAX, d));
+  }
+
+  var RAMP = [[0,[150,238,212]],[0.34,[48,164,216]],[0.64,[32,86,178]],[1,[12,30,78]]];
+  function ramp(t) {
+    for (var i = 1; i < RAMP.length; i++) if (t <= RAMP[i][0]) {
+      var a = RAMP[i - 1], b = RAMP[i], f = (t - a[0]) / (b[0] - a[0]);
+      return [Math.round(a[1][0] + (b[1][0] - a[1][0]) * f),
+              Math.round(a[1][1] + (b[1][1] - a[1][1]) * f),
+              Math.round(a[1][2] + (b[1][2] - a[1][2]) * f)];
+    }
+    return [12, 30, 78];
+  }
+  function rgb(a) { return 'rgb(' + a[0] + ',' + a[1] + ',' + a[2] + ')'; }
+  function dark(a) { return 'rgb(' + ((a[0] * 0.5) | 0) + ',' + ((a[1] * 0.5) | 0) + ',' + ((a[2] * 0.5) | 0) + ')'; }
+
+  var cellW = FW / COLS, cellH = FH / ROWS;
+  // precompute the static field: band index + fill color per cell
+  var fBand = [], fFill = [];
+  for (var c = 0; c < COLS; c++) {
+    fBand[c] = []; fFill[c] = [];
+    for (var r = 0; r < ROWS; r++) {
+      var d = floorD((c + 0.5) * cellW, (r + 0.5) * cellH);
+      var bi = Math.floor(Math.max(0, Math.min(0.999, (d - DMIN) / (DMAX - DMIN))) * NB);
+      fBand[c][r] = bi; fFill[c][r] = ramp((bi + 0.5) / NB);
+    }
+  }
+
+  // serpentine waypoint grid (lawnmower corners), one lane per map row
+  var WPS = [];
+  for (var i = 0; i < ROWS; i++) {
+    var y = (i + 0.5) * cellH;
+    if (i % 2 === 0) { WPS.push({ x: 1, y: y }); WPS.push({ x: FW - 1, y: y }); }
+    else { WPS.push({ x: FW - 1, y: y }); WPS.push({ x: 1, y: y }); }
+  }
+
+  var visited = [], total = COLS * ROWS, count = 0;
+  function clearMap() { count = 0; for (var c = 0; c < COLS; c++) { visited[c] = []; for (var r = 0; r < ROWS; r++) visited[c][r] = false; } }
+
+  var boat, target, maxD, trail;
+  function reset() { boat = { x: WPS[0].x, y: WPS[0].y, hdg: 90 }; target = 1; maxD = 0; trail = []; clearMap(); }
+  reset();
+
+  var ox, oy, plotW, plotH, dpr = 1, LEG = 18;
+  function resize() {
+    var r = canvas.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ox = 16; oy = 14; plotW = r.width - 32; plotH = r.height - 28 - LEG;
+  }
+  function sx(x) { return ox + (x / FW) * plotW; }
+  function sy(y) { return oy + (y / FH) * plotH; }
+
+  var els = {
+    depth: document.getElementById('d-depth'), max: document.getElementById('d-max'),
+    wp: document.getElementById('d-wp'), cov: document.getElementById('d-surv'),
+    samp: document.getElementById('d-samp')
+  };
+
+  function sound(x, y) {
+    var c = Math.floor(x / cellW), r = Math.floor(y / cellH);
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+    if (!visited[c][r]) { visited[c][r] = true; count++; }
+  }
+
+  function step(dt) {
+    var t = WPS[target], dx = t.x - boat.x, dy = t.y - boat.y, dist = Math.hypot(dx, dy) || 1;
+    boat.hdg = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+    var move = SPEED * dt, px = boat.x, py = boat.y;
+    if (move >= dist) { boat.x = t.x; boat.y = t.y; } else { boat.x += dx / dist * move; boat.y += dy / dist * move; }
+
+    var segs = Math.max(1, Math.ceil(Math.hypot(boat.x - px, boat.y - py) / (cellW * 0.5)));
+    for (var s = 1; s <= segs; s++) sound(px + (boat.x - px) * s / segs, py + (boat.y - py) * s / segs);
+
+    trail.push({ x: boat.x, y: boat.y });
+    if (trail.length > 160) trail.shift();
+
+    if (move >= dist) { target++; if (target >= WPS.length) { reset(); return; } }
+
+    var d = floorD(boat.x, boat.y);
+    if (d > maxD) maxD = d;
+    if (els.depth) {
+      els.depth.textContent = d.toFixed(1);
+      els.max.textContent = maxD.toFixed(1);
+      els.wp.textContent = target + ' / ' + WPS.length;
+      els.cov.textContent = Math.round(count / total * 100);
+      els.samp.textContent = count;
+    }
+  }
+
+  function draw() {
+    var r = canvas.getBoundingClientRect();
+    ctx.clearRect(0, 0, r.width, r.height);
+    var cw = plotW / COLS, ch = plotH / ROWS, c, rw, i;
+
+    // surveyed depth chart: banded fills
+    for (c = 0; c < COLS; c++) for (rw = 0; rw < ROWS; rw++) {
+      ctx.fillStyle = visited[c][rw] ? rgb(fFill[c][rw]) : 'rgba(255,255,255,.025)';
+      ctx.fillRect(ox + c * cw, oy + rw * ch, cw + 0.5, ch + 0.5);
+    }
+    // contour edges between surveyed cells of different depth bands
+    ctx.lineWidth = 2;
+    for (c = 0; c < COLS; c++) for (rw = 0; rw < ROWS; rw++) {
+      if (!visited[c][rw]) continue;
+      var x0 = ox + c * cw, y0 = oy + rw * ch;
+      if (c + 1 < COLS && visited[c + 1][rw] && fBand[c + 1][rw] !== fBand[c][rw]) {
+        ctx.strokeStyle = dark(fFill[c][rw]); ctx.beginPath(); ctx.moveTo(x0 + cw, y0); ctx.lineTo(x0 + cw, y0 + ch); ctx.stroke();
+      }
+      if (rw + 1 < ROWS && visited[c][rw + 1] && fBand[c][rw + 1] !== fBand[c][rw]) {
+        ctx.strokeStyle = dark(fFill[c][rw]); ctx.beginPath(); ctx.moveTo(x0, y0 + ch); ctx.lineTo(x0 + cw, y0 + ch); ctx.stroke();
+      }
+    }
+
+    // planned waypoint route
+    ctx.setLineDash([3, 6]); ctx.strokeStyle = 'rgba(140,150,159,.30)'; ctx.lineWidth = 1; ctx.beginPath();
+    for (i = 0; i < WPS.length; i++) { var w = WPS[i]; i ? ctx.lineTo(sx(w.x), sy(w.y)) : ctx.moveTo(sx(w.x), sy(w.y)); }
+    ctx.stroke(); ctx.setLineDash([]);
+
+    // waypoint markers — captured filled, upcoming hollow, active ringed + numbered
+    for (i = 0; i < WPS.length; i++) {
+      var p = WPS[i], px2 = sx(p.x), py2 = sy(p.y), active = i === target, done = i < target;
+      if (active) {
+        ctx.strokeStyle = 'rgba(56,225,194,.5)'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(px2, py2, 10, 0, 7); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(px2, py2, active ? 6 : 4.5, 0, 7);
+      if (active) { ctx.fillStyle = '#38E1C2'; ctx.fill(); }
+      else if (done) { ctx.fillStyle = 'rgba(56,225,194,.45)'; ctx.fill(); }
+      else { ctx.fillStyle = '#12161B'; ctx.fill(); ctx.strokeStyle = 'rgba(140,150,159,.7)'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    }
+
+    // actual track trail
+    for (i = 1; i < trail.length; i++) {
+      ctx.strokeStyle = 'rgba(255,255,255,' + (i / trail.length * 0.5) + ')'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(sx(trail[i - 1].x), sy(trail[i - 1].y)); ctx.lineTo(sx(trail[i].x), sy(trail[i].y)); ctx.stroke();
+    }
+
+    // boat (bigger) + active sounding cell
+    var bc = Math.floor(boat.x / cellW), br = Math.floor(boat.y / cellH);
+    if (bc >= 0 && bc < COLS && br >= 0 && br < ROWS) {
+      ctx.strokeStyle = 'rgba(228,0,43,.9)'; ctx.lineWidth = 2;
+      ctx.strokeRect(ox + bc * cw, oy + br * ch, cw, ch);
+    }
+    var bxp = sx(boat.x), byp = sy(boat.y);
+    ctx.save(); ctx.translate(bxp, byp); ctx.rotate(boat.hdg * Math.PI / 180);
+    ctx.fillStyle = '#E4002B';
+    ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(8, 9); ctx.lineTo(0, 4); ctx.lineTo(-8, 9); ctx.closePath(); ctx.fill();
+    ctx.restore();
+
+    // depth badge at the boat
+    var dnow = floorD(boat.x, boat.y).toFixed(1) + ' m';
+    ctx.font = '700 11px "Space Mono", monospace'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    var bw = ctx.measureText(dnow).width + 12, bx2 = bxp + 14, by2 = byp - 16;
+    if (bx2 + bw > ox + plotW) bx2 = bxp - 14 - bw;
+    ctx.fillStyle = 'rgba(18,22,27,.85)'; ctx.fillRect(bx2, by2 - 9, bw, 18);
+    ctx.strokeStyle = 'rgba(228,0,43,.8)'; ctx.lineWidth = 1; ctx.strokeRect(bx2, by2 - 9, bw, 18);
+    ctx.fillStyle = '#ECEFF2'; ctx.fillText(dnow, bx2 + 6, by2 + 1);
+
+    // depth legend (banded)
+    var lx = ox, lyb = oy + plotH + 9, lw = Math.min(168, plotW * 0.55), bwid = lw / NB;
+    for (var g = 0; g < NB; g++) { ctx.fillStyle = rgb(ramp((g + 0.5) / NB)); ctx.fillRect(lx + g * bwid, lyb, bwid - 1, 6); }
+    ctx.fillStyle = '#5C656E'; ctx.font = '600 9px "Space Mono", monospace'; ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left'; ctx.fillText('0 m', lx, lyb - 8);
+    ctx.textAlign = 'right'; ctx.fillText(DMAX + ' m', lx + lw, lyb - 8); ctx.textAlign = 'left';
+    ctx.fillText('DEEPER', lx + lw + 8, lyb + 3);
+  }
+
+  var last = 0;
+  function frame(ts) {
+    var dt = last ? Math.min(0.05, (ts - last) / 1000) : 0.016; last = ts;
+    step(dt); draw();
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+  if (reduced) { for (var s = 0; s < 360; s++) step(0.05); requestAnimationFrame(function () { resize(); draw(); }); }
+  else { requestAnimationFrame(frame); }
+})();
+</script>
 
 </body>
 </html>
