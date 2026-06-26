@@ -292,6 +292,32 @@
   .pill.ok { color: var(--signal); border-color: rgba(56,225,194,.5); }
   .pill.bad { color: var(--cg-red); border-color: rgba(228,0,43,.5); }
 
+  /* mode-arbitration playback controls */
+  .mode-demo { position: relative; }
+  .mode-arrow {
+    position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
+    width: 42px; height: 42px; border-radius: 50%; padding: 0;
+    border: 1px solid var(--ink-3); background: rgba(18,22,27,.86); color: var(--deck);
+    font-family: var(--fs-display); font-size: 26px; line-height: 1;
+    display: grid; place-items: center; cursor: pointer;
+    transition: border-color .2s, background .2s, color .2s;
+  }
+  .mode-arrow:hover { border-color: var(--cg-red); color: #fff; background: var(--ink-2); }
+  .mode-arrow.prev { left: -20px; }
+  .mode-arrow.next { right: -20px; }
+  @media (max-width: 900px) { .mode-arrow.prev { left: -6px; } .mode-arrow.next { right: -6px; } }
+  @media (max-width: 480px) { .mode-arrow { width: 36px; height: 36px; font-size: 22px; } }
+  .mode-toggle {
+    margin-left: auto; align-self: center; display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--fs-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--haze); background: transparent; border: 1px solid var(--ink-3);
+    padding: 8px 14px; cursor: pointer; transition: border-color .2s, color .2s;
+  }
+  .mode-toggle:hover { border-color: var(--cg-red); color: var(--deck); }
+  .mode-toggle .ico { display: inline-block; box-sizing: border-box; }
+  .mode-toggle.playing .ico { width: 9px; height: 11px; border-left: 3px solid currentColor; border-right: 3px solid currentColor; }
+  .mode-toggle.paused .ico { width: 0; height: 0; border-left: 10px solid currentColor; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+
   /* =====================  HARDWARE  ===================== */
   .hw { background: var(--ink); }
   .spec { margin-top: 38px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px 56px; }
@@ -538,12 +564,19 @@
 <!-- ====================== MODE ARBITRATION ====================== -->
 <section class="sim modes" id="modesim">
   <div class="wrap">
-    <div class="sec-head"><span class="no">04</span><h2>Who has control</h2></div>
+    <div class="sec-head">
+      <span class="no">04</span><h2>Who has control</h2>
+      <button class="mode-toggle playing" id="m-toggle" aria-label="Pause auto-play" aria-pressed="false">
+        <i class="ico"></i><span class="lbl">Pause</span>
+      </button>
+    </div>
     <p class="lede">Three states, one rule — the transmitter sits at the top of the priority stack.
       Flip the mode switch and the human takes over instantly; lose the RC link and the boat fails
-      safe on its own. Below, that arbitration, on a loop.</p>
+      safe on its own. Below, that arbitration — step through it or let it loop.</p>
 
-    <div class="sim-wrap">
+    <div class="mode-demo">
+      <button class="mode-arrow prev" id="m-prev" aria-label="Previous step">‹</button>
+      <div class="sim-wrap">
       <div class="plotter">
         <div class="tag"><span class="pin">●</span> Transmitter — illustration</div>
         <canvas id="tx" role="img" aria-label="Stylized RC transmitter: the SwA mode switch flips between AUTO and MANUAL, a failsafe-guard switch, the throttle and rudder sticks, and an RC-link indicator that drops out to trigger failsafe."></canvas>
@@ -566,6 +599,8 @@
         </div>
         <div class="mode-narr" id="m-narr">—</div>
       </div>
+      </div>
+      <button class="mode-arrow next" id="m-next" aria-label="Next step">›</button>
     </div>
   </div>
 </section>
@@ -1034,6 +1069,7 @@
       cards[i].querySelector('.mflag').textContent = on ? 'active' : 'standby';
     }
     if (narrEl) narrEl.textContent = st.narr;
+    if (canvas && !frameRunning) { swaAnim = st.swaAuto ? 1 : 0; draw(); }  // paused: redraw on manual step
   }
 
   // ---- transmitter graphic ----
@@ -1131,15 +1167,34 @@
     draw(); requestAnimationFrame(frame);
   }
 
-  apply(STEPS[0]); swaAnim = 1;
-  if (canvas) { resize(); window.addEventListener('resize', resize); }
-  if (!reduced) {
-    var si = 0;
-    setInterval(function () { si = (si + 1) % STEPS.length; apply(STEPS[si]); }, 2600);
-    if (canvas) requestAnimationFrame(frame);
-  } else if (canvas) {
-    requestAnimationFrame(function () { resize(); draw(); });
+  var si = 0, timer = null, playing = false, frameRunning = false;
+  var toggle = root.querySelector('#m-toggle');
+  var prevBtn = root.querySelector('#m-prev');
+  var nextBtn = root.querySelector('#m-next');
+
+  function go(n) { si = (n + STEPS.length) % STEPS.length; apply(STEPS[si]); }
+  function stopAuto() { if (timer) { clearInterval(timer); timer = null; } }
+  function startAuto() { stopAuto(); timer = setInterval(function () { go(si + 1); }, 2600); }
+  function setPlaying(p) {
+    playing = p;
+    if (toggle) {
+      toggle.classList.toggle('playing', p);
+      toggle.classList.toggle('paused', !p);
+      toggle.setAttribute('aria-pressed', String(!p));
+      toggle.querySelector('.lbl').textContent = p ? 'Pause' : 'Play';
+      toggle.setAttribute('aria-label', p ? 'Pause auto-play' : 'Play auto-play');
+    }
+    if (p) startAuto(); else stopAuto();
   }
+  if (toggle) toggle.addEventListener('click', function () { setPlaying(!playing); });
+  if (prevBtn) prevBtn.addEventListener('click', function () { go(si - 1); if (playing) startAuto(); });
+  if (nextBtn) nextBtn.addEventListener('click', function () { go(si + 1); if (playing) startAuto(); });
+
+  if (canvas) { resize(); window.addEventListener('resize', resize); }
+  go(0);
+  if (!reduced && canvas) { frameRunning = true; requestAnimationFrame(frame); }
+  else if (canvas) { requestAnimationFrame(function () { resize(); draw(); }); }
+  setPlaying(!reduced);
 })();
 </script>
 
