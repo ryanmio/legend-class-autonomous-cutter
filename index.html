@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Legend Cutter — autonomous 1:96 surface vessel</title>
+<meta name="description" content="A 1:96 scale USCG Legend-class cutter running a from-scratch autonomy stack on a single ESP32. GPS waypoints, sonar bottom-mapping, and live telemetry." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,800;1,400&family=Saira+Semi+Condensed:wght@500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --ink:       #12161B;
+    --ink-2:     #1A2027;
+    --ink-3:     #232C35;
+    --haze:      #8C969F;
+    --haze-dim:  #5C656E;
+    --deck:      #ECEFF2;
+    --deck-2:    #DDE2E7;
+    --paper-ink: #1C242B;
+    --cg-red:    #E4002B;
+    --cg-blue:   #003A8C;
+    --signal:    #38E1C2;
+
+    --fs-display: "Saira Semi Condensed", "Arial Narrow", sans-serif;
+    --fs-body:    "Public Sans", system-ui, -apple-system, sans-serif;
+    --fs-mono:    "Space Mono", ui-monospace, "SFMono-Regular", monospace;
+
+    --maxw:   1140px;
+    --gutter: clamp(20px, 5vw, 56px);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--ink); color: var(--deck);
+    font-family: var(--fs-body); font-size: 17px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  a { color: inherit; }
+  h1, h2, h3 { font-family: var(--fs-display); font-weight: 700; line-height: 1.0; margin: 0; letter-spacing: .005em; }
+  ::selection { background: var(--cg-red); color: #fff; }
+  img { max-width: 100%; display: block; }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding-inline: var(--gutter); }
+
+  .label {
+    font-family: var(--fs-mono); font-size: 12px; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--haze);
+  }
+
+  .stripe { display: inline-flex; align-items: stretch; height: 1em; gap: .16em; transform: skewX(-26deg); }
+  .stripe i { display: block; }
+  .stripe .r { width: .62em; background: var(--cg-red); }
+  .stripe .b { width: .30em; background: var(--cg-blue); }
+
+  /* full-width raked stripe divider */
+  .rule { position: relative; height: 64px; overflow: hidden; background: var(--ink); }
+  .rule::before, .rule::after {
+    content: ""; position: absolute; top: -40%; height: 180%; transform: skewX(-26deg);
+  }
+  .rule::before { left: 8%; width: 46px; background: var(--cg-red); }
+  .rule::after  { left: calc(8% + 64px); width: 22px; background: var(--cg-blue); }
+
+  /* =====================  NAV  ===================== */
+  header.nav {
+    position: sticky; top: 0; z-index: 50; background: rgba(18,22,27,.88);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--ink-3);
+  }
+  .nav .wrap { display: flex; align-items: center; gap: 24px; height: 62px; }
+  .brand {
+    display: flex; align-items: center; gap: 12px; font-family: var(--fs-display);
+    font-weight: 700; font-size: 18px; letter-spacing: .08em; text-transform: uppercase; text-decoration: none;
+  }
+  .brand .stripe { height: 18px; }
+  .nav nav { margin-left: auto; display: flex; gap: 26px; }
+  .nav nav a {
+    font-family: var(--fs-mono); font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--haze); text-decoration: none; padding: 6px 0; border-bottom: 1px solid transparent;
+  }
+  .nav nav a:hover { color: var(--deck); border-color: var(--cg-red); }
+  .nav .repo { color: var(--deck); }
+  @media (max-width: 680px) { .nav nav a:not(.repo) { display: none; } }
+
+  /* =====================  HERO  ===================== */
+  .hero {
+    position: relative; overflow: hidden;
+    min-height: 65vh; display: flex; flex-direction: column; justify-content: flex-end;
+    background: var(--ink-2); /* shows when no image */
+  }
+
+  /* HERO IMAGE — swap .hero-bg-ph for <img class="hero-bg" src="assets/hero.jpg" alt="..."> */
+  .hero-bg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: block; z-index: 0;
+  }
+  .hero-bg-ph {
+    background-image: repeating-linear-gradient(180deg, rgba(255,255,255,.016) 0 1px, transparent 1px 80px);
+  }
+  /* raked stripe decoration shown in placeholder only */
+  .hero-bg-ph .raked { position: absolute; inset: 0; pointer-events: none; opacity: .7; }
+  .hero-bg-ph .raked b { position: absolute; top: -15%; height: 130%; transform: skewX(-26deg); }
+  .hero-bg-ph .raked .red { right: 20%; width: 78px; background: var(--cg-red); box-shadow: 0 0 60px rgba(228,0,43,.2); }
+  .hero-bg-ph .raked .blu { right: calc(20% - 50px); width: 34px; background: var(--cg-blue); }
+  .hero-bg-ph .glow {
+    position: absolute; right: -10%; top: -30%; width: 60vw; height: 80vh;
+    background: radial-gradient(closest-side, rgba(0,58,140,.2), transparent 70%);
+  }
+  .hero-bg-ph-label {
+    position: absolute; bottom: 50%; left: 50%; transform: translate(-50%, 50%);
+    font-family: var(--fs-mono); font-size: 11px; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--haze-dim);
+  }
+
+  /* gradient so text always reads over photo or placeholder */
+  .hero-overlay {
+    position: absolute; inset: 0; z-index: 1;
+    background: linear-gradient(175deg, rgba(18,22,27,.1) 0%, rgba(18,22,27,.5) 55%, var(--ink) 95%);
+  }
+
+  .hero .wrap {
+    position: relative; z-index: 2;
+    padding-top: clamp(56px, 10vw, 104px); padding-bottom: clamp(48px, 8vw, 84px);
+  }
+  .hero .eyebrow { margin-bottom: 26px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .hero h1 {
+    font-size: clamp(46px, 9vw, 108px); font-weight: 800; letter-spacing: -.01em;
+    text-transform: uppercase; max-width: 14ch;
+  }
+  .hero h1 .em { color: var(--cg-red); }
+  .hero .sub { margin: 28px 0 0; max-width: 62ch; font-size: clamp(17px, 1.4vw, 20px); color: #C7CDD3; }
+  .hero .sub b { color: var(--deck); font-weight: 600; }
+
+  .stats {
+    margin-top: 46px; border-top: 1px solid var(--ink-3); border-bottom: 1px solid var(--ink-3);
+    display: grid; grid-template-columns: repeat(4, 1fr);
+  }
+  .stats .s { padding: 18px 16px 16px; border-right: 1px solid var(--ink-3); }
+  .stats .s:last-child { border-right: 0; }
+  .stats .v { font-family: var(--fs-display); font-weight: 700; font-size: clamp(26px, 3vw, 34px); line-height: 1; }
+  .stats .v small { font-size: .5em; color: var(--haze); font-weight: 600; margin-left: 3px; }
+  .stats .k { font-family: var(--fs-mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--haze); margin-top: 8px; }
+  @media (max-width: 560px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .stats .s { border-bottom: 1px solid var(--ink-3); }
+  }
+
+  /* =====================  SECTION SCAFFOLD  ===================== */
+  section { padding-block: clamp(64px, 9vw, 120px); }
+  .sec-head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 40px; }
+  .sec-head .no { font-family: var(--fs-mono); font-size: 13px; color: var(--cg-red); letter-spacing: .1em; }
+  .sec-head h2 { font-size: clamp(30px, 4.4vw, 52px); text-transform: uppercase; }
+
+  /* =====================  MEDIA SLOTS  ===================== */
+  .media {
+    position: relative; border: 1px solid var(--ink-3);
+    background: linear-gradient(135deg, var(--ink-2), var(--ink)); overflow: hidden;
+  }
+  .media .ar { width: 100%; }
+  .ar-16x9 { aspect-ratio: 16/9; }
+  .ar-4x3  { aspect-ratio: 4/3; }
+  .media .ph {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; color: var(--haze); text-align: center; padding: 24px;
+  }
+  .media .ph .cap { font-family: var(--fs-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+  .media .ph .hint { font-size: 13px; color: var(--haze-dim); max-width: 34ch; }
+  .media .play { width: 62px; height: 62px; border: 1.5px solid var(--haze); border-radius: 50%; display: grid; place-items: center; }
+  .media .play::after { content: ""; border-left: 16px solid var(--haze); border-top: 10px solid transparent; border-bottom: 10px solid transparent; margin-left: 4px; }
+  .media::before, .media::after { content: ""; position: absolute; width: 16px; height: 16px; border: 2px solid var(--cg-red); }
+  .media::before { left: 12px; top: 12px; border-right: 0; border-bottom: 0; }
+  .media::after  { right: 12px; bottom: 12px; border-left: 0; border-top: 0; }
+  .media img, .media video { width: 100%; height: 100%; object-fit: cover; }
+  figure.shot { margin: 0; }
+  figure.shot figcaption {
+    font-family: var(--fs-mono); font-size: 11.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--haze); margin-top: 10px;
+  }
+
+  /* =====================  CAPABILITIES  ===================== */
+  .caps { background: var(--ink-2); }
+  .cap-grid {
+    margin-top: 40px; display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--ink-3); border: 1px solid var(--ink-3);
+  }
+  .cap { background: var(--ink); padding: 26px 24px 28px; }
+  .cap .n { font-family: var(--fs-mono); font-size: 11px; color: var(--haze); letter-spacing: .16em; }
+  .cap h3 { margin: 14px 0 10px; font-size: 21px; text-transform: uppercase; letter-spacing: .02em; }
+  .cap p { margin: 0; font-size: 14.5px; color: #B4BBC2; line-height: 1.55; }
+  .cap .tag { display: inline-block; margin-top: 14px; font-family: var(--fs-mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--haze-dim); }
+  @media (max-width: 860px) { .cap-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) { .cap-grid { grid-template-columns: 1fr; } }
+
+  /* =====================  HARDWARE  ===================== */
+  .hw { background: var(--ink); }
+  .spec { margin-top: 38px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px 56px; }
+  @media (max-width: 760px) { .spec { grid-template-columns: 1fr; } }
+  .spec .group > .label { display: block; padding-bottom: 10px; margin-bottom: 6px; border-bottom: 1px solid var(--cg-red); color: var(--deck); }
+  .spec .line { display: flex; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--ink-3); font-family: var(--fs-mono); font-size: 14px; }
+  .spec .line .role { color: var(--haze); flex: 0 0 38%; letter-spacing: .04em; }
+  .spec .line .part { color: var(--deck); }
+
+  /* =====================  FOOTER  ===================== */
+  footer { background: var(--deck); color: var(--paper-ink); padding-block: 56px; }
+  footer .grid { display: flex; justify-content: space-between; gap: 32px; flex-wrap: wrap; align-items: flex-start; }
+  footer .brand { color: var(--paper-ink); }
+  footer p { max-width: 46ch; font-size: 15px; color: #46505A; margin: 14px 0 0; }
+  footer .cta a {
+    display: inline-flex; align-items: center; gap: 12px; text-decoration: none;
+    font-family: var(--fs-mono); font-size: 13px; letter-spacing: .12em; text-transform: uppercase;
+    border: 1.5px solid var(--paper-ink); padding: 13px 20px; color: var(--paper-ink);
+  }
+  footer .cta a:hover { background: var(--paper-ink); color: var(--deck); }
+  footer .meta {
+    width: 100%; margin-top: 38px; padding-top: 20px; border-top: 1px solid var(--deck-2);
+    font-family: var(--fs-mono); font-size: 11.5px; letter-spacing: .06em; color: #6B747D;
+  }
+
+  :focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ====================== NAV ====================== -->
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <span class="stripe" aria-hidden="true"><i class="r"></i><i class="b"></i></span>
+      Legend&nbsp;Cutter
+    </a>
+    <nav>
+      <a href="#capabilities">Capabilities</a>
+      <a href="#hardware">Hardware</a>
+      <a class="repo" href="https://github.com/ryanmio/legend-class-autonomous-cutter">Repo ↗</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ====================== HERO ====================== -->
+<section class="hero" id="top" style="padding-block: 0;">
+
+  <!-- HERO IMAGE — replace this div with <img class="hero-bg" src="assets/hero.jpg" alt="..."> when ready -->
+  <div class="hero-bg hero-bg-ph" aria-hidden="true">
+    <div class="glow"></div>
+    <div class="raked"><b class="red"></b><b class="blu"></b></div>
+    <span class="hero-bg-ph-label">Add: hero image</span>
+  </div>
+  <div class="hero-overlay" aria-hidden="true"></div>
+
+  <div class="wrap">
+    <div style="max-width: 600px;">
+      <div class="eyebrow">
+        <span class="label">1:96 USCG Legend-class NSC</span>
+        <span class="stripe" style="height:14px" aria-hidden="true"><i class="r"></i><i class="b"></i></span>
+        <span class="label">Autonomous surface vessel</span>
+      </div>
+
+      <h1>Stands its<br>own <span class="em">watch.</span></h1>
+
+      <p class="sub">A 1.3-meter scale cutter — roughly <b>220 PETG parts</b> — running a
+        <b>from-scratch autonomy stack on a single ESP32</b>. It captures
+        GPS waypoints, maps the bottom with sonar, and streams live telemetry to a phone.</p>
+    </div>
+
+    <div class="stats">
+      <div class="s"><div class="v">4.4<small>kt</small></div><div class="k">Top speed logged</div></div>
+      <div class="s"><div class="v">~1.3<small>m</small></div><div class="k">Length overall</div></div>
+      <div class="s"><div class="v">2.5<small>m</small></div><div class="k">GPS precision</div></div>
+      <div class="s"><div class="v">~220</div><div class="k">Printed parts</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================== HERO MEDIA / VIDEO ====================== -->
+<section style="padding-block: clamp(40px,6vw,72px); background: var(--ink);">
+  <div class="wrap">
+    <!-- ADD MEDIA · slot: hero-video — a clip of an autonomous run.
+         Replace the .ph block with:
+         <video class="ar ar-16x9" controls poster="assets/run-poster.jpg">
+           <source src="assets/run.mp4" type="video/mp4"></video>  -->
+    <div class="media" data-slot="hero-video">
+      <div class="ar ar-16x9"></div>
+      <div class="ph">
+        <div class="play" aria-hidden="true"></div>
+        <div class="cap">Add: autonomous run — video</div>
+        <div class="hint">Drop a clip in <code>assets/</code> (the boat under its own control is the headline).</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="rule" role="presentation"></div>
+
+<!-- ====================== CAPABILITIES ====================== -->
+<section class="caps" id="capabilities">
+  <div class="wrap">
+    <div class="sec-head"><span class="no">01</span><h2>Capabilities</h2></div>
+
+    <div class="cap-grid">
+      <div class="cap">
+        <div class="n">NAV / 01</div>
+        <h3>GPS waypoint nav</h3>
+        <p>Captures each waypoint within a set radius (~2–3 m), then advances to the next —
+          running a self-driven route with no hand on the sticks.</p>
+      </div>
+      <div class="cap">
+        <div class="n">SONAR / 02</div>
+        <h3>Bottom mapping</h3>
+        <p>A hull-mounted transducer logs depth against position while underway, building a
+          bathymetric picture of the bottom as it goes.</p>
+      </div>
+      <div class="cap">
+        <div class="n">IMU / 03</div>
+        <h3>Compass heading</h3>
+        <p>Magnetometer heading with gyro stabilization; the accelerometer logs roll, pitch,
+          and wave motion through the run.</p>
+      </div>
+      <div class="cap">
+        <div class="n">LINK / 04</div>
+        <h3>Live telemetry</h3>
+        <p>Position, heading, depth, battery, and system state stream over WiFi to a companion
+          iOS app — including gap backfill after a dropout.</p>
+      </div>
+      <div class="cap">
+        <div class="n">POWER / 05</div>
+        <h3>Battery monitoring</h3>
+        <p>INA219 current + voltage sense on the 4S pack. State logged continuously; low-voltage
+          events visible in the telemetry stream.</p>
+      </div>
+      <div class="cap">
+        <div class="n">BILGE / 06</div>
+        <h3>Bilge watch &amp; auto pump</h3>
+        <p>Leak detection with an automatic bilge pump — the boat looks after its own hull
+          while it works.</p>
+      </div>
+      <div class="cap">
+        <div class="n">FW / 07</div>
+        <h3>OTA firmware</h3>
+        <p>Updates go on over the air. The hull stays sealed and watertight — no cracking it
+          open for USB access between runs.</p>
+      </div>
+      <div class="cap">
+        <div class="n">DECK / 08</div>
+        <h3>Deck gun pan</h3>
+        <p>Positional servo on the main gun driven by a dedicated knob channel — slews the
+          turret independently of the helm.</p>
+      </div>
+      <div class="cap">
+        <div class="n">RADAR / 09</div>
+        <h3>Rotating radar</h3>
+        <p>Mast TRS-3D dish driven by a burst-mode PWM loop that simulates slow radar-sweep
+          rotation from a high-speed motor.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================== GALLERY ====================== -->
+<section style="padding-block: 0; background: var(--ink);">
+  <div class="wrap" style="padding-top: clamp(40px,5vw,64px); padding-bottom: clamp(64px,9vw,120px);">
+    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 18px;">
+      <!-- ADD MEDIA · slot: hull-wide — a wide hero still of the hull on the water -->
+      <figure class="shot">
+        <div class="media" data-slot="hull-wide">
+          <div class="ar ar-16x9"></div>
+          <div class="ph">
+            <div class="cap">Add: hull on the water — wide</div>
+            <div class="hint">A clean profile or underway shot reads best here.</div>
+          </div>
+        </div>
+        <figcaption>assets/hull-wide.jpg</figcaption>
+      </figure>
+      <!-- ADD MEDIA · slot: detail — a topside or electronics-bay detail -->
+      <figure class="shot">
+        <div class="media" data-slot="detail">
+          <div class="ar ar-4x3"></div>
+          <div class="ph">
+            <div class="cap">Add: detail</div>
+            <div class="hint">Deck / electronics bay.</div>
+          </div>
+        </div>
+        <figcaption>assets/detail.jpg</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<div class="rule" role="presentation"></div>
+
+<!-- ====================== HARDWARE ====================== -->
+<section class="hw" id="hardware">
+  <div class="wrap">
+    <div class="sec-head"><span class="no">02</span><h2>Hardware stack</h2></div>
+    <div class="spec">
+      <div class="group">
+        <span class="label">Compute &amp; control</span>
+        <div class="line"><span class="role">Controller</span><span class="part">ESP32 DevKit (dual-core)</span></div>
+        <div class="line"><span class="role">PWM driver</span><span class="part">PCA9685 · 16-ch</span></div>
+        <div class="line"><span class="role">TX</span><span class="part">Flysky FS-i6X</span></div>
+        <div class="line"><span class="role">RX</span><span class="part">FS-iA10B · iBUS</span></div>
+      </div>
+      <div class="group">
+        <span class="label">Sensing</span>
+        <div class="line"><span class="role">GPS</span><span class="part">BN-220</span></div>
+        <div class="line"><span class="role">IMU</span><span class="part">SparkFun ICM-20948 · 9-DOF</span></div>
+        <div class="line"><span class="role">Sonar</span><span class="part">JSN-SR04T depth transducer</span></div>
+        <div class="line"><span class="role">Power monitor</span><span class="part">INA219</span></div>
+      </div>
+      <div class="group">
+        <span class="label">Power</span>
+        <div class="line"><span class="role">Battery</span><span class="part">4S LiPo · 14.8 V</span></div>
+        <div class="line"><span class="role">Logic rail</span><span class="part">5 V (dedicated BEC)</span></div>
+        <div class="line"><span class="role">Servo rail</span><span class="part">6 V (separate)</span></div>
+        <div class="line"><span class="role">Charging</span><span class="part">XT60 deck port</span></div>
+      </div>
+      <div class="group">
+        <span class="label">Propulsion</span>
+        <div class="line"><span class="role">Motors</span><span class="part">Twin 550</span></div>
+        <div class="line"><span class="role">ESCs</span><span class="part">2 × 30 A</span></div>
+        <div class="line"><span class="role">Steering</span><span class="part">Rudder + differential thrust</span></div>
+        <div class="line"><span class="role">Audio</span><span class="part">DFPlayer Pro · PAM8403</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================== FOOTER ====================== -->
+<footer>
+  <div class="wrap">
+    <div class="grid">
+      <div>
+        <a class="brand" href="#top">
+          <span class="stripe" aria-hidden="true"><i class="r"></i><i class="b"></i></span>
+          Legend&nbsp;Cutter
+        </a>
+        <p>A 1:96 USCG Legend-class National Security Cutter that navigates itself — custom ESP32
+          autonomy stack, sonar bottom-mapping, live telemetry. Built solo.</p>
+      </div>
+      <div class="cta">
+        <a href="https://github.com/ryanmio/legend-class-autonomous-cutter">View the repo ↗</a>
+      </div>
+    </div>
+    <div class="meta">
+      <span>Firmware C++ · App TypeScript · ESP32 · iOS</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
