@@ -90,6 +90,13 @@ bool navTrySetWaypoint(float lat, float lon, float* outDistM) {
     return true;
 }
 
+bool navWaypointInRange(float lat, float lon, float* outDistM) {
+    if (!gpsValid()) return true;   // no fix → accept; navUpdate() distance-checks later
+    float d = haversineDistM(gpsLat(), gpsLon(), lat, lon);
+    if (outDistM) *outDistM = d;
+    return d <= MAX_WP_DIST_M;
+}
+
 void navClearWaypoint() {
     wpSet      = false;
     captured   = false;

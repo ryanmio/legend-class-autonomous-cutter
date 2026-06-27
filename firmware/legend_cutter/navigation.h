@@ -18,6 +18,13 @@ enum CapturedBy {
 // farther than MAX_WP_DIST_M from a *valid* current fix (fat-finger guard);
 // with no fix it accepts and the geometry update backstops the check later.
 bool navTrySetWaypoint(float lat, float lon, float* outDistM);
+
+// Read-only fat-finger check, no state mutation — safe to call from the network
+// task. Returns false (and fills *outDistM) if the point is farther than
+// MAX_WP_DIST_M from a valid current fix; true with no fix (navUpdate backstops
+// it). The actual set is deferred to the control loop via navTrySetWaypoint.
+bool navWaypointInRange(float lat, float lon, float* outDistM);
+
 void navClearWaypoint();
 void navResetLegStart();   // re-record the leg start on the next AUTO fix
 

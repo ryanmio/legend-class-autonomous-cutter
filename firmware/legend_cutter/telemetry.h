@@ -21,8 +21,8 @@
 
 #include <Arduino.h>
 
-void telemetryBegin();   // brings up WiFi, registers handlers, starts server
-void telemetryUpdate();  // server.handleClient() + non-blocking wifi reconnect
+void telemetryBegin();   // brings up WiFi, registers handlers, starts the core-0 network task
 
-uint16_t   telemetryCruiseUs();        // last value POSTed to /cruise
+uint16_t   telemetryCruiseUs();         // current cruise target (read by the control loop)
+void       telemetrySetCruiseUs(uint16_t us);  // applied by the control loop via cmdApply
 const char* telemetryBoatIP();          // c-string; empty if not connected

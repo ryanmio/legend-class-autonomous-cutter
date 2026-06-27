@@ -21,6 +21,7 @@
 #include "lights.h"
 #include "weapons.h"
 #include "histlog.h"
+#include "cmd.h"
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -33,12 +34,14 @@ extern const char* vesselModeName();
 extern bool        vesselFailsafeAck();
 
 static WebServer server(HTTP_PORT);
+static void      networkTask(void*);   // core-0 task; owns handleClient()/wifiMaintain()
 static String    boatIP;
 static uint16_t  cruiseUs  = DEFAULT_CRUISE_US;
 static uint32_t  sessionId = 0;     // hardware-random, set once in telemetryBegin()
 
-uint16_t    telemetryCruiseUs() { return cruiseUs; }
-const char* telemetryBoatIP()   { return boatIP.c_str(); }
+uint16_t    telemetryCruiseUs()             { return cruiseUs; }
+void        telemetrySetCruiseUs(uint16_t us) { cruiseUs = us; }  // control loop only (cmdApply)
+const char* telemetryBoatIP()               { return boatIP.c_str(); }
 
 // ── WiFi (scan-first connect + non-blocking maintain, ported from test_29) ──
 static String lastSsid;
@@ -337,11 +340,14 @@ static void handleCruise() {
         return;
     }
 
-    cruiseUs = newUs;
+    Command c = {};
+    c.type     = CMD_CRUISE;
+    c.cruiseUs = newUs;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
 
     StaticJsonDocument<128> resp;
     resp["ok"]        = true;
-    resp["cruise_us"] = cruiseUs;
+    resp["cruise_us"] = newUs;                 // requested value; applied within one control cycle
     resp["cap"]       = AUTO_CRUISE_CAP_US;
     char out[128];
     serializeJson(resp, out);
@@ -358,7 +364,8 @@ static void handleWaypoint() {
 
     // {"lat":null,"lon":null} → clear waypoint and reset capture latch.
     if (req["lat"].isNull() || req["lon"].isNull()) {
-        navClearWaypoint();
+        Command c = {}; c.type = CMD_WAYPOINT_CLEAR;
+        if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
         server.send(200, "application/json", "{\"ok\":true,\"cleared\":true}");
         return;
     }
@@ -369,13 +376,16 @@ static void handleWaypoint() {
     float lat = req["lat"].as<float>();
     float lon = req["lon"].as<float>();
     float d   = 0.0f;
-    if (!navTrySetWaypoint(lat, lon, &d)) {
+    // Validate (read-only) here; the control loop performs the actual set.
+    if (!navWaypointInRange(lat, lon, &d)) {
         char err[96];
         snprintf(err, sizeof(err),
             "{\"ok\":false,\"err\":\"waypoint %.0f m away (max %.0f m)\"}", d, MAX_WP_DIST_M);
         server.send(400, "application/json", err);
         return;
     }
+    Command c = {}; c.type = CMD_WAYPOINT_SET; c.lat = lat; c.lon = lon;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
 
     StaticJsonDocument<128> resp;
     resp["ok"]  = true;
@@ -410,12 +420,16 @@ static void handlePid() {
             return;
         }
     }
-    setPidGains(kp, kd);
+    Command c = {};
+    c.type = CMD_PID;
+    c.kp   = kp;     // resolved against current above; loop applies both
+    c.kd   = kd;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
 
     StaticJsonDocument<128> resp;
     resp["ok"] = true;
-    resp["kp"] = pidKp();
-    resp["kd"] = pidKd();
+    resp["kp"] = kp;                           // requested values; applied within one control cycle
+    resp["kd"] = kd;
     char out[128];
     serializeJson(resp, out);
     server.send(200, "application/json", out);
@@ -431,7 +445,8 @@ static void handleCalibrateMagStart() {
             "{\"ok\":true,\"state\":\"collecting\",\"note\":\"already running\"}");
         return;
     }
-    imuMagCalBegin();
+    Command c = {}; c.type = CMD_MAGCAL_START;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
     server.send(200, "application/json", "{\"ok\":true,\"state\":\"collecting\"}");
 }
 
@@ -440,11 +455,13 @@ static void handleCalibrateMagAbort() {
     if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
     if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
 
-    if (!imuMagCalAbort()) {
+    if (!imuMagCalCollecting()) {
         server.send(200, "application/json",
             "{\"ok\":true,\"state\":\"idle\",\"note\":\"not collecting\"}");
         return;
     }
+    Command c = {}; c.type = CMD_MAGCAL_ABORT;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
     server.send(200, "application/json", "{\"ok\":true,\"state\":\"idle\"}");
 }
 
@@ -464,7 +481,8 @@ static void handleLed() {
     else if (!strcmp(light, "deck"))   id = LED_DECK;
     else { server.send(400, "text/plain", "Unknown light"); return; }
 
-    lightsSet(id, on);
+    Command c = {}; c.type = CMD_LED; c.ledId = (uint8_t)id; c.ledOn = on;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
     server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -509,11 +527,12 @@ static void handleBilge() {
     if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
 
     bool on = req["on"] | false;
-    bilgeSetManual(on);
+    Command c = {}; c.type = CMD_BILGE; c.bilgeOn = on;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
 
     StaticJsonDocument<128> resp;
     resp["ok"]          = true;
-    resp["pump_manual"] = bilgePumpManual();
+    resp["pump_manual"] = on;                  // requested value; applied within one control cycle
     char out[128];
     serializeJson(resp, out);
     server.send(200, "application/json", out);
@@ -542,14 +561,18 @@ static void handleRadar() {
     }
     if (req.containsKey("burst_ms")) b = (uint32_t)req["burst_ms"].as<long>();
     if (req.containsKey("pause_ms")) p = (uint32_t)req["pause_ms"].as<long>();
-    radarSet(on, s, b, p);
+
+    Command c = {};
+    c.type = CMD_RADAR;
+    c.radarOn = on; c.radarSpeed = s; c.radarBurstMs = b; c.radarPauseMs = p;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
 
     StaticJsonDocument<160> resp;
-    resp["ok"]       = true;
-    resp["on"]       = radarOn();
-    resp["speed"]    = radarSpeed();
-    resp["burst_ms"] = radarBurstMs();
-    resp["pause_ms"] = radarPauseMs();
+    resp["ok"]       = true;                   // resolved values; applied within one control cycle
+    resp["on"]       = on;
+    resp["speed"]    = s;
+    resp["burst_ms"] = b;
+    resp["pause_ms"] = p;
     char out[160];
     serializeJson(resp, out);
     server.send(200, "application/json", out);
@@ -564,17 +587,20 @@ static void handleDepth() {
     if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
 
     const char* m = req["mode"] | "";
-    if      (!strcmp(m, "stop"))  sonarSetMode(DEPTH_OFF);
-    else if (!strcmp(m, "check")) sonarPingNow();
-    else if (!strcmp(m, "run"))   sonarSetMode(DEPTH_RUN);
+    Command c = {};
+    const char* respMode;
+    if      (!strcmp(m, "stop")) { c.type = CMD_DEPTH_MODE; c.depthRun = false; respMode = "off"; }
+    else if (!strcmp(m, "run"))  { c.type = CMD_DEPTH_MODE; c.depthRun = true;  respMode = "run"; }
+    else if (!strcmp(m, "check")){ c.type = CMD_DEPTH_PING; respMode = (sonarMode() == DEPTH_RUN) ? "run" : "off"; }
     else {
         server.send(400, "application/json", "{\"ok\":false,\"err\":\"mode must be stop|check|run\"}");
         return;
     }
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
 
     StaticJsonDocument<128> resp;
     resp["ok"]   = true;
-    resp["mode"] = (sonarMode() == DEPTH_RUN) ? "run" : "off";
+    resp["mode"] = respMode;
     if (sonarLastDepthM() >= 0.0f) {
         char dbuf[12];
         snprintf(dbuf, sizeof(dbuf), "%.2f", sonarLastDepthM());
@@ -720,9 +746,20 @@ void telemetryBegin() {
     if (boatIP.length()) {
         Serial.printf("HTTP up at http://%s/\n", boatIP.c_str());
     }
+
+    // Hand the server to a core-0 task. From here on, handleClient()/wifiMaintain()
+    // run ONLY here — never on the control loop (core 1) — so a blocked socket
+    // send on a bad link can never stall RC/FSM/failsafe. server is touched only
+    // by this task after this point.
+    xTaskCreatePinnedToCore(networkTask, "net", NET_TASK_STACK, NULL, 1, NULL, NET_TASK_CORE);
 }
 
-void telemetryUpdate() {
-    server.handleClient();
-    wifiMaintain();
+// Owns all networking. A blocking send here delays only telemetry (expendable);
+// the control loop is on the other core and never waits behind it.
+static void networkTask(void*) {
+    for (;;) {
+        server.handleClient();
+        wifiMaintain();
+        vTaskDelay(1);          // yield ~1 tick; telemetry is best-effort
+    }
 }

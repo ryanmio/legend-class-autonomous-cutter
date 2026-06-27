@@ -12,13 +12,17 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.5.2"
+#define FIRMWARE_VERSION "0.6.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
 static const uint8_t  I2C_SDA_PIN = 21;
 static const uint8_t  I2C_SCL_PIN = 22;
 static const uint32_t I2C_FREQ_HZ = 400000;
+// Bound the bus so a stuck slave can never hang the control loop. ESP32's Wire
+// already defaults to a timeout; this pins it explicitly (hygiene — not the
+// cause of the v0.5.x stalls, which were network-send blocking).
+static const uint16_t I2C_TIMEOUT_MS = 25;
 
 static const uint8_t PCA9685_ADDR  = 0x40;
 static const uint8_t INA219_ADDR   = 0x41;
@@ -219,6 +223,17 @@ static const float MAX_WP_DIST_M    = 1000.0f;
 // design — if neither connects, autopilot + RC failsafe still work; HTTP/
 // telemetry are simply absent until the network returns.
 static const uint16_t HTTP_PORT = 80;
+
+// ── Concurrency: network task + command queue ──────────────────────────────
+// All networking (WebServer + WiFi maintain) runs in a task pinned to core 0
+// (the WiFi/lwIP core); the Arduino loop() — RC, FSM, failsafe, outputs — stays
+// on core 1 and calls ZERO network functions, so a blocked socket send can
+// never stall control. Operator commands cross core 0 → core 1 through a single
+// lock-free single-producer/single-consumer queue (cmd.h); telemetry crosses
+// core 1 → core 0 as lock-free, expendable reads.
+static const uint16_t NET_TASK_STACK = 8192;   // bytes: WebServer + ArduinoJson + /history String
+static const uint8_t  NET_TASK_CORE  = 0;      // WiFi/lwIP core; loop() runs on core 1
+static const uint8_t  CMD_QUEUE_LEN   = 8;     // SPSC ring depth (commands are human-paced)
 
 // ── Onboard telemetry history (store-and-sync) ─────────────────────────────
 // RAM ring buffer of compact per-second records, recorded continuously

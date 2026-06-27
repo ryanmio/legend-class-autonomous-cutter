@@ -37,6 +37,7 @@
 #include "weapons.h"
 #include "telemetry.h"
 #include "histlog.h"
+#include "cmd.h"
 
 enum VesselMode { MODE_MANUAL, MODE_AUTO, MODE_FAILSAFE };
 static VesselMode mode                = MODE_MANUAL;
@@ -165,6 +166,29 @@ static void applyOutputs() {
     }
 }
 
+// Drain operator commands posted by the network task (core 0). Runs on the
+// control loop (core 1) so all actuation stays on one core — no peripheral is
+// ever touched from two cores, which is why no I2C/peripheral lock is needed.
+static void cmdApply(const Command& c) {
+    switch (c.type) {
+      case CMD_WAYPOINT_SET:   { float d; navTrySetWaypoint(c.lat, c.lon, &d); break; }
+      case CMD_WAYPOINT_CLEAR: navClearWaypoint();                             break;
+      case CMD_CRUISE:         telemetrySetCruiseUs(c.cruiseUs);               break;
+      case CMD_PID:            setPidGains(c.kp, c.kd);                        break;
+      case CMD_LED:            lightsSet((LedId)c.ledId, c.ledOn);            break;
+      case CMD_BILGE:          bilgeSetManual(c.bilgeOn);                      break;
+      case CMD_RADAR:          radarSet(c.radarOn, c.radarSpeed, c.radarBurstMs, c.radarPauseMs); break;
+      case CMD_DEPTH_MODE:     sonarSetMode(c.depthRun ? DEPTH_RUN : DEPTH_OFF); break;
+      case CMD_DEPTH_PING:     sonarPingNow();                                 break;
+      case CMD_MAGCAL_START:   imuMagCalBegin();                               break;
+      case CMD_MAGCAL_ABORT:   imuMagCalAbort();                               break;
+    }
+}
+static void cmdDrain() {
+    Command c;
+    while (cmdTryDequeue(c)) cmdApply(c);   // ≤ CMD_QUEUE_LEN cheap calls; never blocks
+}
+
 void setup() {
     Serial.begin(115200);
     delay(500);
@@ -177,17 +201,25 @@ void setup() {
 
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
     Wire.setClock(I2C_FREQ_HZ);
+    Wire.setTimeOut(I2C_TIMEOUT_MS);   // bound the bus — a stuck slave can't hang the loop
 
-    if (!motorsBegin()) { Serial.println("FAIL: PCA9685 not at 0x40"); while (true) delay(1000); }
-    if (!imuBegin())    { Serial.println("FAIL: ICM-20948 not at 0x68"); while (true) delay(1000); }
+    // Neutralize outputs FIRST, before any init that could hang. The PCA9685 is
+    // separately powered and latches its last PWM across an ESP reset, so after a
+    // watchdog reboot the ESCs would otherwise hold cruise until reprogrammed.
+    if (!motorsBegin()) Serial.println("WARN: PCA9685 not at 0x40 — outputs unavailable");
+    setRudder(NEUTRAL_US);
+    setEscs(NEUTRAL_US);
+
+    // Degrade, don't hang: a missing IMU disables heading but MANUAL stays safe
+    // and outputs are already neutral. (Was a permanent while(true) — which on a
+    // reboot-into-fault left the ESCs latched at cruise forever.)
+    if (!imuBegin()) Serial.println("WARN: ICM-20948 not at 0x68 — heading disabled; MANUAL still safe");
 
     if (batteryBegin()) Serial.printf("[I2C] INA219 detected at 0x%02X\n", INA219_ADDR);
     else                Serial.printf("[I2C] WARN: INA219 not at 0x%02X — voltage telemetry disabled\n", INA219_ADDR);
 
     weaponsBegin();
 
-    setRudder(NEUTRAL_US);
-    setEscs(NEUTRAL_US);
     Serial.println("Arming ESCs (3 s @ 1500 µs)...");
     delay(3000);
 
@@ -202,6 +234,13 @@ void setup() {
     Serial.printf("Default cruise=%u µs (cap %u). Default PID kp=%.2f kd=%.2f. Capture=%.1f m.\n",
         DEFAULT_CRUISE_US, AUTO_CRUISE_CAP_US, DEFAULT_KP, DEFAULT_KD, CAPTURE_RADIUS_M);
     Serial.println("Ready.");
+
+    // Backstop only — with networking off the control loop this should never
+    // fire. If an unforeseen block ever wedges the loop, the task WDT reboots;
+    // setup() then neutralizes outputs first and the RAM-only waypoint is gone,
+    // so the boat comes up MANUAL/neutral and never resumes AUTO. Enabled last
+    // so the long wifiConnect() in setup can't trip it.
+    enableLoopWDT();
 }
 
 void loop() {
@@ -215,7 +254,7 @@ void loop() {
     sonarUpdate();
     gpsUpdate();
     imuUpdateCogTrim();
-    telemetryUpdate();         // server.handleClient() + non-blocking wifi reconnect
+    cmdDrain();                // apply operator commands queued by the core-0 network task
     histlogUpdate();           // rate-limited capture into the RAM history ring
 
     // Compute + apply.
@@ -223,4 +262,6 @@ void loop() {
     navUpdate(mode == MODE_AUTO);
     weaponsUpdate();           // CH5 knob → deck-gun pan servo (independent of mode)
     applyOutputs();
+
+    feedLoopWDT();             // backstop heartbeat (never starves in normal operation)
 }
