@@ -26,6 +26,7 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
 
 // Provided by legend_cutter.ino — current vessel mode label + failsafe ack.
 extern const char* vesselModeName();
@@ -54,6 +55,30 @@ static void blinkNav(int times) {
     }
 }
 
+// STA-link range/robustness tuning. Telemetry/command only — does NOT touch the
+// RC/iBUS control path or the FSM. Split in two: the protocol/bandwidth pins must
+// be set on the started driver before associating; the power-save + TX-power
+// asserts are re-applied on every (re)connect because association can reset them.
+//
+// 11b is kept enabled so rate control retains the longest-range basic-rate
+// fallback; 20 MHz is pinned for edge robustness. Channel is the AP's to choose
+// (a STA follows it), so it's a router-side setting, not a firmware lever.
+static void wifiSetStaRadioConfig() {
+    esp_wifi_set_protocol(WIFI_IF_STA,
+        WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+}
+
+static void wifiAssertLinkTuning() {
+    WiFi.setSleep(false);            // no Wi-Fi modem sleep → steadier polls at range
+    int8_t before = 0, after = 0;
+    esp_wifi_get_max_tx_power(&before);
+    esp_wifi_set_max_tx_power(84);   // driver max (unit = 0.25 dBm → ~20 dBm)
+    esp_wifi_get_max_tx_power(&after);
+    Serial.printf("[WiFi] TX power %.2f→%.2f dBm; modem-sleep off\n",
+                  before * 0.25f, after * 0.25f);
+}
+
 static void wifiConnect() {
     Serial.println();
     Serial.println("[WiFi] Scanning…");
@@ -61,6 +86,7 @@ static void wifiConnect() {
     WiFi.disconnect(true);
     delay(100);
     WiFi.mode(WIFI_STA);
+    wifiSetStaRadioConfig();
     int n = WiFi.scanNetworks();
     Serial.printf("[WiFi] %d networks found\n", n);
 
@@ -103,6 +129,7 @@ static void wifiConnect() {
         if (WiFi.status() == WL_CONNECTED) {
             boatIP = WiFi.localIP().toString();
             wifiWasConnected = true;
+            wifiAssertLinkTuning();
             Serial.printf(" OK %s\n", boatIP.c_str());
             blinkNav(2);
             return;
@@ -121,6 +148,7 @@ static void wifiMaintain() {
         if (!wifiWasConnected) {
             wifiWasConnected = true;
             boatIP = WiFi.localIP().toString();
+            wifiAssertLinkTuning();
             Serial.printf("[WiFi] reconnected: %s\n", boatIP.c_str());
         }
         return;
