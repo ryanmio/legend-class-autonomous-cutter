@@ -106,6 +106,7 @@ function notifyRunning() { for (const fn of runningListeners) fn(unsubscribe !==
 export function start() {
   if (unsubscribe) return;
   lastCheckpointAt = 0;   // checkpoint on the next tick, not 30 s in
+  pendingGaps = [];       // a fresh flight inherits no stale gaps
   unsubscribe = subscribe((data) => {
     rows.push({ ts: Date.now(), ...data });
     if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
@@ -598,7 +599,29 @@ let autoEscAboveSince: number | null = null;
 let autoTickHandle: ReturnType<typeof setInterval> | null = null;
 // uptime (s) of the previous frame we saw — used to spot a gap on reconnect.
 let autoPrevUptimeS: number | null = null;
-let backfillInProgress   = false;
+
+// Pending gap backfills. A gap is detected the instant a frame's uptime jumps
+// past the previous frame's, but the /history fetch that fills it can fail
+// (marginal WiFi right after the boat re-enters range is exactly when it's
+// invoked). Previously that was a fire-and-forget fetch whose error was
+// swallowed and never retried — so one failed fetch lost the whole gap
+// permanently, because autoPrevUptimeS advanced regardless. Now each gap is
+// queued with its own wall-clock anchor and pumped sequentially, retried every
+// tick until the link returns and the fetch succeeds. A gap is dropped only if
+// the boat rebooted across it (ring cleared) or the flight ended.
+interface PendingGap {
+  sinceMs: number;          // pull /history records with uptime_ms > this
+  anchorUptimeMs: number;   // reconnect frame uptime (ms) — ts conversion anchor
+  anchorWallMs: number;     // reconnect frame wall time — ts conversion anchor
+  sessionId: number | null; // boat session at detection; reboot guard
+  version?: string;
+  attempts: number;
+}
+let pendingGaps: PendingGap[] = [];
+let pumpRunning = false;
+
+// Exposed so a future UI affordance can show "telemetry gap, recovering".
+export function pendingGapCount(): number { return pendingGaps.length; }
 // Foreground state. While the app is backgrounded (e.g. you switch to the
 // camera) iOS freezes its poll timer, so it stops hearing the boat even though
 // the boat is fine and still recording. We must not mistake that silence for
@@ -633,7 +656,7 @@ function autoOnFrame(data: TelemetryData) {
     }
     autoLastSessionId = data.session_id;
   }
-  if (rebooted) autoPrevUptimeS = null;
+  if (rebooted) { autoPrevUptimeS = null; pendingGaps = []; }
 
   // 2. Throttle-up detection — ESC commanded out of neutral for the
   //    debounce window. Uses the boat's commanded ESC µs (not raw CH3)
@@ -653,44 +676,72 @@ function autoOnFrame(data: TelemetryData) {
 
   // 3. Gap backfill — if a flight is running and this frame's uptime jumped
   //    well past the previous frame's, we missed data (a WiFi dropout we just
-  //    recovered from). Pull the hole from the boat's /history ring and merge
-  //    it in. This frame is the wall-clock anchor for converting record
-  //    uptimes to timestamps.
+  //    recovered from). Queue the hole; the pump pulls it from the boat's
+  //    /history ring and retries until it succeeds. This frame is the
+  //    wall-clock anchor for converting the gap's record uptimes to timestamps.
   if (
     unsubscribe && !rebooted && !justStarted &&
     data.uptime != null && autoPrevUptimeS != null &&
     data.uptime - autoPrevUptimeS > GAP_TRIGGER_S
   ) {
-    void backfillGap(autoPrevUptimeS * 1000, data.uptime * 1000, now, data.session_id ?? null, data.v);
+    pendingGaps.push({
+      sinceMs: autoPrevUptimeS * 1000,
+      anchorUptimeMs: data.uptime * 1000,
+      anchorWallMs: now,
+      sessionId: data.session_id ?? null,
+      version: data.v,
+      attempts: 0,
+    });
+    void pumpBackfills();
   }
 
   if (data.uptime != null) autoPrevUptimeS = data.uptime;
 }
 
-// Pull every record in (sinceMs, now] from the boat and merge the ones we're
-// missing into the running flight. Guarded so only one runs at a time.
-async function backfillGap(
-  sinceMs: number,
-  anchorUptimeMs: number,
-  anchorWallMs: number,
-  expectSessionId: number | null,
-  version?: string,
-): Promise<void> {
-  if (backfillInProgress) return;
-  const ip = getCurrentIP();
-  if (!ip) return;
-  backfillInProgress = true;
+// Drain the pending-gap queue, oldest first, one fetch at a time. On a fetch
+// failure the gap stays at the head of the queue and the pump stops — it's
+// retried by the next frame or the next autoTick, so a gap survives an
+// arbitrarily long outage and fills the moment the link is usable again.
+// Single-flight via pumpRunning so overlapping triggers (choppy WiFi) can't
+// race; unlike the old per-fetch guard, queued gaps are never dropped.
+async function pumpBackfills(): Promise<void> {
+  if (pumpRunning) return;
+  pumpRunning = true;
   try {
-    const { sessionId, records } = await fetchHistorySince(ip, sinceMs, BACKFILL_MAX_PAGES);
-    // If the boat rebooted between the anchor frame and our fetch, the ring is
-    // a different flight — don't merge across the boundary.
-    if (expectSessionId != null && sessionId !== expectSessionId) return;
-    if (!unsubscribe) return;  // flight ended (e.g. manual stop) while fetching
-    mergeBackfill(records, anchorUptimeMs, anchorWallMs, version);
-  } catch (e) {
-    console.warn('[telemetryLogger] backfill failed', e);
+    while (pendingGaps.length > 0) {
+      if (!unsubscribe) { pendingGaps = []; break; }  // flight ended
+      const ip = getCurrentIP();
+      if (!ip) break;                                  // no link; retry on next tick
+      const g = pendingGaps[0];
+      try {
+        const { sessionId, records } = await fetchHistorySince(ip, g.sinceMs, BACKFILL_MAX_PAGES);
+        // Boat rebooted across this gap → ring is a different flight, the hole
+        // is unrecoverable. Drop it rather than retrying forever.
+        if (g.sessionId != null && sessionId !== g.sessionId) {
+          console.warn(
+            `[telemetryLogger] backfill gap since=${g.sinceMs}ms abandoned — ` +
+            `session changed (${g.sessionId}→${sessionId}); ring cleared by reboot`,
+          );
+          pendingGaps.shift();
+          continue;
+        }
+        if (!unsubscribe) { pendingGaps = []; break; }  // flight ended mid-fetch
+        mergeBackfill(records, g.anchorUptimeMs, g.anchorWallMs, g.version);
+        pendingGaps.shift();                            // filled — done with this gap
+      } catch (e) {
+        // Surface the REAL failure cause (timeout/abort/network) with the
+        // cursor + attempt count so a recurring failure is diagnosable from the
+        // log instead of inferred. Leave the gap queued for retry.
+        g.attempts++;
+        console.warn(
+          `[telemetryLogger] backfill gap since=${g.sinceMs}ms attempt ${g.attempts} failed; ` +
+          `${pendingGaps.length} gap(s) pending. cause:`, e,
+        );
+        break;
+      }
+    }
   } finally {
-    backfillInProgress = false;
+    pumpRunning = false;
   }
 }
 
@@ -744,6 +795,11 @@ function autoTick() {
     lastCheckpointAt = now;
     void checkpointDraft();
   }
+
+  // Retry any gap whose /history fetch hasn't succeeded yet. Frame-driven
+  // pumping only fires when frames arrive; this guarantees a gap still fills
+  // during a quiet stretch once the link comes back.
+  if (pendingGaps.length > 0) void pumpBackfills();
 
   // Boat-gone detection. A short/medium WiFi dropout is bridged by /history
   // backfill, not by ending the flight, so the threshold is deliberately long.
