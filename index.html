@@ -281,6 +281,10 @@
   .mstate.fail.active { border-color: var(--cg-red); box-shadow: 0 0 0 1px var(--cg-red), 0 0 26px rgba(228,0,43,.15); }
   .mstate.fail.active .mdot { background: var(--cg-red); box-shadow: 0 0 10px var(--cg-red); }
   .mstate.fail.active .mflag { color: var(--cg-red); }
+  .modes .mstate { cursor: pointer; }
+  .modes .mstate:not(.active):hover { border-color: var(--haze); background: var(--ink-2); }
+  .modes .mstate:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+  #tx { cursor: default; }
   .mode-narr {
     margin-top: 8px; font-family: var(--fs-mono); font-size: 13px; color: #C7CDD3; line-height: 1.55;
     min-height: 2.8em; border-left: 2px solid var(--cg-red); padding-left: 14px;
@@ -303,8 +307,9 @@
     transition: border-color .2s, background .2s, color .2s;
   }
   .mode-arrow:hover { border-color: var(--cg-red); color: #fff; background: var(--ink-2); }
-  .mode-arrow.prev { left: -20px; }
-  .mode-arrow.next { right: -20px; }
+  .mode-arrow.prev { left: -52px; }
+  .mode-arrow.next { right: -52px; }
+  @media (max-width: 1040px) { .mode-arrow.prev { left: -12px; } .mode-arrow.next { right: -12px; } }
   @media (max-width: 900px) { .mode-arrow.prev { left: -6px; } .mode-arrow.next { right: -6px; } }
   @media (max-width: 480px) { .mode-arrow { width: 36px; height: 36px; font-size: 22px; } }
   .mode-toggle {
@@ -572,27 +577,28 @@
     </div>
     <p class="lede">Three states, one rule — the transmitter sits at the top of the priority stack.
       Flip the mode switch and the human takes over instantly; lose the RC link and the boat fails
-      safe on its own. Below, that arbitration — step through it or let it loop.</p>
+      safe on its own. Try it: tap <strong>SwA</strong> or <strong>SwD</strong> on the transmitter — or a
+      mode below — to drive the arbitration yourself, or let it loop.</p>
 
     <div class="mode-demo">
       <button class="mode-arrow prev" id="m-prev" aria-label="Previous step">‹</button>
       <div class="sim-wrap">
       <div class="plotter">
-        <div class="tag"><span class="pin">●</span> Transmitter — illustration</div>
-        <canvas id="tx" role="img" aria-label="Stylized RC transmitter: the SwA mode switch flips between AUTO and MANUAL, a failsafe-guard switch, the throttle and rudder sticks, and an RC-link indicator that drops out to trigger failsafe."></canvas>
+        <div class="tag"><span class="pin">●</span> Transmitter — tap SwA / SwD</div>
+        <canvas id="tx" role="img" aria-label="Stylized RC transmitter: the SwA mode switch flips between AUTO and MANUAL, the SwD failsafe-guard switch, the throttle and rudder sticks, and an RC-link indicator that drops out to trigger failsafe. Tap SwA or SwD to change mode."></canvas>
       </div>
       <div class="mode-stage">
-        <div class="mstate" data-s="MANUAL">
+        <div class="mstate" data-s="MANUAL" role="button" tabindex="0" aria-label="Command MANUAL mode">
           <span class="mdot"></span>
           <div class="mbody"><h3>Manual</h3><p>Sticks drive rudder and throttle directly.</p></div>
           <span class="mflag">standby</span>
         </div>
-        <div class="mstate" data-s="AUTO">
+        <div class="mstate" data-s="AUTO" role="button" tabindex="0" aria-label="Command AUTO mode">
           <span class="mdot"></span>
           <div class="mbody"><h3>Auto</h3><p>Holds heading to the waypoint by rudder + differential thrust.</p></div>
           <span class="mflag">standby</span>
         </div>
-        <div class="mstate fail" data-s="FAILSAFE">
+        <div class="mstate fail" data-s="FAILSAFE" role="button" tabindex="0" aria-label="Throw the failsafe guard">
           <span class="mdot"></span>
           <div class="mbody"><h3>Failsafe</h3><p>Throttle zero, rudder centered. Latches until the helm is taken.</p></div>
           <span class="mflag">standby</span>
@@ -1039,8 +1045,9 @@
 })();
 
 
-/* Mode arbitration — auto-playing scenario through MANUAL / AUTO / FAILSAFE,
-   with a stylized transmitter showing the switches and the RC link. Illustration. */
+/* Mode arbitration — a reactive transmitter the visitor can drive. Tap SwA / SwD
+   on the canvas or a mode card; auto-play walks a scripted tour of the same model.
+   Illustration. */
 (function () {
   var root = document.getElementById('modesim');
   if (!root) return;
@@ -1048,32 +1055,62 @@
   var ctx = canvas && canvas.getContext('2d');
   var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  var STEPS = [
-    { state: 'AUTO', swaAuto: true, link: true, narr: 'AUTO engaged — holding heading toward the posted waypoint.' },
-    { state: 'MANUAL', swaAuto: false, link: true, narr: 'Mode switch → MANUAL. The helm seizes control the same loop cycle — no "are you sure".' },
-    { state: 'AUTO', swaAuto: true, link: true, narr: 'Switch back to AUTO — autonomy resumes the mission.' },
-    { state: 'FAILSAFE', swaAuto: true, link: false, narr: 'RC link lost — FAILSAFE: throttle to zero, rudder centered. It does not coast off.' },
-    { state: 'FAILSAFE', swaAuto: true, link: true, narr: 'Link is back — but FAILSAFE latches. It will not silently re-arm autonomy.' },
-    { state: 'MANUAL', swaAuto: false, link: true, narr: 'Flip to MANUAL to clear FAILSAFE — control returns to the transmitter.' }
+  // Guided tour — full input snapshots so stepping is deterministic in both directions.
+  var SEQ = [
+    { swa: true,  swd: false, link: true,  latched: false, narr: 'AUTO engaged — holding heading toward the posted waypoint.' },
+    { swa: false, swd: false, link: true,  latched: false, narr: 'Mode switch → MANUAL. The helm seizes control the same loop cycle — no "are you sure".' },
+    { swa: true,  swd: false, link: true,  latched: false, narr: 'Switch back to AUTO — autonomy resumes the mission.' },
+    { swa: true,  swd: false, link: false, latched: true,  narr: 'RC link lost — FAILSAFE: throttle to zero, rudder centered. It does not coast off.' },
+    { swa: true,  swd: false, link: true,  latched: true,  narr: 'Link is back — but FAILSAFE latches. It will not silently re-arm autonomy.' },
+    { swa: false, swd: false, link: true,  latched: false, narr: 'Flip to MANUAL to clear FAILSAFE — control returns to the transmitter.' }
   ];
 
   var cards = root.querySelectorAll('.mstate');
   var narrEl = root.querySelector('#m-narr');
-  var cur = STEPS[0], swaAnim = 1;
+  // Live input state the whole demo derives from.
+  var st = { swa: true, swd: false, link: true, latched: false };
+  var cur = { state: 'AUTO', swaAuto: true, link: true };
+  var swaAnim = 1, swdAnim = 1;
 
-  function apply(st) {
-    cur = st;
+  function applyVisual(mode, narr) {
+    cur = { state: mode, swaAuto: st.swa, link: st.link };
     for (var i = 0; i < cards.length; i++) {
-      var on = cards[i].getAttribute('data-s') === st.state;
+      var on = cards[i].getAttribute('data-s') === mode;
       cards[i].classList.toggle('active', on);
       cards[i].querySelector('.mflag').textContent = on ? 'active' : 'standby';
     }
-    if (narrEl) narrEl.textContent = st.narr;
-    if (canvas && !frameRunning) { swaAnim = st.swaAuto ? 1 : 0; draw(); }  // paused: redraw on manual step
+    if (narrEl) narrEl.textContent = narr;
+    if (canvas && !frameRunning) { swaAnim = st.swa ? 1 : 0; swdAnim = st.swd ? 0 : 1; draw(); }  // paused: redraw now
+  }
+
+  // Apply a scripted tour frame (explicit latched → reproducible forward/back).
+  function applyStep(s) {
+    st.swa = s.swa; st.swd = s.swd; st.link = s.link; st.latched = s.latched;
+    var mode = s.latched ? 'FAILSAFE' : (s.swa ? 'AUTO' : 'MANUAL');
+    applyVisual(mode, s.narr);
+  }
+
+  // Derive mode from live inputs (free interaction). Failsafe latches; it clears
+  // only by flipping SwA to MANUAL with the link up and the guard released.
+  function recompute() {
+    if (!st.link || st.swd) st.latched = true;
+    if (st.latched && !st.swa && st.link && !st.swd) st.latched = false;
+    var mode = st.latched ? 'FAILSAFE' : (st.swa ? 'AUTO' : 'MANUAL');
+    applyVisual(mode, narrFree(mode));
+  }
+  function narrFree(mode) {
+    if (mode === 'FAILSAFE') {
+      if (!st.link) return 'RC link lost — FAILSAFE: throttle to zero, rudder centered. It does not coast off.';
+      if (st.swd)   return 'Failsafe guard (SwD) thrown — the boat fails safe on command, and it latches.';
+      return 'Guard released, but FAILSAFE latches. Flip SwA to MANUAL to clear it.';
+    }
+    if (mode === 'AUTO') return 'AUTO — holding heading to the waypoint by rudder + differential thrust.';
+    return 'MANUAL — the sticks drive rudder and throttle directly. The helm has control.';
   }
 
   // ---- transmitter graphic ----
   var ox = 0, oy = 0, plotW = 1, plotH = 1, dpr = 1, pulse = 0;
+  var hitA = null, hitD = null;
   function resize() {
     if (!canvas) return;
     var r = canvas.getBoundingClientRect();
@@ -1087,13 +1124,17 @@
     ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
-  function swDraw(cx, ty, h, up, hi, label) {
+  function swDraw(cx, ty, h, up, tone, label) {
+    var box, line, knob, txt;
+    if (tone === 'teal') { box = 'rgba(56,225,194,.12)'; line = 'rgba(56,225,194,.6)'; knob = '#38E1C2'; txt = '#38E1C2'; }
+    else if (tone === 'red') { box = 'rgba(228,0,43,.14)'; line = 'rgba(228,0,43,.6)'; knob = '#E4002B'; txt = '#E4002B'; }
+    else { box = 'rgba(255,255,255,.05)'; line = 'rgba(140,150,159,.4)'; knob = '#8C969F'; txt = '#5C656E'; }
     rr(cx - 5, ty, 10, h, 5);
-    ctx.fillStyle = hi ? 'rgba(56,225,194,.12)' : 'rgba(255,255,255,.05)'; ctx.fill();
-    ctx.strokeStyle = hi ? 'rgba(56,225,194,.6)' : 'rgba(140,150,159,.4)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = box; ctx.fill();
+    ctx.strokeStyle = line; ctx.lineWidth = 1; ctx.stroke();
     var ky = ty + (1 - up) * (h - 12) + 6;
-    ctx.beginPath(); ctx.arc(cx, ky, 5.5, 0, 7); ctx.fillStyle = hi ? '#38E1C2' : '#8C969F'; ctx.fill();
-    ctx.fillStyle = hi ? '#38E1C2' : '#5C656E'; ctx.font = '600 8px "Space Mono", monospace'; ctx.textAlign = 'center';
+    ctx.beginPath(); ctx.arc(cx, ky, 5.5, 0, 7); ctx.fillStyle = knob; ctx.fill();
+    ctx.fillStyle = txt; ctx.font = '600 8px "Space Mono", monospace'; ctx.textAlign = 'center';
     ctx.fillText(label, cx, ty + h + 12);
   }
   function stick(cx, cy, r, dx, dy, label) {
@@ -1117,12 +1158,16 @@
     // switches: SwA (MODE), B, C, SwD (F/S)
     var sy = BY + BH * 0.15, sh = BH * 0.17;
     var xs = [0.12, 0.21, 0.30, 0.39].map(function (f) { return BX + BW * f; });
-    swDraw(xs[0], sy, sh, swaAnim, true, 'SwA');
-    swDraw(xs[1], sy, sh, 1, false, 'B');
-    swDraw(xs[2], sy, sh, 1, false, 'C');
-    swDraw(xs[3], sy, sh, 1, true, 'SwD');
+    swDraw(xs[0], sy, sh, swaAnim, 'teal', 'SwA');
+    swDraw(xs[1], sy, sh, 1, 'idle', 'B');
+    swDraw(xs[2], sy, sh, 1, 'idle', 'C');
+    swDraw(xs[3], sy, sh, swdAnim, st.swd ? 'red' : 'idle', 'SwD');
+    // generous tap targets over the two live switches (used by the click/hover handlers)
+    hitA = { x: xs[0] - 16, y: sy - 16, w: 32, h: sh + 40 };
+    hitD = { x: xs[3] - 16, y: sy - 16, w: 32, h: sh + 40 };
     ctx.fillStyle = '#8C969F'; ctx.font = '600 7.5px "Space Mono", monospace'; ctx.textAlign = 'center';
     ctx.fillText('MODE', xs[0], sy + sh + 23);
+    ctx.fillStyle = st.swd ? '#E4002B' : '#8C969F';
     ctx.fillText('F/S', xs[3], sy + sh + 23);
     ctx.fillStyle = swaAnim > 0.5 ? '#38E1C2' : '#ECEFF2'; ctx.font = '700 9px "Space Mono", monospace';
     ctx.fillText(swaAnim > 0.5 ? 'AUTO' : 'MAN', xs[0], sy - 9);
@@ -1162,8 +1207,10 @@
 
   function frame() {
     pulse += 0.03;
-    var t = cur.swaAuto ? 1 : 0;
-    if (swaAnim !== t) { swaAnim += (t - swaAnim) * 0.18; if (Math.abs(t - swaAnim) < 0.01) swaAnim = t; }
+    var ta = st.swa ? 1 : 0;
+    if (swaAnim !== ta) { swaAnim += (ta - swaAnim) * 0.18; if (Math.abs(ta - swaAnim) < 0.01) swaAnim = ta; }
+    var td = st.swd ? 0 : 1;
+    if (swdAnim !== td) { swdAnim += (td - swdAnim) * 0.18; if (Math.abs(td - swdAnim) < 0.01) swdAnim = td; }
     draw(); requestAnimationFrame(frame);
   }
 
@@ -1172,7 +1219,7 @@
   var prevBtn = root.querySelector('#m-prev');
   var nextBtn = root.querySelector('#m-next');
 
-  function go(n) { si = (n + STEPS.length) % STEPS.length; apply(STEPS[si]); }
+  function go(n) { si = (n + SEQ.length) % SEQ.length; applyStep(SEQ[si]); }
   function stopAuto() { if (timer) { clearInterval(timer); timer = null; } }
   function startAuto() { stopAuto(); timer = setInterval(function () { go(si + 1); }, 2600); }
   function setPlaying(p) {
@@ -1189,6 +1236,43 @@
   if (toggle) toggle.addEventListener('click', function () { setPlaying(!playing); });
   if (prevBtn) prevBtn.addEventListener('click', function () { go(si - 1); if (playing) startAuto(); });
   if (nextBtn) nextBtn.addEventListener('click', function () { go(si + 1); if (playing) startAuto(); });
+
+  // ---- free interaction: the visitor drives the same model ----
+  // Any hands-on input pauses the scripted tour — the visitor has control now.
+  function takeOver() { if (playing) setPlaying(false); }
+  function command(mode) {
+    takeOver();
+    if (mode === 'AUTO')   { st.swa = true;  st.swd = false; st.link = true; }
+    else if (mode === 'MANUAL') { st.swa = false; st.swd = false; st.link = true; }
+    else /* FAILSAFE */    { st.swd = true; }
+    recompute();
+  }
+  for (var c = 0; c < cards.length; c++) {
+    (function (card) {
+      function hit() { command(card.getAttribute('data-s')); }
+      card.addEventListener('click', hit);
+      card.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); hit(); }
+      });
+    })(cards[c]);
+  }
+
+  function inRect(x, y, r) { return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
+  function localPt(e) {
+    var r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  if (canvas) {
+    canvas.addEventListener('click', function (e) {
+      var p = localPt(e);
+      if (inRect(p.x, p.y, hitA)) { takeOver(); st.swa = !st.swa; recompute(); }
+      else if (inRect(p.x, p.y, hitD)) { takeOver(); st.swd = !st.swd; recompute(); }
+    });
+    canvas.addEventListener('mousemove', function (e) {
+      var p = localPt(e);
+      canvas.style.cursor = (inRect(p.x, p.y, hitA) || inRect(p.x, p.y, hitD)) ? 'pointer' : 'default';
+    });
+  }
 
   if (canvas) { resize(); window.addEventListener('resize', resize); }
   go(0);
