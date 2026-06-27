@@ -33,15 +33,22 @@
 extern const char* vesselModeName();
 extern bool        vesselFailsafeAck();
 
-static WebServer server(HTTP_PORT);
-static void      networkTask(void*);   // core-0 task; owns handleClient()/wifiMaintain()
-static String    boatIP;
+static WebServer    server(HTTP_PORT);
+static void         networkTask(void*);    // core-0 task; owns handleClient()/wifiMaintain()
+static TaskHandle_t netTaskHandle = NULL;  // for stack high-water queries from the loop console
+static String       boatIP;
 static uint16_t  cruiseUs  = DEFAULT_CRUISE_US;
 static uint32_t  sessionId = 0;     // hardware-random, set once in telemetryBegin()
 
 uint16_t    telemetryCruiseUs()             { return cruiseUs; }
 void        telemetrySetCruiseUs(uint16_t us) { cruiseUs = us; }  // control loop only (cmdApply)
 const char* telemetryBoatIP()               { return boatIP.c_str(); }
+
+// Network task's worst-case-ever free stack (bytes). Queried from the loop's
+// serial console; uxTaskGetStackHighWaterMark works cross-task given the handle.
+uint32_t    telemetryNetStackFreeBytes() {
+    return netTaskHandle ? (uint32_t)(uxTaskGetStackHighWaterMark(netTaskHandle) * sizeof(StackType_t)) : 0;
+}
 
 // ── WiFi (scan-first connect + non-blocking maintain, ported from test_29) ──
 static String lastSsid;
@@ -751,7 +758,7 @@ void telemetryBegin() {
     // run ONLY here — never on the control loop (core 1) — so a blocked socket
     // send on a bad link can never stall RC/FSM/failsafe. server is touched only
     // by this task after this point.
-    xTaskCreatePinnedToCore(networkTask, "net", NET_TASK_STACK, NULL, 1, NULL, NET_TASK_CORE);
+    xTaskCreatePinnedToCore(networkTask, "net", NET_TASK_STACK, NULL, 1, &netTaskHandle, NET_TASK_CORE);
 }
 
 // Owns all networking. A blocking send here delays only telemetry (expendable);
@@ -760,17 +767,6 @@ static void networkTask(void*) {
     for (;;) {
         server.handleClient();
         wifiMaintain();
-#if DEBUG_NET_STACK
-        // Report worst-case stack headroom on each new low (post-/history is the
-        // real minimum). uxTaskGetStackHighWaterMark returns free space in words.
-        static UBaseType_t stackMin = (UBaseType_t)~0;
-        UBaseType_t hw = uxTaskGetStackHighWaterMark(NULL);
-        if (hw < stackMin) {
-            stackMin = hw;
-            Serial.printf("[net] stack high-water: %u bytes free of %u\n",
-                          (unsigned)(hw * sizeof(StackType_t)), (unsigned)NET_TASK_STACK);
-        }
-#endif
         vTaskDelay(1);          // yield ~1 tick; telemetry is best-effort
     }
 }

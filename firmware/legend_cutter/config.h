@@ -235,12 +235,6 @@ static const uint16_t NET_TASK_STACK = 8192;   // bytes: WebServer + ArduinoJson
 static const uint8_t  NET_TASK_CORE  = 0;      // WiFi/lwIP core; loop() runs on core 1
 static const uint8_t  CMD_QUEUE_LEN   = 8;     // SPSC ring depth (commands are human-paced)
 
-// Bench-only: log the network task's stack high-water (worst-case free bytes)
-// each time it hits a new low — so a heavy /history backfill's true minimum is
-// visible before range testing. Converges to silence. Set 0 for water builds
-// (harmless either way — USB-Serial is gone on the water).
-#define DEBUG_NET_STACK 1
-
 // ── Onboard telemetry history (store-and-sync) ─────────────────────────────
 // RAM ring buffer of compact per-second records, recorded continuously
 // regardless of WiFi state. On reconnect the app pulls the gap via

@@ -25,4 +25,5 @@ void telemetryBegin();   // brings up WiFi, registers handlers, starts the core-
 
 uint16_t   telemetryCruiseUs();         // current cruise target (read by the control loop)
 void       telemetrySetCruiseUs(uint16_t us);  // applied by the control loop via cmdApply
+uint32_t   telemetryNetStackFreeBytes();       // network task worst-case free stack (bench 's' console)
 const char* telemetryBoatIP();          // c-string; empty if not connected

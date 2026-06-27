@@ -189,6 +189,24 @@ static void cmdDrain() {
     while (cmdTryDequeue(c)) cmdApply(c);   // ≤ CMD_QUEUE_LEN cheap calls; never blocks
 }
 
+// Non-blocking bench serial console. The BOOT/EN button is sealed in the hull,
+// so 'r' reboots over serial; 's' prints one status line (incl. network-task
+// stack headroom) on demand — no streaming. Reads only buffered bytes; never
+// blocks, so it doesn't touch the responsiveness guarantee.
+static void serialConsole() {
+    if (!Serial.available()) return;
+    char c = Serial.read();
+    if (c == 'r' || c == 'R') {
+        Serial.println("[cmd] rebooting…");
+        delay(50);                          // let the line flush
+        ESP.restart();
+    } else if (c == 's' || c == 'S') {
+        Serial.printf("[status] v%s mode=%s up=%lus heap=%u net_stack_free=%u B\n",
+            FIRMWARE_VERSION, vesselModeName(), (unsigned long)(millis() / 1000),
+            ESP.getFreeHeap(), telemetryNetStackFreeBytes());
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     delay(500);
@@ -263,5 +281,6 @@ void loop() {
     weaponsUpdate();           // CH5 knob → deck-gun pan servo (independent of mode)
     applyOutputs();
 
+    serialConsole();           // non-blocking bench console: 'r' reboot, 's' status
     feedLoopWDT();             // backstop heartbeat (never starves in normal operation)
 }
