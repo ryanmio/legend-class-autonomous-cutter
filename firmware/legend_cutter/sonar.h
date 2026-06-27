@@ -20,5 +20,6 @@ void sonarSetMode(DepthMode m);
 void sonarPingNow();          // one-shot reading
 
 DepthMode sonarMode();
-float     sonarLastDepthM();  // -1 if no reading / no echo
+float     sonarLastDepthM();  // -1 if no reading / no echo (incl. near-field floor)
 uint32_t  sonarLastReadMs();  // 0 if never
+uint32_t  sonarLastRawUs();   // raw echo pulse width µs (0 = timeout); diagnostic

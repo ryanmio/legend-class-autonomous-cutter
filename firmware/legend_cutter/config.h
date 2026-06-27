@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.6.0"
+#define FIRMWARE_VERSION "0.6.1"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -151,6 +151,7 @@ static const uint8_t  PIN_SONAR_ECHO        = 14;
 static const float    SONAR_US_PER_CM       = 13.4f;
 static const uint32_t DEPTH_PING_TIMEOUT_US = 40000;
 static const uint32_t DEPTH_RUN_INTERVAL_MS = 20000;
+static const float    DEPTH_MIN_VALID_M     = 1.00f;  // below = near-field floor; report no-echo not false-shallow
 
 // ── Bilge ──────────────────────────────────────────────────────────────────
 // 3 active-LOW water probes + 1 active-HIGH pump MOSFET. Pump lives in the

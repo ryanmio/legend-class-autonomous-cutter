@@ -241,7 +241,8 @@ static void handleTelemetry() {
         doc["depth_m"] = dbuf;
     }
     if (sonarLastReadMs() > 0) {
-        doc["depth_age_ms"] = millis() - sonarLastReadMs();
+        doc["depth_age_ms"]  = millis() - sonarLastReadMs();
+        doc["depth_raw_us"]  = sonarLastRawUs();  // diagnostic: 0=timeout, floor band=no bottom return
     }
 
     char buf[24];

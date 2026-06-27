@@ -10,6 +10,7 @@
 static DepthMode mode      = DEPTH_OFF;
 static float     lastM     = -1.0f;
 static uint32_t  lastReadMs = 0;
+static uint32_t  lastRawUs  = 0;
 
 void sonarBegin() {
     pinMode(PIN_SONAR_TRIG, OUTPUT);
@@ -27,7 +28,11 @@ void sonarPingNow() {
 
     unsigned long dur = pulseIn(PIN_SONAR_ECHO, HIGH, DEPTH_PING_TIMEOUT_US);
     lastReadMs = millis();
-    lastM = (dur == 0) ? -1.0f : (float)dur / (SONAR_US_PER_CM * 100.0f);
+    lastRawUs  = dur;
+    // dur==0 is a timeout; a reading below the near-field floor is the sensor's
+    // no-echo artifact, not real depth — report both as no-echo (-1).
+    float m = (dur == 0) ? -1.0f : (float)dur / (SONAR_US_PER_CM * 100.0f);
+    lastM = (m >= 0.0f && m < DEPTH_MIN_VALID_M) ? -1.0f : m;
 }
 
 void sonarSetMode(DepthMode m) {
@@ -48,3 +53,4 @@ void sonarUpdate() {
 DepthMode sonarMode()         { return mode; }
 float     sonarLastDepthM()   { return lastM; }
 uint32_t  sonarLastReadMs()   { return lastReadMs; }
+uint32_t  sonarLastRawUs()    { return lastRawUs; }
