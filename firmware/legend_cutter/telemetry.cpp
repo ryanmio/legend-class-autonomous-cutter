@@ -760,6 +760,17 @@ static void networkTask(void*) {
     for (;;) {
         server.handleClient();
         wifiMaintain();
+#if DEBUG_NET_STACK
+        // Report worst-case stack headroom on each new low (post-/history is the
+        // real minimum). uxTaskGetStackHighWaterMark returns free space in words.
+        static UBaseType_t stackMin = (UBaseType_t)~0;
+        UBaseType_t hw = uxTaskGetStackHighWaterMark(NULL);
+        if (hw < stackMin) {
+            stackMin = hw;
+            Serial.printf("[net] stack high-water: %u bytes free of %u\n",
+                          (unsigned)(hw * sizeof(StackType_t)), (unsigned)NET_TASK_STACK);
+        }
+#endif
         vTaskDelay(1);          // yield ~1 tick; telemetry is best-effort
     }
 }
