@@ -8,6 +8,12 @@
 // Cleared on a new /waypoint. Capture detection + leg-start recording run
 // only while AUTO is driving the leg — passing the waypoint in MANUAL must
 // not mark the leg complete.
+//
+// Approach lock: within AUTO_APPROACH_LOCK_M the steering setpoint latches to
+// the bearing held at that moment and stops tracking the instantaneous bearing,
+// which goes hypersensitive within a few metres of the point (GPS jitter swings
+// it tens of degrees → the boat circles). The boat then drives a straight line
+// through the capture zone, which the crossing trigger reliably catches.
 
 #include "navigation.h"
 #include "config.h"
@@ -21,6 +27,10 @@ static float      wpDistM    = 0.0f;
 static float      wpBearing  = 0.0f;
 static bool       captured   = false;
 static CapturedBy capBy      = CAPTURED_BY_NONE;
+
+// Approach-heading lock (latched once inside AUTO_APPROACH_LOCK_M on the leg).
+static bool       approachLocked = false;
+static float      lockedBearing  = 0.0f;
 
 // Leg-start (recorded on the first AUTO fix after /waypoint or AUTO engage).
 // Used for the crossing trigger and exposed for app visualisation.
@@ -86,6 +96,7 @@ bool navTrySetWaypoint(float lat, float lon, float* outDistM) {
     captured   = false;     // a new waypoint always reopens the run
     capBy      = CAPTURED_BY_NONE;
     startValid = false;     // re-record leg start on next GPS update
+    approachLocked = false;
     Serial.printf("[WP] set lat=%.6f lon=%.6f\n", wpLat, wpLon);
     return true;
 }
@@ -102,6 +113,7 @@ void navClearWaypoint() {
     captured   = false;
     capBy      = CAPTURED_BY_NONE;
     startValid = false;
+    approachLocked = false;
     wpDistM    = 0.0f;
     wpBearing  = 0.0f;
     Serial.println("[WP] cleared");
@@ -110,7 +122,8 @@ void navClearWaypoint() {
 void navResetLegStart() {
     // Re-record the leg start at the AUTO-engage position — the crossing line
     // must be perpendicular to the path AUTO will actually drive.
-    startValid = false;
+    startValid     = false;
+    approachLocked = false;
 }
 
 void navUpdate(bool inAuto) {
@@ -152,6 +165,15 @@ void navUpdate(bool inAuto) {
 
     if (captured) return;
 
+    // Latch the approach heading once we enter the close zone — past here the
+    // instantaneous bearing is too noisy to chase. Hold it through capture.
+    if (!approachLocked && wpDistM < AUTO_APPROACH_LOCK_M) {
+        approachLocked = true;
+        lockedBearing  = wpBearing;
+        Serial.printf("[WP] approach lock at %.1f m, heading %.0f deg held to capture.\n",
+                      wpDistM, lockedBearing);
+    }
+
     if (wpDistM < CAPTURE_RADIUS_M) {
         captured = true;
         capBy    = CAPTURED_BY_DISTANCE;
@@ -170,6 +192,8 @@ float      navWpLat()        { return wpLat; }
 float      navWpLon()        { return wpLon; }
 float      navWpDistM()      { return wpDistM; }
 float      navWpBearing()    { return wpBearing; }
+float      navSteerBearing() { return approachLocked ? lockedBearing : wpBearing; }
+bool       navApproachLocked() { return approachLocked; }
 bool       navCaptured()     { return captured; }
 CapturedBy navCapturedBy()   { return capBy; }
 bool       navStartValid()   { return startValid; }

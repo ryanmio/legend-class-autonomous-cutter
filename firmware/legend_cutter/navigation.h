@@ -34,7 +34,9 @@ bool       navWpSet();
 float      navWpLat();
 float      navWpLon();
 float      navWpDistM();
-float      navWpBearing();
+float      navWpBearing();      // true geometric bearing to the waypoint (telemetry)
+float      navSteerBearing();   // bearing AUTO should steer — latched on close approach
+bool       navApproachLocked(); // true once inside AUTO_APPROACH_LOCK_M on this leg
 bool       navCaptured();
 CapturedBy navCapturedBy();
 bool       navStartValid();

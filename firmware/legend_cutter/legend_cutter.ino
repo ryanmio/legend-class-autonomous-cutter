@@ -146,7 +146,7 @@ static void applyOutputs() {
         if (navWpSet() && gpsValid() && !navCaptured()) {
             uint16_t cruise   = telemetryCruiseUs();
             uint16_t engageUs = (cruise > AUTO_CRUISE_CAP_US) ? AUTO_CRUISE_CAP_US : cruise;
-            uint16_t rudderUs = imuHeadingHoldUs(navWpBearing());
+            uint16_t rudderUs = imuHeadingHoldUs(navSteerBearing());
             uint16_t portUs, stbdUs;
             computePortStbd(engageUs, rudderUs, portUs, stbdUs);
             setRudder(rudderUs);

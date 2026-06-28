@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.6.2"
+#define FIRMWARE_VERSION "0.6.3"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -220,7 +220,11 @@ static const uint16_t GUN_PAN_DEADBAND_US = 15;
 static const bool     GUN_PAN_REVERSE     = true;
 
 // ── Navigation / waypoint ──────────────────────────────────────────────────
-static const float CAPTURE_RADIUS_M = 3.0f;
+static const float CAPTURE_RADIUS_M = 5.0f;
+// Inside this range the steering setpoint latches to the approach heading and
+// stops chasing the (now hypersensitive) instantaneous bearing — kills the
+// close-in circling. Must stay > CAPTURE_RADIUS_M.
+static const float AUTO_APPROACH_LOCK_M = 10.0f;
 // Fat-finger guard: refuse / auto-clear waypoints farther than this from the boat.
 static const float MAX_WP_DIST_M    = 1000.0f;
 

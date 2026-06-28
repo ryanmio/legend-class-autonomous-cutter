@@ -269,6 +269,7 @@ static void handleTelemetry() {
     // Waypoint
     doc["wp_set"]   = navWpSet();
     doc["captured"] = navCaptured();
+    doc["approach_lock"] = navApproachLocked();
     CapturedBy cb = navCapturedBy();
     doc["captured_by"] = (cb == CAPTURED_BY_DISTANCE) ? "distance"
                        : (cb == CAPTURED_BY_CROSSING) ? "crossing"
