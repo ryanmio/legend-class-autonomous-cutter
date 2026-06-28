@@ -371,42 +371,52 @@ void imuUpdateCogTrim() {
 // Heading-hold output. D-term uses headingRateDps from imuUpdate() (IMU
 // cadence), not a loop-rate recompute. Slew limiting prevents instant
 // full-deflection steps; deadband suppresses rudder hunting near setpoint.
-static uint16_t lastAutoRudder = NEUTRAL_US;
-static uint32_t lastSlewMs     = 0;
+// The accumulator is float so a sub-µs per-tick step (fast loop) still sums to
+// the full AUTO_RUDDER_SLEW_US_PER_S rate — integer truncation here floored the
+// step to 0 once networking moved off the loop and pinned the rudder neutral.
+static float    autoRudderUs = NEUTRAL_US;
+static uint32_t lastSlewMs   = 0;
 
 uint16_t imuHeadingHoldUs(float target) {
     if (!headingInit) {
-        lastAutoRudder = NEUTRAL_US;
+        autoRudderUs = NEUTRAL_US;
         return NEUTRAL_US;
     }
     float err  = shortestPathError(target, imuHeadingTrue());
     float dErr = -headingRateDps;
 
-    int desired;
+    float desired;
     if (fabsf(err) < AUTO_HEADING_DEADBAND_DEG) {
         desired = NEUTRAL_US;
     } else {
-        desired = (int)(NEUTRAL_US + livePidKp * err + livePidKd * dErr);
-        if (desired < (int)RUDDER_MIN_US) desired = (int)RUDDER_MIN_US;
-        if (desired > (int)RUDDER_MAX_US) desired = (int)RUDDER_MAX_US;
+        desired = NEUTRAL_US + livePidKp * err + livePidKd * dErr;
+        if (desired < RUDDER_MIN_US) desired = RUDDER_MIN_US;
+        if (desired > RUDDER_MAX_US) desired = RUDDER_MAX_US;
     }
 
     uint32_t now = millis();
     float    dt  = (now - lastSlewMs) * 0.001f;
     lastSlewMs = now;
-    if (dt > 0.5f) {            // AUTO was disengaged — reset slew state
-        lastAutoRudder = NEUTRAL_US;
-        dt = 0.0f;
-    }
-    int maxDelta = (int)(AUTO_RUDDER_SLEW_US_PER_S * dt + 0.5f);
-    int delta    = desired - (int)lastAutoRudder;
-    if (delta >  maxDelta) delta =  maxDelta;
-    if (delta < -maxDelta) delta = -maxDelta;
-    int v = (int)lastAutoRudder + delta;
-    if (v < (int)RUDDER_MIN_US) v = (int)RUDDER_MIN_US;
-    if (v > (int)RUDDER_MAX_US) v = (int)RUDDER_MAX_US;
-    lastAutoRudder = (uint16_t)v;
-    return lastAutoRudder;
+    if (dt < 0.0f)               dt = 0.0f;                 // millis() wrap guard
+    if (dt > AUTO_SLEW_DT_CAP_S) dt = AUTO_SLEW_DT_CAP_S;   // bound a stalled tick; never zero it
+
+    float maxStep = AUTO_RUDDER_SLEW_US_PER_S * dt;         // float — no truncation to zero
+    float delta   = desired - autoRudderUs;
+    if (delta >  maxStep) delta =  maxStep;
+    if (delta < -maxStep) delta = -maxStep;
+    autoRudderUs += delta;
+    if (autoRudderUs < RUDDER_MIN_US) autoRudderUs = RUDDER_MIN_US;
+    if (autoRudderUs > RUDDER_MAX_US) autoRudderUs = RUDDER_MAX_US;
+
+    return (uint16_t)(autoRudderUs + 0.5f);                // round only at output; accumulator stays float
+}
+
+// Called by the mode FSM on (re)engage of AUTO: seed the slew from the rudder's
+// current commanded position so a new leg neither snaps nor starts from a stale
+// deflection left by a previous leg or MANUAL.
+void imuResetAutoSteer() {
+    autoRudderUs = motorsRudderUs();
+    lastSlewMs   = millis();
 }
 
 void  setPidGains(float kp, float kd) { livePidKp = kp; livePidKd = kd; }

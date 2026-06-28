@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.6.3"
+#define FIRMWARE_VERSION "0.6.5"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -107,6 +107,9 @@ static const float    DEFAULT_KD   = 8.0f;
 // slew caps how fast the rudder servo can move (µs/s, 0→full in ~2 s).
 static const float    AUTO_HEADING_DEADBAND_DEG  = 5.0f;
 static const float    AUTO_RUDDER_SLEW_US_PER_S  = 85.0f;
+// Cap a single slew timestep so one stalled control tick can't slam the rudder;
+// 0.5 s → at most a 25%-throw step. Never zero dt (that pinned the rudder).
+static const float    AUTO_SLEW_DT_CAP_S         = 0.5f;
 // Default mag offsets — used only as the fallback when NVS holds no cal, so
 // flashing produces zero behavior change pre-cal. Real cal via
 // /calibrate_mag/start overwrites these and saves to NVS.

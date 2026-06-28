@@ -118,6 +118,9 @@ static void updateMode() {
         // Re-record the leg start at engage position — the crossing line must
         // be perpendicular to the path AUTO will actually drive.
         navResetLegStart();
+        // Seed the rudder slew from where the servo is now — no snap, no stale
+        // deflection carried in from MANUAL or a previous leg.
+        imuResetAutoSteer();
     }
     if (mode != prev) {
         Serial.printf("[MODE] %s → %s\n", modeNameOf(prev), modeNameOf(mode));
