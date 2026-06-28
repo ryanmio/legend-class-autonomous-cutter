@@ -26,6 +26,8 @@ static bool         headingInit     = false;
 
 static float        cogTrimDeg      = 0.0f;
 static uint32_t     lastCogTrimMs   = 0;
+static float        savedCogTrim    = 0.0f;   // last value written to NVS
+static uint32_t     lastCogSaveMs   = 0;
 
 static float        livePidKp = DEFAULT_KP;
 static float        livePidKd = DEFAULT_KD;
@@ -94,12 +96,25 @@ static void magCalLoadFromNVS() {
         magCalRadiusUT = magPrefs.getFloat("rad_uT", 0.0f);
         magCalCircPct  = magPrefs.getFloat("circ_pct", 0.0f);
         magCalQuality  = (uint8_t)magPrefs.getUChar("quality", MAG_QUAL_UNKNOWN);
+        // Trim belongs to this mag frame, so it rides along with the cal.
+        cogTrimDeg     = magPrefs.getFloat("cog_trim", 0.0f);
+        savedCogTrim   = cogTrimDeg;
         magFromNVS = true;
     }
     magPrefs.end();
-    Serial.printf("[mag-cal] %s  off=(%.2f, %.2f, %.2f)  base=%.2f uT\n",
+    Serial.printf("[mag-cal] %s  off=(%.2f, %.2f, %.2f)  base=%.2f uT  cog_trim=%.1f deg\n",
                   magFromNVS ? "loaded from NVS" : "NVS empty, using hardcoded defaults",
-                  magOffX, magOffY, magOffZ, magBaselineUT);
+                  magOffX, magOffY, magOffZ, magBaselineUT, cogTrimDeg);
+}
+
+// Persist just the learned COG trim — called on a throttle as it drifts, so it
+// survives a power cycle (NVS namespace shared with the mag cal).
+static void cogTrimSaveToNVS() {
+    magPrefs.begin("imu_cal", false);
+    magPrefs.putFloat("cog_trim", cogTrimDeg);
+    magPrefs.end();
+    savedCogTrim  = cogTrimDeg;
+    lastCogSaveMs = millis();
 }
 
 static void magCalSaveToNVS() {
@@ -112,7 +127,10 @@ static void magCalSaveToNVS() {
     magPrefs.putFloat("rad_uT",   magCalRadiusUT);
     magPrefs.putFloat("circ_pct", magCalCircPct);
     magPrefs.putUChar("quality",  magCalQuality);
+    magPrefs.putFloat("cog_trim", cogTrimDeg);   // reset to 0 by a fresh cal
     magPrefs.end();
+    savedCogTrim  = cogTrimDeg;
+    lastCogSaveMs = millis();
     magFromNVS = true;
     Serial.printf("[mag-cal] saved: off=(%.2f, %.2f, %.2f) base=%.2f uT\n",
                   magOffX, magOffY, magOffZ, magBaselineUT);
@@ -343,6 +361,11 @@ void imuUpdateCogTrim() {
     cogTrimDeg += COG_TRIM_GAIN * err;
     if (cogTrimDeg >  COG_TRIM_CLAMP_DEG) cogTrimDeg =  COG_TRIM_CLAMP_DEG;
     if (cogTrimDeg < -COG_TRIM_CLAMP_DEG) cogTrimDeg = -COG_TRIM_CLAMP_DEG;
+
+    if (millis() - lastCogSaveMs >= COG_TRIM_SAVE_INTERVAL_MS &&
+        fabsf(cogTrimDeg - savedCogTrim) >= COG_TRIM_SAVE_MIN_DELTA_DEG) {
+        cogTrimSaveToNVS();
+    }
 }
 
 // Heading-hold output. D-term uses headingRateDps from imuUpdate() (IMU

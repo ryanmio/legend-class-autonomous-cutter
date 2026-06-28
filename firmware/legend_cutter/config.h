@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.6.1"
+#define FIRMWARE_VERSION "0.6.2"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -129,6 +129,11 @@ static const float    COG_TRIM_MAX_TURN_DPS = 10.0f;
 static const float    COG_TRIM_GAIN         = 0.05f;   // per 1 Hz update ≈ 20 s time constant
 static const float    COG_TRIM_CLAMP_DEG    = 30.0f;
 static const uint32_t COG_TRIM_INTERVAL_MS  = 1000;
+// Persist the learned trim so the first AUTO of a run starts from the last
+// run's value instead of 0 (the bias is fixed-boat, constant trip to trip).
+// Throttled to spare NVS: only on meaningful drift, and not too often.
+static const float    COG_TRIM_SAVE_MIN_DELTA_DEG = 0.5f;
+static const uint32_t COG_TRIM_SAVE_INTERVAL_MS   = 30000;
 
 // Onboard mag calibration. Coverage + range gates run on chip Y/Z (the
 // horizontal pair); chip X (vertical) is excluded by design.
