@@ -394,11 +394,10 @@ uint16_t imuHeadingHoldUs(float target) {
     uint32_t now = millis();
     float    dt  = (now - lastSlewMs) * 0.001f;
     lastSlewMs = now;
-    // A slow control tick must still allow a bounded slew step. Cap dt; never
-    // zero it — zeroing made maxDelta 0, which pinned the rudder at neutral and
-    // killed steering whenever the loop ran slower than 2 Hz. Re-engage resets
-    // to neutral via imuResetAutoSteer() from the mode FSM, not from dt.
-    if (dt > 0.5f) dt = 0.5f;
+    if (dt > 0.5f) {            // AUTO was disengaged — reset slew state
+        lastAutoRudder = NEUTRAL_US;
+        dt = 0.0f;
+    }
     int maxDelta = (int)(AUTO_RUDDER_SLEW_US_PER_S * dt + 0.5f);
     int delta    = desired - (int)lastAutoRudder;
     if (delta >  maxDelta) delta =  maxDelta;
@@ -409,10 +408,6 @@ uint16_t imuHeadingHoldUs(float target) {
     lastAutoRudder = (uint16_t)v;
     return lastAutoRudder;
 }
-
-// Called by the mode FSM on (re)engage of AUTO: start the slew from neutral so
-// the rudder doesn't snap from a stale deflection left over from MANUAL.
-void imuResetAutoSteer() { lastAutoRudder = NEUTRAL_US; lastSlewMs = millis(); }
 
 void  setPidGains(float kp, float kd) { livePidKp = kp; livePidKd = kd; }
 float pidKp() { return livePidKp; }

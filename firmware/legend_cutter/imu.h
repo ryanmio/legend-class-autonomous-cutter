@@ -22,9 +22,6 @@ void imuUpdateCogTrim();     // call every loop(): 1 Hz GPS-COG residual learner
 // `target` is a TRUE heading; compared against imuHeadingTrue().
 uint16_t imuHeadingHoldUs(float target);
 
-// Reset AUTO steering slew state (rudder starts from neutral). Call on AUTO engage.
-void imuResetAutoSteer();
-
 // PID gains (live-tunable via /pid).
 void  setPidGains(float kp, float kd);
 float pidKp();
