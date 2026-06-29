@@ -134,7 +134,8 @@ export default function TelemetryScreen({ navigation }: Props) {
                 <Row label="RC age" value={`${data.rc_age_ms} ms`} warn={data.rc_age_ms > 1000} />
               )}
               {data.rudder_us != null && <Row label="Rudder" value={`${data.rudder_us} µs`} />}
-              {data.esc_us    != null && <Row label="ESC"    value={`${data.esc_us} µs`} />}
+              {data.port_us   != null && <Row label="Port"   value={`${data.port_us} µs`} />}
+              {data.stbd_us   != null && <Row label="Stbd"   value={`${data.stbd_us} µs`} />}
               {data.heading   != null && <Row label="Heading" value={`${data.heading}°`} />}
               {data.cog_trim  != null && parseFloat(data.cog_trim) !== 0 && (
                 <Row label="COG trim" value={`${data.cog_trim}°`} />

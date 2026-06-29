@@ -663,7 +663,7 @@ function autoOnFrame(data: TelemetryData) {
   //    so MANUAL forward, MANUAL reverse-via-right-stick, and AUTO
   //    cruise all trigger uniformly.
   let justStarted = false;
-  if (data.esc_us != null && Math.abs(data.esc_us - 1500) > AUTO_ESC_DEADBAND_US) {
+  if (data.port_us != null && Math.abs(data.port_us - 1500) > AUTO_ESC_DEADBAND_US) {
     if (autoEscAboveSince == null) autoEscAboveSince = now;
     if (!unsubscribe && (now - autoEscAboveSince) >= AUTO_ESC_DEBOUNCE_MS) {
       clear();   // ensure clean buffer for the new flight

@@ -203,8 +203,8 @@ static void handleTelemetry() {
     doc["rc_ever_good"] = ibusEverGood();
     doc["rc_age_ms"]    = ibusEverGood() ? (millis() - ibusLastFrameMs()) : 0;
     doc["rudder_us"]    = motorsRudderUs();
-    doc["esc_us"]       = motorsPortUs();   // port motor (legacy name)
-    doc["stbd_us"]      = motorsStbdUs();   // stbd motor — esc_us vs stbd_us = AUTO diff-thrust split
+    doc["port_us"]      = motorsPortUs();
+    doc["stbd_us"]      = motorsStbdUs();   // port_us vs stbd_us = AUTO diff-thrust split
     doc["ch_throttle"]  = ibusChannel(IBUS_IDX_THROTTLE);
     doc["ch_rudder"]    = ibusChannel(IBUS_IDX_RUDDER);
     doc["ch_reverse"]   = ibusChannel(IBUS_IDX_REVERSE);
@@ -637,7 +637,7 @@ static void appendHistRecord(String& out, const HistRecord* r) {
     bool fix = r->flags & HIST_F_GPS_FIX;
     snprintf(buf, sizeof(buf),
         "{\"seq\":%lu,\"uptime_ms\":%lu,\"mode\":\"%s\","
-        "\"esc_us\":%d,\"rudder_us\":%d,\"heading\":\"%.1f\","
+        "\"port_us\":%d,\"rudder_us\":%d,\"heading\":\"%.1f\","
         "\"gps_fix\":%s,\"sats\":%u",
         (unsigned long)r->seq, (unsigned long)r->uptimeMs, modeStr,
         r->escUs, r->rudderUs, r->heading10 / 10.0f,

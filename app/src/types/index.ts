@@ -22,7 +22,8 @@ export interface TelemetryData {
 
   // ── Outputs ────────────────────────────────────────────────────
   rudder_us?: number;
-  esc_us?: number;
+  port_us?: number;
+  stbd_us?: number;
 
   // ── IMU ────────────────────────────────────────────────────────
   heading?: string;       // best TRUE heading (mag + declination + COG trim)

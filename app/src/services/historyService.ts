@@ -11,7 +11,7 @@ import { HTTP_PORT } from '../constants';
 export interface HistoryRecord {
   seq: number;
   uptime_ms: number;
-  // Remaining keys mirror TelemetryData (mode, lat, lon, heading, esc_us, …).
+  // Remaining keys mirror TelemetryData (mode, lat, lon, heading, port_us, …).
   [key: string]: unknown;
 }
 
