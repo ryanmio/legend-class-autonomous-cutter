@@ -192,7 +192,7 @@ static void handleStatus() {
 
 static void handleTelemetry() {
     addCORS();
-    StaticJsonDocument<2304> doc;   // headroom for port_us/stbd_us (overflow drops fields silently)
+    StaticJsonDocument<2048> doc;
     doc["v"]            = FIRMWARE_VERSION;
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
@@ -203,9 +203,8 @@ static void handleTelemetry() {
     doc["rc_ever_good"] = ibusEverGood();
     doc["rc_age_ms"]    = ibusEverGood() ? (millis() - ibusLastFrameMs()) : 0;
     doc["rudder_us"]    = motorsRudderUs();
-    doc["esc_us"]       = motorsPortUs();
-    doc["port_us"]      = motorsPortUs();   // explicit port/stbd so AUTO diff-thrust split is readable
-    doc["stbd_us"]      = motorsStbdUs();
+    doc["esc_us"]       = motorsPortUs();   // port motor (legacy name)
+    doc["stbd_us"]      = motorsStbdUs();   // stbd motor — esc_us vs stbd_us = AUTO diff-thrust split
     doc["ch_throttle"]  = ibusChannel(IBUS_IDX_THROTTLE);
     doc["ch_rudder"]    = ibusChannel(IBUS_IDX_RUDDER);
     doc["ch_reverse"]   = ibusChannel(IBUS_IDX_REVERSE);
@@ -255,7 +254,7 @@ static void handleTelemetry() {
     snprintf(buf, sizeof(buf), "%.1f", imuCogTrim());     doc["cog_trim"]    = buf;
     if (batteryAvailable()) {
         snprintf(buf, sizeof(buf), "%.2f", batteryVolts()); doc["batt_v"] = buf;
-        snprintf(buf, sizeof(buf), "%.2f", batteryAmps());  doc["batt_a"] = buf;
+        // batt_a dropped: shunt failed, reads a constant 0. Voltage still good.
     }
 
     // Position
@@ -657,8 +656,7 @@ static void appendHistRecord(String& out, const HistRecord* r) {
         snprintf(buf, sizeof(buf), ",\"course\":\"%.1f\"", r->course10 / 10.0f); out += buf;
     }
     if (r->battCv != INT16_MIN) {
-        snprintf(buf, sizeof(buf), ",\"batt_v\":\"%.2f\",\"batt_a\":\"%.2f\"",
-                 r->battCv / 100.0f, r->battCa / 100.0f);
+        snprintf(buf, sizeof(buf), ",\"batt_v\":\"%.2f\"", r->battCv / 100.0f);
         out += buf;
     }
     if (r->depthCm >= 0) {
