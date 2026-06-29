@@ -419,6 +419,17 @@ void imuResetAutoSteer() {
     lastSlewMs   = millis();
 }
 
+// Raw heading-hold PD command (µs above neutral), with NO deadband, slew, or
+// clamp — the always-live damping signal. The rudder (imuHeadingHoldUs) zeroes
+// this inside the deadband to stay parked; AUTO routes this undeadbanded command
+// to decoupled differential thrust so the motors damp through the crossing.
+float imuHeadingYawCmd(float target) {
+    if (!headingInit) return 0.0f;
+    float err  = shortestPathError(target, imuHeadingTrue());
+    float dErr = -headingRateDps;
+    return livePidKp * err + livePidKd * dErr;
+}
+
 void  setPidGains(float kp, float kd) { livePidKp = kp; livePidKd = kd; }
 float pidKp() { return livePidKp; }
 float pidKd() { return livePidKd; }

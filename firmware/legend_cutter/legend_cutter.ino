@@ -149,9 +149,13 @@ static void applyOutputs() {
         if (navWpSet() && gpsValid() && !navCaptured()) {
             uint16_t cruise   = telemetryCruiseUs();
             uint16_t engageUs = (cruise > AUTO_CRUISE_CAP_US) ? AUTO_CRUISE_CAP_US : cruise;
-            uint16_t rudderUs = imuHeadingHoldUs(navSteerBearing());
+            float    steer    = navSteerBearing();
+            uint16_t rudderUs = imuHeadingHoldUs(steer);          // rudder: deadband+slew (unchanged)
             uint16_t portUs, stbdUs;
-            computePortStbd(engageUs, rudderUs, portUs, stbdUs);
+            // Near-center damping rides decoupled diff-thrust off the raw PD command,
+            // not the deadbanded rudder — so the motors damp through the crossing
+            // while the rudder stays parked in its deadband.
+            computeDiffThrust(engageUs, imuHeadingYawCmd(steer), portUs, stbdUs);
             setRudder(rudderUs);
             setEscsPortStbd(portUs, stbdUs);
         } else {

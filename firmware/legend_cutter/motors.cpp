@@ -78,6 +78,27 @@ void computePortStbd(uint16_t throttleUs, uint16_t rudderUs,
     stbdUs = (uint16_t)stbd;
 }
 
+// AUTO near-center damper: decoupled differential thrust from the raw PD yaw
+// command (not the deadbanded rudder, so it stays live through the crossing).
+// Split is symmetric about throttle (average thrust held = cruise unchanged),
+// capped by AUTO_DIFF_MAX_SPLIT_US and by the headroom that keeps the high motor
+// ≤ MAX_FWD_US and the low motor ≥ AUTO_DIFF_LOW_FLOOR_US (clean forward thrust,
+// never the prop-bite/reverse cutoff). Positive yawCmd → port up / stbd down,
+// the same steering sense as the rudder.
+void computeDiffThrust(uint16_t throttleUs, float yawCmd,
+                       uint16_t& portUs, uint16_t& stbdUs) {
+    int diff = (int)(AUTO_DIFF_GAIN * yawCmd);
+    int headUp  = (int)MAX_FWD_US - (int)throttleUs;          // port room up
+    int headDn  = (int)throttleUs - (int)AUTO_DIFF_LOW_FLOOR_US;  // stbd room down
+    int maxSplit = headUp < headDn ? headUp : headDn;
+    if (maxSplit > (int)AUTO_DIFF_MAX_SPLIT_US) maxSplit = (int)AUTO_DIFF_MAX_SPLIT_US;
+    if (maxSplit < 0) maxSplit = 0;                           // no clean headroom → no split
+    if (diff >  maxSplit) diff =  maxSplit;
+    if (diff < -maxSplit) diff = -maxSplit;
+    portUs = (uint16_t)((int)throttleUs + diff);
+    stbdUs = (uint16_t)((int)throttleUs - diff);
+}
+
 // Reverse-interlock pattern from test_17: forward throttle (left stick
 // above idle) always wins. Reverse (right-stick V down past deadband)
 // only engages when the throttle stick is at idle.

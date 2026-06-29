@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.6.5"
+#define FIRMWARE_VERSION "0.6.6"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -110,6 +110,16 @@ static const float    AUTO_RUDDER_SLEW_US_PER_S  = 85.0f;
 // Cap a single slew timestep so one stalled control tick can't slam the rudder;
 // 0.5 s → at most a 25%-throw step. Never zero dt (that pinned the rudder).
 static const float    AUTO_SLEW_DT_CAP_S         = 0.5f;
+// AUTO near-center damping via DECOUPLED differential thrust. The rudder's
+// deadband zeroes its PD output near center, so the motors carry the through-
+// crossing damping that kills the weave — keeping the fragile rudder parked.
+// Driven by the raw (non-deadbanded) PD command; µs split = gain × PD command.
+// Start the gain conservative: too-weak shows as residual weave with the split
+// NOT at clamp (raise gain); the split clamps below the low-side prop-bite floor
+// and within forward headroom, symmetric so average thrust (cruise) is held.
+static const float    AUTO_DIFF_GAIN          = 0.25f;
+static const uint16_t AUTO_DIFF_MAX_SPLIT_US  = 80;     // conservative authority cap
+static const uint16_t AUTO_DIFF_LOW_FLOOR_US  = 1560;   // low motor stays in clean forward thrust
 // Default mag offsets — used only as the fallback when NVS holds no cal, so
 // flashing produces zero behavior change pre-cal. Real cal via
 // /calibrate_mag/start overwrites these and saves to NVS.

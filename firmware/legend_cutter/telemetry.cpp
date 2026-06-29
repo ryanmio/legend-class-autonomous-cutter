@@ -192,7 +192,7 @@ static void handleStatus() {
 
 static void handleTelemetry() {
     addCORS();
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<2304> doc;   // headroom for port_us/stbd_us (overflow drops fields silently)
     doc["v"]            = FIRMWARE_VERSION;
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
@@ -204,6 +204,8 @@ static void handleTelemetry() {
     doc["rc_age_ms"]    = ibusEverGood() ? (millis() - ibusLastFrameMs()) : 0;
     doc["rudder_us"]    = motorsRudderUs();
     doc["esc_us"]       = motorsPortUs();
+    doc["port_us"]      = motorsPortUs();   // explicit port/stbd so AUTO diff-thrust split is readable
+    doc["stbd_us"]      = motorsStbdUs();
     doc["ch_throttle"]  = ibusChannel(IBUS_IDX_THROTTLE);
     doc["ch_rudder"]    = ibusChannel(IBUS_IDX_RUDDER);
     doc["ch_reverse"]   = ibusChannel(IBUS_IDX_REVERSE);

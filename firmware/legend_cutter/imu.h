@@ -25,6 +25,10 @@ uint16_t imuHeadingHoldUs(float target);
 // Seed the heading-hold slew from the current rudder on MANUAL/FAILSAFE→AUTO.
 void imuResetAutoSteer();
 
+// Raw PD command (µs above neutral): no deadband, slew, or clamp. Drives the
+// decoupled AUTO differential-thrust damper that the rudder's deadband can't.
+float imuHeadingYawCmd(float target);
+
 // PID gains (live-tunable via /pid).
 void  setPidGains(float kp, float kd);
 float pidKp();

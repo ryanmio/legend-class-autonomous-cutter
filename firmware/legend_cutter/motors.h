@@ -15,6 +15,9 @@ void setEscsPortStbd(uint16_t portUs, uint16_t stbdUs);
 // Mixing helpers (no I/O).
 void     computePortStbd(uint16_t throttleUs, uint16_t rudderUs,
                          uint16_t& portUs, uint16_t& stbdUs);
+// AUTO-only decoupled differential thrust from the raw PD yaw command (µs).
+void     computeDiffThrust(uint16_t throttleUs, float yawCmd,
+                           uint16_t& portUs, uint16_t& stbdUs);
 uint16_t computeThrottleUs(uint16_t leftStickUs, uint16_t rightStickVUs);
 uint16_t mapRudderStickToServo(uint16_t stickUs);
 
