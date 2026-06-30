@@ -3,7 +3,7 @@
 // wet. Bow is on the RIGHT in the source asset, so left→right reads
 // REAR / BILGE / FWD.
 //
-// Asset: cleaned export of file.svg at the repo root (viewBox 1024×432).
+// Asset: cleaned export of assets/file.svg (viewBox 1024×432).
 // Rendering trick: the hull path is used as a <ClipPath>, then three
 // full-height rects (one per zone) are drawn inside the clip — wet
 // zones fill Colors.danger, dry zones fill Colors.surfaceLight. A faint
