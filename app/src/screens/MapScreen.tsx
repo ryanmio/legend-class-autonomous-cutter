@@ -298,28 +298,46 @@ export default function MapScreen({ route, navigation }: Props) {
     Math.max(0, missionRoute.length - 1),
   );
 
+  // Telemetry lags the local route by ~1 poll right after CONFIRM (it still
+  // reports the PREVIOUS mission's wp_count / wp_idx / captured). Only trust
+  // those derived flags once the boat's count matches what we sent — otherwise
+  // a fresh mission briefly shows "MISSION COMPLETE" / the wrong LEG x/N.
+  const telemInSync   = (data?.wp_count ?? -1) === missionRoute.length;
+  const activeIdxSafe = telemInSync ? activeIdx : 0;
+  const missionDone   = telemInSync && data?.captured === true && missionRoute.length > 0;
+
   // Rehydrate the route ONCE per mount. GET /mission is authoritative; if it
   // fails (older firmware / offline) fall back to the single active waypoint
   // from telemetry. Any local action also flips the ref so a hydrate can't
   // stomp a fresh user edit.
   const hydratedRef = useRef(false);
   const markHydrated = () => { hydratedRef.current = true; };
+  // GET /mission is authoritative for the full route. The telemetry fallback
+  // (single active waypoint) must run ONLY if GET failed — otherwise the cached
+  // last frame, delivered synchronously on mount, wins the race and collapses a
+  // multi-waypoint route to one point before GET resolves.
+  const missionFetch = useRef<'pending' | 'done' | 'fail'>('pending');
 
   useEffect(() => {
     if (hydratedRef.current) return;
     fetchMission(ip)
       .then((m) => {
+        missionFetch.current = 'done';
         if (hydratedRef.current) return;
-        if (m.waypoints && m.waypoints.length) {
+        const pts = (m.waypoints ?? [])
+          .map((w) => ({ lat: parseFloat(w.lat), lon: parseFloat(w.lon) }))
+          .filter((p) => !isNaN(p.lat) && !isNaN(p.lon));
+        if (pts.length) {
           markHydrated();
-          setMissionRoute(m.waypoints.map((w) => ({ lat: parseFloat(w.lat), lon: parseFloat(w.lon) })));
+          setMissionRoute(pts);
         }
       })
-      .catch(() => {});
+      .catch(() => { missionFetch.current = 'fail'; });
   }, [ip]);
 
   useEffect(() => {
     if (hydratedRef.current) return;
+    if (missionFetch.current !== 'fail') return;   // wait for GET; only fall back if it failed
     if (!data?.wp_set || data.wp_lat == null || data.wp_lon == null) return;
     const lat = parseFloat(data.wp_lat);
     const lon = parseFloat(data.wp_lon);
@@ -334,13 +352,16 @@ export default function MapScreen({ route, navigation }: Props) {
     if (inPlan) {
       webViewRef.current.injectJavaScript('window.clearMission();true;');
     } else if (missionRoute.length) {
+      // On completion, pass an index past the end so every marker renders "done"
+      // (green ✓) rather than leaving the last one bright-cyan "active".
+      const renderIdx = missionDone ? missionRoute.length : activeIdxSafe;
       webViewRef.current.injectJavaScript(
-        `window.setMission(${JSON.stringify(missionRoute)},${activeIdx});true;`
+        `window.setMission(${JSON.stringify(missionRoute)},${renderIdx});true;`
       );
     } else {
       webViewRef.current.injectJavaScript('window.clearMission();true;');
     }
-  }, [missionRoute, activeIdx, inPlan, webViewReady]);
+  }, [missionRoute, activeIdxSafe, missionDone, inPlan, webViewReady]);
 
   // Reflect the draft into the WebView (PLAN mode only).
   useEffect(() => {
@@ -366,25 +387,25 @@ export default function MapScreen({ route, navigation }: Props) {
     const lat    = parseFloat(data.lat ?? '');
     const lon    = parseFloat(data.lon ?? '');
     const hasFix = data.gps_fix === true && !isNaN(lat) && !isNaN(lon);
-    const complete = data.captured === true && missionRoute.length > 0;
-    const n = data.wp_count ?? missionRoute.length;
+    // n from the LOCAL route (authoritative); complete/index guarded by telemInSync.
+    const n = missionRoute.length;
 
     let bearing: number | null = null;
     let dist:    number | null = null;
-    const active = missionRoute[activeIdx];
+    const active = missionRoute[activeIdxSafe];
     if (hasFix && active) {
       bearing = bearingTo(lat, lon, active.lat, active.lon);
       dist    = distanceTo(lat, lon, active.lat, active.lon);
     }
-    const legText       = n > 1 ? `LEG ${activeIdx + 1}/${n}  ` : '';
+    const legText       = n > 1 ? `LEG ${activeIdxSafe + 1}/${n}  ` : '';
     const completeLabel = n > 1 ? 'MISSION COMPLETE' : 'CAPTURED';
 
     webViewRef.current.injectJavaScript(
       `window.updateBoat(${hasFix ? lat : 0},${hasFix ? lon : 0},${hasFix},` +
-      `${bearing ?? 'null'},${dist ?? 'null'},${complete},` +
+      `${bearing ?? 'null'},${dist ?? 'null'},${missionDone},` +
       `${JSON.stringify(legText)},${JSON.stringify(completeLabel)});true;`
     );
-  }, [data?.gps_fix, data?.lat, data?.lon, data?.captured, data?.wp_idx, data?.wp_count, missionRoute, activeIdx, webViewReady]);
+  }, [data?.gps_fix, data?.lat, data?.lon, missionDone, activeIdxSafe, missionRoute, webViewReady]);
 
   // ── Map tap messages ─────────────────────────────────────────────
   const applySingleWaypoint = useCallback((pt: LatLon) => {
@@ -399,8 +420,11 @@ export default function MapScreen({ route, navigation }: Props) {
     try { msg = JSON.parse(raw); } catch { return; }
 
     if (msg.type === 'waypoint') {
-      // LIVE tap → single waypoint. Gate the override if a multi-leg mission
-      // is running, so a stray tap can't wipe a planned route.
+      // LIVE tap → single waypoint. Ignore if we've switched to PLAN but the
+      // setTapMode injection hasn't landed yet (stale tap during the switch).
+      if (inPlan) return;
+      // Gate the override if a multi-leg mission is running, so a stray tap
+      // can't wipe a planned route.
       const pt: LatLon = { lat: msg.lat, lon: msg.lon };
       if (missionRoute.length > 1) {
         Alert.alert(
@@ -438,16 +462,18 @@ export default function MapScreen({ route, navigation }: Props) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setSelectedIdx((cur) => (cur === msg.index ? null : msg.index));
     }
-  }, [ip, missionRoute, selectedIdx, applySingleWaypoint]);
+  }, [ip, inPlan, missionRoute, selectedIdx, applySingleWaypoint]);
 
   // ── PLAN mode actions ────────────────────────────────────────────
   const enterPlan = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    // Pre-load the remaining (uncaptured) legs so you can tweak + resend.
-    setDraft(missionRoute.slice(activeIdx));
+    // Pre-load for editing: the remaining (uncaptured) legs mid-mission, or the
+    // WHOLE route once complete (so "re-run" resends everything, not just the
+    // final point the active index is pinned to).
+    setDraft(missionRoute.slice(missionDone ? 0 : activeIdxSafe));
     setSelectedIdx(null);
     setScreenMode('plan');
-  }, [missionRoute, activeIdx]);
+  }, [missionRoute, activeIdxSafe, missionDone]);
 
   const cancelPlan = useCallback(() => {
     setScreenMode('live');
