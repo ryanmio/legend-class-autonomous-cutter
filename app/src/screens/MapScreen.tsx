@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { View, TouchableOpacity, Text, StyleSheet, Alert } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -7,10 +7,19 @@ import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import { setWaypoint as sendWaypoint, setCruise as sendCruise } from '../services/esp32Service';
+import {
+  setWaypoint as sendWaypoint,
+  setCruise as sendCruise,
+  setMission as sendMission,
+  getMission as fetchMission,
+  clearMission as sendClearMission,
+  LatLon,
+} from '../services/esp32Service';
 import { CruiseModal } from '../components/CruiseModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
+
+const MAX_WAYPOINTS = 32;   // mirrors firmware config.h
 
 // ── Haversine bearing and distance (used for the in-map HUD overlay) ──────────
 function bearingTo(fromLat: number, fromLon: number, toLat: number, toLon: number): number {
@@ -32,19 +41,19 @@ function distanceTo(fromLat: number, fromLon: number, toLat: number, toLon: numb
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function fmtDist(m: number): string {
+  return m >= 1000 ? (m / 1000).toFixed(2) + ' km' : Math.round(m) + ' m';
+}
+
 // ── Leaflet map HTML ──────────────────────────────────────────────────────────
-// All map-side rendering lives here: boat marker, waypoint reticle, planned
-// path polyline, and a HUD that has three states:
-//   hidden:  fix is good and no waypoint → boat marker speaks for itself
-//   minimal: no fix → small yellow ⚠ NO GPS FIX line (no card chrome)
-//   card:    waypoint tracking or captured → full bordered card
-// HUD starts hidden so a remount that loads before the first telemetry
-// frame doesn't flash "NO GPS FIX" before we actually know GPS state.
+// Map-side rendering: boat marker + trail, the active MISSION (numbered markers
+// + route polyline + bright dashed active-leg line), and the PLAN-mode DRAFT
+// (amber numbered markers you tap to select/move/delete). A single waypoint is
+// just a 1-point mission. HUD states: hidden / minimal (no fix) / card
+// (tracking a leg or complete).
 //
-// Color split: the WP marker and planned path use bright cyan (the
-// app accent — high visibility in sun, signals "active target"). The
-// boat trail uses a muted steel blue so the history doesn't compete
-// with the live target.
+// Colors: live mission = bright cyan (active target); done legs = green/dim;
+// draft = amber (clearly "not sent yet"); boat trail = muted steel blue.
 const MAP_HTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -58,81 +67,48 @@ const MAP_HTML = `<!DOCTYPE html>
     #map{width:100vw;height:100vh}
 
     #hud{
-      position:absolute;
-      bottom:80px;
-      left:50%;
-      transform:translateX(-50%);
-      font-family:monospace;
-      text-align:center;
-      z-index:1000;
-      pointer-events:none;
+      position:absolute; bottom:80px; left:50%; transform:translateX(-50%);
+      font-family:monospace; text-align:center; z-index:1000; pointer-events:none;
     }
     #hud.hud-hidden  { display:none; }
     #hud.hud-minimal { padding:5px 12px; }
-    #hud.hud-minimal #hud-primary{
-      font-size:11px; font-weight:700; letter-spacing:1.5px;
-    }
+    #hud.hud-minimal #hud-primary{ font-size:11px; font-weight:700; letter-spacing:1.5px; }
     #hud.hud-minimal #hud-secondary{ display:none; }
     #hud.hud-card{
-      background:rgba(10,15,26,0.92);
-      padding:14px 22px;
-      border-radius:6px;
-      border:1px solid rgba(0,191,255,0.25);
-      min-width:220px;
-      max-width:78%;
+      background:rgba(10,15,26,0.92); padding:14px 22px; border-radius:6px;
+      border:1px solid rgba(0,191,255,0.25); min-width:220px; max-width:78%;
     }
     #hud.hud-card #hud-primary{
-      font-size:22px;
-      font-weight:800;
-      letter-spacing:1px;
-      line-height:1.15;
-      white-space:nowrap;
+      font-size:22px; font-weight:800; letter-spacing:1px; line-height:1.15; white-space:nowrap;
     }
     #hud.hud-card #hud-secondary{
-      font-size:10px;
-      color:#6b8fa8;
-      letter-spacing:1.5px;
-      margin-top:8px;
-      font-weight:600;
+      font-size:10px; color:#6b8fa8; letter-spacing:1.5px; margin-top:8px; font-weight:600;
     }
 
     .boat{font-size:22px;line-height:1}
 
-    /* Waypoint reticle — bright cyan, the active target color. */
-    /* Tile-layer toggle (top-left). Tap swaps between satellite + street. */
     #layer-toggle{
-      position:absolute;
-      top:90px;
-      left:12px;
-      background:rgba(10,15,26,0.92);
-      border:1.5px solid #00bfff;
-      border-radius:4px;
-      color:#00bfff;
-      font-family:monospace;
-      font-weight:800;
-      font-size:11px;
-      letter-spacing:2px;
-      padding:7px 11px;
-      z-index:1000;
-      cursor:pointer;
-      user-select:none;
+      position:absolute; top:90px; left:12px;
+      background:rgba(10,15,26,0.92); border:1.5px solid #00bfff; border-radius:4px;
+      color:#00bfff; font-family:monospace; font-weight:800; font-size:11px;
+      letter-spacing:2px; padding:7px 11px; z-index:1000; cursor:pointer; user-select:none;
     }
 
+    /* Numbered waypoint markers, styled by state. */
     .wp-icon{background:transparent !important;border:none !important}
-    .wp-target{position:relative;width:30px;height:30px}
-    .wp-ring{
-      position:absolute;top:1px;left:1px;
-      width:28px;height:28px;
-      border:2.5px solid #00bfff;border-radius:50%;
-      background:rgba(0,191,255,0.2);
-      box-shadow:0 0 8px rgba(0,191,255,0.7);
+    .wpnum{
+      width:24px;height:24px;border-radius:50%;
+      display:flex;align-items:center;justify-content:center;
+      font-family:monospace;font-weight:800;font-size:12px;
+      border:2px solid #00bfff;color:#00bfff;background:rgba(10,15,26,0.85);
     }
-    .wp-dot{
-      position:absolute;top:12px;left:12px;
-      width:6px;height:6px;
-      background:#00bfff;border-radius:50%;
-      box-shadow:0 0 4px rgba(0,191,255,0.9);
-    }
+    .wpnum-active{background:#00bfff;color:#08131f;width:28px;height:28px;font-size:13px;
+      box-shadow:0 0 10px rgba(0,191,255,0.9);}
+    .wpnum-done{border-color:#34c759;color:#34c759;opacity:0.55;}
+    .wpnum-upcoming{}
+    .wpnum-draft{border-color:#ffb020;color:#ffb020;}
+    .wpnum-draft-sel{border-color:#ffd27f;color:#08131f;background:#ffb020;
+      width:30px;height:30px;box-shadow:0 0 12px rgba(255,176,32,0.95);}
   </style>
 </head>
 <body>
@@ -143,12 +119,8 @@ const MAP_HTML = `<!DOCTYPE html>
   </div>
   <div id="layer-toggle">MAP</div>
   <script>
-    // zoomControl off — pinch-zoom still works; the in-map buttons
-    // overlapped the iOS status bar at the top-left.
     var map = L.map('map', { zoomControl:false }).setView([37.8,-122.4], 13);
 
-    // Esri World Imagery (satellite) — keyless, fine for personal use.
-    // Default for waypoint placement around piers / shoreline detail.
     var satLayer = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       { attribution:'© Esri', maxZoom:19 }
@@ -169,23 +141,26 @@ const MAP_HTML = `<!DOCTYPE html>
       }
     });
 
-    var boatIcon = L.divIcon({
-      html:'<div class="boat">⛵</div>',
-      iconSize:[28,28], iconAnchor:[14,14], className:''
-    });
-    var wpIconDef = L.divIcon({
-      html:'<div class="wp-target"><div class="wp-ring"></div><div class="wp-dot"></div></div>',
-      iconSize:[30,30], iconAnchor:[15,15], className:'wp-icon'
-    });
+    var boatIcon = L.divIcon({ html:'<div class="boat">⛵</div>', iconSize:[28,28], iconAnchor:[14,14], className:'' });
+
+    function numIcon(num, state) {
+      return L.divIcon({
+        html:'<div class="wpnum wpnum-'+state+'">'+num+'</div>',
+        iconSize:[24,24], iconAnchor:[12,12], className:'wp-icon'
+      });
+    }
 
     var marker   = null;
-    var wpMarker = null;
-    var pathLine = null;
-    // Trail = where we've been. Muted steel blue so it doesn't compete
-    // with the bright-cyan waypoint and path-line.
+    var pathLine = null;              // bright dashed boat → active waypoint
     var trail    = L.polyline([], { color:'#3a6db8', weight:2.5, opacity:0.75 }).addTo(map);
     var pts      = [];
     var locked   = false;
+    var tapMode  = 'live';
+
+    var missionMarkers = [], missionLine = null, activeWp = null;
+    var draftMarkers   = [], draftLine   = null;
+
+    function post(o){ window.ReactNativeWebView.postMessage(JSON.stringify(o)); }
 
     function setHud(mode, primary, secondary, color) {
       var card = document.getElementById('hud');
@@ -197,85 +172,92 @@ const MAP_HTML = `<!DOCTYPE html>
       document.getElementById('hud-secondary').textContent = secondary || '';
     }
 
-    // Dashed cyan planned-path line between boat and waypoint.
     function updatePathLine() {
-      if (marker && wpMarker) {
-        var coords = [marker.getLatLng(), wpMarker.getLatLng()];
-        if (pathLine) {
-          pathLine.setLatLngs(coords);
-        } else {
-          pathLine = L.polyline(coords, {
-            color:'#00bfff', weight:2.5, dashArray:'8, 6', opacity:0.9
-          }).addTo(map);
-        }
+      if (marker && activeWp) {
+        var coords = [marker.getLatLng(), activeWp];
+        if (pathLine) pathLine.setLatLngs(coords);
+        else pathLine = L.polyline(coords, { color:'#00bfff', weight:2.5, dashArray:'8, 6', opacity:0.9 }).addTo(map);
       } else if (pathLine) {
-        map.removeLayer(pathLine);
-        pathLine = null;
+        map.removeLayer(pathLine); pathLine = null;
       }
     }
 
-    window.updateBoat = function(lat, lon, hasFix, bearing, distM, captured) {
-      if (!hasFix) {
-        setHud('minimal', '⚠ NO GPS FIX', '', '#ffcc00');
-        return;
+    window.setTapMode = function(mode){ tapMode = mode; };
+
+    // Live mission: numbered markers + route polyline + active-leg dashed line.
+    window.setMission = function(list, activeIdx){
+      missionMarkers.forEach(function(m){ map.removeLayer(m); }); missionMarkers = [];
+      if (missionLine){ map.removeLayer(missionLine); missionLine = null; }
+      activeWp = null;
+      if (!list || !list.length){ updatePathLine(); return; }
+      var latlngs = [];
+      for (var i=0;i<list.length;i++){
+        var ll = [list[i].lat, list[i].lon]; latlngs.push(ll);
+        var state = i < activeIdx ? 'done' : (i === activeIdx ? 'active' : 'upcoming');
+        var m = L.marker(ll, { icon:numIcon(i+1, state), interactive:false }).addTo(map);
+        missionMarkers.push(m);
+        if (i === activeIdx) activeWp = ll;
       }
+      if (list.length > 1) missionLine = L.polyline(latlngs, { color:'#00bfff', weight:2, opacity:0.5 }).addTo(map);
+      updatePathLine();
+    };
+    window.clearMission = function(){
+      missionMarkers.forEach(function(m){ map.removeLayer(m); }); missionMarkers = [];
+      if (missionLine){ map.removeLayer(missionLine); missionLine = null; }
+      activeWp = null; updatePathLine();
+    };
+
+    // Draft (PLAN mode): amber numbered markers, tap to select. selIdx<0 = none.
+    window.setDraft = function(list, selIdx){
+      draftMarkers.forEach(function(m){ map.removeLayer(m); }); draftMarkers = [];
+      if (draftLine){ map.removeLayer(draftLine); draftLine = null; }
+      if (!list || !list.length) return;
+      var latlngs = [];
+      for (var i=0;i<list.length;i++){
+        var ll = [list[i].lat, list[i].lon]; latlngs.push(ll);
+        var state = (i === selIdx) ? 'draft-sel' : 'draft';
+        var m = L.marker(ll, { icon:numIcon(i+1, state) }).addTo(map);
+        (function(idx){
+          m.on('click', function(ev){ L.DomEvent.stopPropagation(ev); post({ type:'draftmarker', index:idx }); });
+        })(i);
+        draftMarkers.push(m);
+      }
+      draftLine = L.polyline(latlngs, { color:'#ffb020', weight:2.5, dashArray:'6, 6', opacity:0.85 }).addTo(map);
+    };
+    window.clearDraft = function(){
+      draftMarkers.forEach(function(m){ map.removeLayer(m); }); draftMarkers = [];
+      if (draftLine){ map.removeLayer(draftLine); draftLine = null; }
+    };
+
+    window.updateBoat = function(lat, lon, hasFix, bearing, distM, complete, legText, completeLabel) {
+      if (!hasFix) { setHud('minimal', '⚠ NO GPS FIX', '', '#ffcc00'); return; }
       var ll = [lat, lon];
-      if (!marker) {
-        marker = L.marker(ll, { icon:boatIcon }).addTo(map);
-        map.setView(ll, 18);
-      } else {
-        marker.setLatLng(ll);
-        if (locked) map.panTo(ll, { animate:true, duration:0.5 });
-      }
-      pts.push(ll);
-      if (pts.length > 800) pts.shift();
+      if (!marker) { marker = L.marker(ll, { icon:boatIcon }).addTo(map); map.setView(ll, 18); }
+      else { marker.setLatLng(ll); if (locked) map.panTo(ll, { animate:true, duration:0.5 }); }
+      pts.push(ll); if (pts.length > 800) pts.shift();
       trail.setLatLngs(pts);
       updatePathLine();
 
       var llStr = lat.toFixed(6) + ', ' + lon.toFixed(6);
-
-      if (captured) {
-        setHud('card', '✓ CAPTURED', llStr, '#34c759');
+      if (complete) {
+        setHud('card', '✓ ' + (completeLabel || 'CAPTURED'), llStr, '#34c759');
       } else if (bearing != null && distM != null && !isNaN(bearing)) {
-        var d = distM >= 1000
-          ? (distM / 1000).toFixed(2) + ' km'
-          : Math.round(distM) + ' m';
-        setHud('card', '→ ' + bearing.toFixed(0) + '°  ·  ' + d, llStr, '#34c759');
+        var d = distM >= 1000 ? (distM / 1000).toFixed(2) + ' km' : Math.round(distM) + ' m';
+        setHud('card', (legText || '') + '→ ' + bearing.toFixed(0) + '°  ·  ' + d, llStr, '#34c759');
       } else {
-        // Fix but no waypoint — boat marker on the map speaks for itself.
         setHud('hidden');
       }
     };
 
     window.centerOnBoat = function() {
-      if (marker) {
-        map.setView(marker.getLatLng(), map.getZoom());
-        locked = true;
-      }
-    };
-
-    window.setWaypointMarker = function(lat, lon) {
-      if (wpMarker) {
-        wpMarker.setLatLng([lat, lon]);
-      } else {
-        wpMarker = L.marker([lat, lon], { icon:wpIconDef }).addTo(map);
-      }
-      updatePathLine();
-    };
-
-    window.clearWaypointMarker = function() {
-      if (wpMarker) { map.removeLayer(wpMarker); wpMarker = null; }
-      updatePathLine();
+      if (marker) { map.setView(marker.getLatLng(), map.getZoom()); locked = true; }
     };
 
     map.on('dragstart', function() { locked = false; });
 
     map.on('click', function(e) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type:'waypoint',
-        lat:e.latlng.lat,
-        lon:e.latlng.lng
-      }));
+      if (tapMode === 'plan') post({ type:'plantap', lat:e.latlng.lat, lon:e.latlng.lng });
+      else                    post({ type:'waypoint', lat:e.latlng.lat, lon:e.latlng.lng });
     });
   </script>
 </body>
@@ -295,91 +277,217 @@ function modeColor(mode: string | undefined): string {
 export default function MapScreen({ route, navigation }: Props) {
   const { ip } = route.params;
   const { data } = useTelemetry();
-  const webViewRef    = useRef<WebView>(null);
-  const insets        = useSafeAreaInsets();
-  const currentGpsRef = useRef<{ lat: number; lon: number } | null>(null);
+  const webViewRef = useRef<WebView>(null);
+  const insets     = useSafeAreaInsets();
 
-  const [waypoint, setWaypoint] = useState<{ lat: number; lon: number } | null>(null);
+  // The mission the app believes is on the boat (authoritative after any local
+  // action; rehydrated from GET /mission once per mount).
+  const [missionRoute, setMissionRoute] = useState<LatLon[]>([]);
+  const [screenMode, setScreenMode]     = useState<'live' | 'plan'>('live');
+  const [draft, setDraft]               = useState<LatLon[]>([]);
+  const [selectedIdx, setSelectedIdx]   = useState<number | null>(null);
   const [cruiseModalOpen, setCruiseModalOpen] = useState(false);
   const [webViewReady, setWebViewReady] = useState(false);
 
-  // Rehydrate from telemetry ONCE per mount. Local state is authoritative
-  // after that — otherwise stale telemetry (the POST /waypoint clear
-  // hasn't propagated to the next /telemetry frame yet) races the user's
-  // CLEAR tap and visually undoes it. The ref also flips to true the
-  // moment the user takes any local action, so a clear that arrives
-  // before any telemetry-driven hydrate also blocks future hydrates.
+  const inPlan = screenMode === 'plan';
+
+  // Active leg index from telemetry, clamped to the local route length (guards
+  // the window right after CONFIRM where telemetry still reflects the old route).
+  const activeIdx = Math.min(
+    Math.max(0, data?.wp_idx ?? 0),
+    Math.max(0, missionRoute.length - 1),
+  );
+
+  // Rehydrate the route ONCE per mount. GET /mission is authoritative; if it
+  // fails (older firmware / offline) fall back to the single active waypoint
+  // from telemetry. Any local action also flips the ref so a hydrate can't
+  // stomp a fresh user edit.
   const hydratedRef = useRef(false);
+  const markHydrated = () => { hydratedRef.current = true; };
 
   useEffect(() => {
     if (hydratedRef.current) return;
-    if (!data?.wp_set) return;
-    if (data.wp_lat == null || data.wp_lon == null) return;
+    fetchMission(ip)
+      .then((m) => {
+        if (hydratedRef.current) return;
+        if (m.waypoints && m.waypoints.length) {
+          markHydrated();
+          setMissionRoute(m.waypoints.map((w) => ({ lat: parseFloat(w.lat), lon: parseFloat(w.lon) })));
+        }
+      })
+      .catch(() => {});
+  }, [ip]);
+
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    if (!data?.wp_set || data.wp_lat == null || data.wp_lon == null) return;
     const lat = parseFloat(data.wp_lat);
     const lon = parseFloat(data.wp_lon);
     if (isNaN(lat) || isNaN(lon)) return;
-    hydratedRef.current = true;
-    setWaypoint({ lat, lon });
+    markHydrated();
+    setMissionRoute([{ lat, lon }]);
   }, [data?.wp_set, data?.wp_lat, data?.wp_lon]);
 
-  useEffect(() => {
-    if (waypoint != null) hydratedRef.current = true;
-  }, [waypoint]);
-
-  // Reflect the local waypoint state into the WebView.
+  // Reflect the live mission into the WebView (hidden while planning).
   useEffect(() => {
     if (!webViewReady || !webViewRef.current) return;
-    if (waypoint) {
+    if (inPlan) {
+      webViewRef.current.injectJavaScript('window.clearMission();true;');
+    } else if (missionRoute.length) {
       webViewRef.current.injectJavaScript(
-        `window.setWaypointMarker(${waypoint.lat},${waypoint.lon});true;`
+        `window.setMission(${JSON.stringify(missionRoute)},${activeIdx});true;`
       );
     } else {
-      webViewRef.current.injectJavaScript('window.clearWaypointMarker();true;');
+      webViewRef.current.injectJavaScript('window.clearMission();true;');
     }
-  }, [waypoint, webViewReady]);
+  }, [missionRoute, activeIdx, inPlan, webViewReady]);
 
-  // Inject boat position + HUD state whenever telemetry changes (or after
-  // the WebView finishes loading, so a remount shows the right state
-  // immediately rather than flashing the default view + NO FIX).
+  // Reflect the draft into the WebView (PLAN mode only).
+  useEffect(() => {
+    if (!webViewReady || !webViewRef.current) return;
+    if (inPlan) {
+      webViewRef.current.injectJavaScript(
+        `window.setDraft(${JSON.stringify(draft)},${selectedIdx ?? -1});true;`
+      );
+    } else {
+      webViewRef.current.injectJavaScript('window.clearDraft();true;');
+    }
+  }, [draft, selectedIdx, inPlan, webViewReady]);
+
+  // Tell the map how a tap should be interpreted.
+  useEffect(() => {
+    if (!webViewReady || !webViewRef.current) return;
+    webViewRef.current.injectJavaScript(`window.setTapMode('${screenMode}');true;`);
+  }, [screenMode, webViewReady]);
+
+  // Boat position + HUD (active leg / mission complete).
   useEffect(() => {
     if (!webViewReady || !webViewRef.current || !data) return;
     const lat    = parseFloat(data.lat ?? '');
     const lon    = parseFloat(data.lon ?? '');
     const hasFix = data.gps_fix === true && !isNaN(lat) && !isNaN(lon);
-    const cap    = data.captured === true;
-
-    if (hasFix) currentGpsRef.current = { lat, lon };
+    const complete = data.captured === true && missionRoute.length > 0;
+    const n = data.wp_count ?? missionRoute.length;
 
     let bearing: number | null = null;
     let dist:    number | null = null;
-    if (hasFix && waypoint) {
-      bearing = bearingTo(lat, lon, waypoint.lat, waypoint.lon);
-      dist    = distanceTo(lat, lon, waypoint.lat, waypoint.lon);
+    const active = missionRoute[activeIdx];
+    if (hasFix && active) {
+      bearing = bearingTo(lat, lon, active.lat, active.lon);
+      dist    = distanceTo(lat, lon, active.lat, active.lon);
     }
+    const legText       = n > 1 ? `LEG ${activeIdx + 1}/${n}  ` : '';
+    const completeLabel = n > 1 ? 'MISSION COMPLETE' : 'CAPTURED';
 
     webViewRef.current.injectJavaScript(
       `window.updateBoat(${hasFix ? lat : 0},${hasFix ? lon : 0},${hasFix},` +
-      `${bearing ?? 'null'},${dist ?? 'null'},${cap});true;`
+      `${bearing ?? 'null'},${dist ?? 'null'},${complete},` +
+      `${JSON.stringify(legText)},${JSON.stringify(completeLabel)});true;`
     );
-  }, [data?.gps_fix, data?.lat, data?.lon, data?.captured, waypoint, webViewReady]);
+  }, [data?.gps_fix, data?.lat, data?.lon, data?.captured, data?.wp_idx, data?.wp_count, missionRoute, activeIdx, webViewReady]);
 
-  // Handle tap-on-map messages from the WebView.
-  const handleMapMessage = useCallback((msgData: string) => {
-    try {
-      const msg = JSON.parse(msgData);
-      if (msg.type !== 'waypoint') return;
-      const wpLat: number = msg.lat;
-      const wpLon: number = msg.lon;
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      setWaypoint({ lat: wpLat, lon: wpLon });
-      sendWaypoint(ip, wpLat, wpLon).catch(() => {});
-    } catch {}
+  // ── Map tap messages ─────────────────────────────────────────────
+  const applySingleWaypoint = useCallback((pt: LatLon) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    markHydrated();
+    setMissionRoute([pt]);
+    sendWaypoint(ip, pt.lat, pt.lon).catch(() => {});
   }, [ip]);
 
-  const handleClearWaypoint = useCallback(() => {
+  const handleMapMessage = useCallback((raw: string) => {
+    let msg: any;
+    try { msg = JSON.parse(raw); } catch { return; }
+
+    if (msg.type === 'waypoint') {
+      // LIVE tap → single waypoint. Gate the override if a multi-leg mission
+      // is running, so a stray tap can't wipe a planned route.
+      const pt: LatLon = { lat: msg.lat, lon: msg.lon };
+      if (missionRoute.length > 1) {
+        Alert.alert(
+          'Replace mission?',
+          `Drop the ${missionRoute.length}-waypoint mission and steer to a single point here?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Replace', style: 'destructive', onPress: () => applySingleWaypoint(pt) },
+          ],
+        );
+      } else {
+        applySingleWaypoint(pt);
+      }
+      return;
+    }
+
+    if (msg.type === 'plantap') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (selectedIdx != null) {
+        // Move the selected point here (stays selected for further nudging).
+        setDraft((d) => d.map((p, i) => (i === selectedIdx ? { lat: msg.lat, lon: msg.lon } : p)));
+      } else {
+        setDraft((d) => {
+          if (d.length >= MAX_WAYPOINTS) {
+            Alert.alert('Mission full', `Maximum ${MAX_WAYPOINTS} waypoints.`);
+            return d;
+          }
+          return [...d, { lat: msg.lat, lon: msg.lon }];
+        });
+      }
+      return;
+    }
+
+    if (msg.type === 'draftmarker') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setSelectedIdx((cur) => (cur === msg.index ? null : msg.index));
+    }
+  }, [ip, missionRoute, selectedIdx, applySingleWaypoint]);
+
+  // ── PLAN mode actions ────────────────────────────────────────────
+  const enterPlan = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setWaypoint(null);
-    sendWaypoint(ip, null, null).catch(() => {});
+    // Pre-load the remaining (uncaptured) legs so you can tweak + resend.
+    setDraft(missionRoute.slice(activeIdx));
+    setSelectedIdx(null);
+    setScreenMode('plan');
+  }, [missionRoute, activeIdx]);
+
+  const cancelPlan = useCallback(() => {
+    setScreenMode('live');
+    setDraft([]);
+    setSelectedIdx(null);
+  }, []);
+
+  const confirmPlan = useCallback(() => {
+    if (draft.length === 0) { Alert.alert('Empty route', 'Add at least one waypoint.'); return; }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    const route = draft;
+    sendMission(ip, route)
+      .then(() => {
+        markHydrated();
+        setMissionRoute(route);
+        setScreenMode('live');
+        setDraft([]);
+        setSelectedIdx(null);
+      })
+      .catch((e: any) => {
+        Alert.alert('Route rejected', e?.message ?? 'The boat rejected the mission.');
+        if (typeof e?.bad_leg === 'number') setSelectedIdx(Math.min(e.bad_leg, route.length - 1));
+      });
+  }, [ip, draft]);
+
+  const deleteSelected = useCallback(() => {
+    if (selectedIdx == null) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setDraft((d) => d.filter((_, i) => i !== selectedIdx));
+    setSelectedIdx(null);
+  }, [selectedIdx]);
+
+  const undoLast   = useCallback(() => { setDraft((d) => d.slice(0, -1)); setSelectedIdx(null); }, []);
+  const clearDraft = useCallback(() => { setDraft([]); setSelectedIdx(null); }, []);
+
+  const handleClearMission = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    markHydrated();
+    setMissionRoute([]);
+    sendClearMission(ip).catch(() => {});
   }, [ip]);
 
   const handlePickCruise = useCallback((us: number) => {
@@ -387,10 +495,17 @@ export default function MapScreen({ route, navigation }: Props) {
     setCruiseModalOpen(false);
   }, [ip]);
 
+  const draftDist = useMemo(() => {
+    let s = 0;
+    for (let i = 1; i < draft.length; i++) s += distanceTo(draft[i - 1].lat, draft[i - 1].lon, draft[i].lat, draft[i].lon);
+    return s;
+  }, [draft]);
+
   const mode      = data?.mode;
   const failsafe  = mode === 'FAILSAFE';
   const ackNeeded = data?.failsafe_ack === true;
   const cruiseUs  = data?.cruise_us;
+  const topOffset = (failsafe ? insets.top + 40 : insets.top);
 
   return (
     <View style={styles.screen}>
@@ -405,7 +520,6 @@ export default function MapScreen({ route, navigation }: Props) {
         onMessage={(e) => handleMapMessage(e.nativeEvent.data)}
       />
 
-      {/* Full-width FAILSAFE banner — only when mode says so. */}
       {failsafe && (
         <View style={[styles.failsafeBanner, { paddingTop: insets.top + 8 }]}>
           <Text style={styles.failsafeText}>
@@ -414,16 +528,14 @@ export default function MapScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* ── Top bar: MODE only (back button is at the bottom) ─────── */}
-      <View
-        style={[
-          styles.topBarRow,
-          { top: (failsafe ? insets.top + 40 : insets.top) + 8 },
-        ]}
-        pointerEvents="box-none"
-      >
+      {/* ── Top bar: MODE + PLAN badge ─────────────────────────────── */}
+      <View style={[styles.topBarRow, { top: topOffset + 8 }]} pointerEvents="box-none">
         <View style={styles.topBarSpacer} />
-
+        {inPlan && (
+          <View style={[styles.chip, styles.modeChip, { borderColor: AMBER }]}>
+            <Text style={[styles.modeChipText, { color: AMBER }]}>PLAN</Text>
+          </View>
+        )}
         {mode && (
           <View style={[styles.chip, styles.modeChip, { borderColor: modeColor(mode) }]}>
             <Text style={[styles.chipDot, { color: modeColor(mode) }]}>●</Text>
@@ -432,30 +544,84 @@ export default function MapScreen({ route, navigation }: Props) {
         )}
       </View>
 
-      {/* ── Action bar (cruise + clear WP) ────────────────────────── */}
-      <View
-        style={[
-          styles.actionBarRow,
-          { top: (failsafe ? insets.top + 40 : insets.top) + 50 },
-        ]}
-        pointerEvents="box-none"
-      >
-        <TouchableOpacity
-          style={styles.cruisePill}
-          onPress={() => setCruiseModalOpen(true)}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.cruisePillLabel}>CRUISE</Text>
-          <Text style={styles.cruisePillValue}>{cruiseUs ?? '—'}</Text>
-          <Text style={styles.cruisePillChevron}>▾</Text>
-        </TouchableOpacity>
-
-        {waypoint && (
-          <TouchableOpacity style={styles.wpClearBtn} onPress={handleClearWaypoint} activeOpacity={0.7}>
-            <Text style={styles.wpClearBtnText}>✕ CLEAR WP</Text>
+      {/* ── Action bar (LIVE): cruise · plan · clear ───────────────── */}
+      {!inPlan && (
+        <View style={[styles.actionBarRow, { top: topOffset + 50 }]} pointerEvents="box-none">
+          <TouchableOpacity style={styles.cruisePill} onPress={() => setCruiseModalOpen(true)} activeOpacity={0.7}>
+            <Text style={styles.cruisePillLabel}>CRUISE</Text>
+            <Text style={styles.cruisePillValue}>{cruiseUs ?? '—'}</Text>
+            <Text style={styles.cruisePillChevron}>▾</Text>
           </TouchableOpacity>
-        )}
-      </View>
+
+          <TouchableOpacity style={styles.planPill} onPress={enterPlan} activeOpacity={0.7}>
+            <Text style={styles.planPillText}>⊹ PLAN</Text>
+          </TouchableOpacity>
+
+          {missionRoute.length > 0 && (
+            <TouchableOpacity style={styles.wpClearBtn} onPress={handleClearMission} activeOpacity={0.7}>
+              <Text style={styles.wpClearBtnText}>✕ CLEAR</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* ── PLAN selection banner ──────────────────────────────────── */}
+      {inPlan && selectedIdx != null && (
+        <View style={[styles.selBanner, { top: topOffset + 50 }]} pointerEvents="box-none">
+          <Text style={styles.selBannerText}>MOVING #{selectedIdx + 1} — tap map to reposition</Text>
+        </View>
+      )}
+
+      {/* ── PLAN toolbar (bottom) ──────────────────────────────────── */}
+      {inPlan && (
+        <View style={[styles.planBar, { bottom: insets.bottom + 88 }]}>
+          <Text style={styles.planBarStat}>
+            {draft.length} pt{draft.length === 1 ? '' : 's'} · ~{fmtDist(draftDist)}
+          </Text>
+          <View style={styles.planBtnRow}>
+            {selectedIdx != null ? (
+              <>
+                <TouchableOpacity style={[styles.planBtn, styles.planBtnDanger]} onPress={deleteSelected} activeOpacity={0.7}>
+                  <Text style={styles.planBtnDangerText}>DELETE #{selectedIdx + 1}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.planBtn} onPress={() => setSelectedIdx(null)} activeOpacity={0.7}>
+                  <Text style={styles.planBtnText}>DONE</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <TouchableOpacity
+                  style={[styles.planBtn, draft.length === 0 && styles.planBtnDisabled]}
+                  onPress={undoLast}
+                  disabled={draft.length === 0}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.planBtnText}>UNDO</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.planBtn, draft.length === 0 && styles.planBtnDisabled]}
+                  onPress={clearDraft}
+                  disabled={draft.length === 0}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.planBtnText}>CLEAR</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.planBtn} onPress={cancelPlan} activeOpacity={0.7}>
+                  <Text style={styles.planBtnText}>CANCEL</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.planBtn, styles.planBtnGo, draft.length === 0 && styles.planBtnDisabled]}
+                  onPress={confirmPlan}
+                  disabled={draft.length === 0}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.planBtnGoText}>CONFIRM ▸</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      )}
 
       {/* ── Back-to-Helm chip (bottom left) ───────────────────────── */}
       <TouchableOpacity
@@ -486,61 +652,63 @@ export default function MapScreen({ route, navigation }: Props) {
 }
 
 const CHIP_BG = 'rgba(10,15,26,0.88)';
+const AMBER   = '#ffb020';
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.background },
   map:    { flex: 1 },
 
-  // Failsafe banner
   failsafeBanner: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: Colors.danger, paddingBottom: 8, alignItems: 'center', zIndex: 100 },
   failsafeText:   { color: '#fff', fontSize: 12, fontWeight: '800', letterSpacing: 2, fontFamily: 'monospace' },
 
-  // Top bar
   topBarRow:      { position: 'absolute', left: 12, right: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
   topBarSpacer:   { flex: 1 },
   chip:           { flexDirection: 'row', alignItems: 'center', backgroundColor: CHIP_BG, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 4 },
-  chipBackText:   { color: Colors.accent, fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
   chipDot:        { fontSize: 9, marginRight: 5 },
   modeChip:       { borderWidth: 1.5, paddingVertical: 5 },
   modeChipText:   { fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
 
-  // Action bar (cruise + clear-wp)
   actionBarRow:      { position: 'absolute', left: 12, right: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
   cruisePill:        { flexDirection: 'row', alignItems: 'center', backgroundColor: CHIP_BG, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 4, borderLeftWidth: 2, borderLeftColor: Colors.accent },
   cruisePillLabel:   { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', letterSpacing: 2, fontWeight: '700', marginRight: 8 },
   cruisePillValue:   { color: Colors.accent, fontSize: 13, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
   cruisePillChevron: { color: Colors.accent, fontSize: 11, marginLeft: 6 },
 
+  planPill:     { backgroundColor: CHIP_BG, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 4, borderLeftWidth: 2, borderLeftColor: AMBER },
+  planPillText: { color: AMBER, fontSize: 12, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+
   wpClearBtn:     { backgroundColor: 'rgba(255,59,48,0.92)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 4 },
   wpClearBtnText: { color: '#fff', fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
 
-  // Center FAB (bottom-right)
+  // PLAN selection banner
+  selBanner:     { position: 'absolute', left: 12, right: 12, alignItems: 'center' },
+  selBannerText: { backgroundColor: 'rgba(255,176,32,0.95)', color: '#08131f', fontSize: 12, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 4, overflow: 'hidden' },
+
+  // PLAN bottom toolbar
+  planBar:     { position: 'absolute', left: 12, right: 12, backgroundColor: 'rgba(10,15,26,0.94)', borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,176,32,0.4)', paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
+  planBarStat: { color: AMBER, fontSize: 12, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1, textAlign: 'center' },
+  planBtnRow:  { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
+  planBtn:         { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 4, borderWidth: 1, borderColor: Colors.accent, backgroundColor: 'rgba(0,191,255,0.08)' },
+  planBtnText:     { color: Colors.accent, fontSize: 12, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+  planBtnDisabled: { opacity: 0.35 },
+  planBtnGo:       { borderColor: Colors.success, backgroundColor: 'rgba(52,199,89,0.15)' },
+  planBtnGoText:   { color: Colors.success, fontSize: 12, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+  planBtnDanger:     { borderColor: Colors.danger, backgroundColor: 'rgba(255,59,48,0.15)' },
+  planBtnDangerText: { color: Colors.danger, fontSize: 12, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 1 },
+
   centerFab: {
-    position: 'absolute',
-    right: 16,
-    width: 52, height: 52,
-    borderRadius: 26,
-    backgroundColor: 'rgba(10,15,26,0.92)',
-    borderWidth: 1.5, borderColor: Colors.accent,
+    position: 'absolute', right: 16, width: 52, height: 52, borderRadius: 26,
+    backgroundColor: 'rgba(10,15,26,0.92)', borderWidth: 1.5, borderColor: Colors.accent,
     alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#000', shadowOpacity: 0.4, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4,
-    elevation: 4,
+    shadowColor: '#000', shadowOpacity: 0.4, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 4,
   },
   centerFabIcon: { color: Colors.accent, fontSize: 24, fontWeight: '800', lineHeight: 24 },
 
-  // Back-to-Helm chip (bottom-left). Larger tap target than the original
-  // top-right chip so it's reachable one-handed without resetting the map.
   backFab: {
-    position: 'absolute',
-    left: 16,
-    height: 52,
-    paddingHorizontal: 18,
-    borderRadius: 26,
-    backgroundColor: 'rgba(10,15,26,0.92)',
-    borderWidth: 1.5, borderColor: Colors.accent,
+    position: 'absolute', left: 16, height: 52, paddingHorizontal: 18, borderRadius: 26,
+    backgroundColor: 'rgba(10,15,26,0.92)', borderWidth: 1.5, borderColor: Colors.accent,
     alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#000', shadowOpacity: 0.4, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4,
-    elevation: 4,
+    shadowColor: '#000', shadowOpacity: 0.4, shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 4,
   },
   backFabText: { color: Colors.accent, fontSize: 13, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
 });

@@ -60,6 +60,46 @@ export async function setWaypoint(ip: string, lat: number | null, lon: number | 
   return post(ip, '/waypoint', { lat, lon });
 }
 
+export interface LatLon { lat: number; lon: number; }
+
+// Multi-waypoint mission (v0.7.0+). Body is a TOP-LEVEL JSON array of {lat,lon},
+// driven in order. Firmware chain-validates each leg against MAX_WP_DIST_M and
+// rejects with { err, bad_leg } on a too-long leg — surfaced on the thrown error
+// so the UI can highlight the offending point.
+export async function setMission(ip: string, points: LatLon[]) {
+  const res = await fetchWithTimeout(url(ip, '/mission'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(points),
+  });
+  const json = await res.json().catch(() => ({} as any));
+  if (!res.ok) {
+    const e: any = new Error(json.err || `mission failed: ${res.status}`);
+    e.bad_leg = json.bad_leg;
+    throw e;
+  }
+  return json;
+}
+
+// The route currently loaded on the boat — used to rehydrate the planned
+// polyline after an app relaunch mid-mission.
+export interface MissionState {
+  mission_active: boolean;
+  wp_count: number;
+  wp_idx: number;
+  waypoints: { lat: string; lon: string }[];
+}
+export async function getMission(ip: string): Promise<MissionState> {
+  const res = await fetchWithTimeout(url(ip, '/mission'));
+  if (!res.ok) throw new Error(`get mission failed: ${res.status}`);
+  return res.json();
+}
+
+// Clear the whole mission.
+export async function clearMission(ip: string) {
+  return post(ip, '/mission/clear');
+}
+
 // Live PID tuning. Either or both fields accepted; firmware ignores ki.
 export async function setPID(ip: string, params: PIDParams) {
   return post(ip, '/pid', params);

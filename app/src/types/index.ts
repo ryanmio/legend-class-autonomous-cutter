@@ -66,8 +66,13 @@ export interface TelemetryData {
   course?: string;
 
   // ── Waypoint / autopilot ──────────────────────────────────────
+  // Mission (v0.7.0+): wp_* report the ACTIVE leg; the fields below give
+  // sequencer state. A single waypoint is a 1-point mission.
+  mission_active?: boolean; // a mission is loaded and still has a leg to drive
+  wp_count?: number;        // total waypoints in the mission
+  wp_idx?: number;          // 0-based active leg index
   wp_set?: boolean;
-  captured?: boolean;     // sticky once distance OR crossing trigger fires
+  captured?: boolean;     // mission complete (all legs captured); 1-pt → single-WP capture
   captured_by?: 'none' | 'distance' | 'crossing';  // which trigger fired
   wp_lat?: string;
   wp_lon?: string;
