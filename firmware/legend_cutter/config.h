@@ -267,8 +267,12 @@ static const uint8_t  CMD_QUEUE_LEN   = 8;     // SPSC ring depth (commands are 
 // GET /history?since_ms=<uptimeMs> so the flight log stays unbroken across a
 // WiFi dropout. RAM-only by design: a reboot clears it, but the app already
 // treats a reboot (session_id change) as a flight boundary, so nothing the
-// system keeps today is lost. CAPACITY records × ~36 B ≈ the RAM footprint.
-//   1200 @ 1 Hz ≈ 20 min of history (~43 KB static).
+// system keeps today is lost. CAPACITY records × ~48 B ≈ the static footprint,
+// which shares dram0 with the WiFi stack's working memory — so this can't grow
+// freely: ~1200 is the safe ceiling. 1500+ links but starves the heap and WiFi
+// gets flaky at runtime; 2400 overflows the build outright. Leave at 1200.
+//   1200 @ 1 Hz ≈ 20 min (~57 KB static) — covers any realistic single dropout,
+//   since the app backfills on each reconnect (the ring only spans one gap).
 static const uint16_t HISTLOG_CAPACITY    = 1200;
 static const uint32_t HISTLOG_INTERVAL_MS = 1000;
 // Max records returned per /history response; the app pages with since_ms.
