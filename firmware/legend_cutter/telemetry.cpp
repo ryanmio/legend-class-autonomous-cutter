@@ -789,6 +789,14 @@ static void appendHistRecord(String& out, const HistRecord* r) {
              (r->flags & HIST_F_WP_SET)  ? "true" : "false",
              (r->flags & HIST_F_CAPTURED) ? "true" : "false");
     out += buf;
+    if (r->flags & HIST_F_WP_SET) {
+        // Same field names/format as live /telemetry, so backfilled rows drop
+        // straight into the same CSV columns → gapless multi-waypoint playback.
+        snprintf(buf, sizeof(buf),
+                 ",\"wp_idx\":%u,\"wp_count\":%u,\"wp_lat\":\"%.6f\",\"wp_lon\":\"%.6f\"",
+                 r->wpIdx, r->wpCount, r->wpLat1e7 / 1e7, r->wpLon1e7 / 1e7);
+        out += buf;
+    }
     if (r->wpDist10 >= 0) {
         snprintf(buf, sizeof(buf), ",\"wp_dist_m\":\"%.1f\"", r->wpDist10 / 10.0f); out += buf;
     }

@@ -23,6 +23,9 @@ struct HistRecord {
     uint32_t uptimeMs;     // millis() at capture; app maps to wall-clock on sync
     int32_t  lat1e7;       // degrees × 1e7 (valid only if gps_fix flag set)
     int32_t  lon1e7;
+    int32_t  wpLat1e7;     // active waypoint, deg × 1e7 (valid only if WP_SET flag)
+    int32_t  wpLon1e7;     // — lets a backfilled gap reconstruct the leg + markers,
+                           //   so a multi-waypoint mission plays back unbroken.
     int16_t  heading10;    // true heading, deg × 10 (always present)
     int16_t  course10;     // GPS course, deg × 10  (INT16_MIN = n/a)
     int16_t  speedKts100;  // knots × 100           (INT16_MIN = n/a)
@@ -35,6 +38,8 @@ struct HistRecord {
     uint8_t  mode;         // 0 idle/unknown, 1 MANUAL, 2 AUTO, 3 FAILSAFE
     uint8_t  sats;
     uint8_t  flags;        // HIST_F_* bitfield
+    uint8_t  wpIdx;        // active leg, 0-based (valid only if WP_SET flag)
+    uint8_t  wpCount;      // total legs in the mission (valid only if WP_SET flag)
     uint8_t  _pad;
 };
 

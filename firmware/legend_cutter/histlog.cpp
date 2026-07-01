@@ -78,6 +78,11 @@ void histlogUpdate() {
         flags |= HIST_F_WP_SET;
         if (navCaptured()) flags |= HIST_F_CAPTURED;
         r.wpDist10 = gpsValid() ? (int16_t)lroundf(navWpDistM() * 10.0f) : -1;
+        r.wpIdx    = navWpIdx();
+        r.wpCount  = navWpCount();
+        // Active-waypoint coords so a backfilled gap can place the leg + markers.
+        r.wpLat1e7 = (int32_t)llround((double)navWpLat() * 1e7);
+        r.wpLon1e7 = (int32_t)llround((double)navWpLon() * 1e7);
     } else {
         r.wpDist10 = -1;
     }
