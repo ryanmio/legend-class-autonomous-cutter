@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.6.8"
+#define FIRMWARE_VERSION "0.7.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -233,6 +233,9 @@ static const uint16_t GUN_PAN_DEADBAND_US = 15;
 static const bool     GUN_PAN_REVERSE     = true;
 
 // ── Navigation / waypoint ──────────────────────────────────────────────────
+// Max waypoints in one mission (matches the test_28 sequencer oracle). A single
+// waypoint is just a 1-point mission. 32 * 8 B = 256 B RAM.
+static const uint8_t MAX_WAYPOINTS = 32;
 static const float CAPTURE_RADIUS_M = 5.0f;
 // Inside this range the steering setpoint latches to the approach heading and
 // stops chasing the (now hypersensitive) instantaneous bearing — kills the

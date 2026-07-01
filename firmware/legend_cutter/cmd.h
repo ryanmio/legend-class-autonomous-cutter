@@ -15,6 +15,7 @@
 enum CmdType : uint8_t {
     CMD_WAYPOINT_SET = 0,
     CMD_WAYPOINT_CLEAR,
+    CMD_MISSION_COMMIT,   // copy the nav staging buffer into the active route
     CMD_CRUISE,
     CMD_PID,
     CMD_LED,

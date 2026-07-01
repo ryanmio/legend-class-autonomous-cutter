@@ -267,7 +267,12 @@ static void handleTelemetry() {
     if (gpsSpeedValid())  { snprintf(buf, sizeof(buf), "%.1f", gpsSpeedKnots()); doc["speed_kts"] = buf; }
     if (gpsCourseValid()) { snprintf(buf, sizeof(buf), "%.1f", gpsCourseDeg());  doc["course"]    = buf; }
 
-    // Waypoint
+    // Waypoint / mission. wp_* report the active leg; mission_* give sequencer
+    // state. captured means "mission complete" (a 1-point mission → single-WP
+    // capture, unchanged). wp_idx is 0-based.
+    doc["mission_active"] = navMissionActive();
+    doc["wp_count"]       = navWpCount();
+    doc["wp_idx"]         = navWpIdx();
     doc["wp_set"]   = navWpSet();
     doc["captured"] = navCaptured();
     doc["approach_lock"] = navApproachLocked();
@@ -404,6 +409,103 @@ static void handleWaypoint() {
     char out[128];
     serializeJson(resp, out);
     server.send(200, "application/json", out);
+}
+
+// POST /mission — ordered multi-waypoint route. Body is a TOP-LEVEL JSON array
+// [{"lat":..,"lon":..}, …] (test_28's proven shape). Chain-validated (per-leg),
+// staged, then committed on the control loop via CMD_MISSION_COMMIT. A single
+// waypoint still goes through /waypoint; this is the multi-leg path.
+static void handleMission() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+
+    // Up to MAX_WAYPOINTS * {lat,lon} + framing — ~2 KB worst case at 32 points.
+    DynamicJsonDocument req(3072);
+    if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
+    JsonArray arr = req.as<JsonArray>();
+    if (arr.isNull())    { server.send(400, "text/plain", "Body must be an array of {lat,lon}"); return; }
+    if (arr.size() == 0) { server.send(400, "application/json", "{\"ok\":false,\"err\":\"empty mission\"}"); return; }
+    if (arr.size() > MAX_WAYPOINTS) {
+        char e[72];
+        snprintf(e, sizeof(e), "{\"ok\":false,\"err\":\"too many waypoints (max %u)\"}", MAX_WAYPOINTS);
+        server.send(400, "application/json", e);
+        return;
+    }
+
+    Waypoint pts[MAX_WAYPOINTS];
+    uint8_t  n = 0;
+    for (JsonObject wp : arr) {
+        if (!wp.containsKey("lat") || !wp.containsKey("lon")) {
+            server.send(400, "text/plain", "Each waypoint needs lat and lon");
+            return;
+        }
+        pts[n].lat = wp["lat"].as<float>();
+        pts[n].lon = wp["lon"].as<float>();
+        n++;
+    }
+
+    // Per-leg (chained) fat-finger guard — a pre-planned route's later points are
+    // > MAX_WP_DIST_M from the launch spot, so boat→each would wrongly reject them.
+    uint8_t badLeg = 0;
+    float   badDist = 0.0f;
+    if (!navMissionInRange(pts, n, &badLeg, &badDist)) {
+        char e[128];
+        snprintf(e, sizeof(e),
+            "{\"ok\":false,\"err\":\"leg %u too long: %.0f m (max %.0f m)\",\"bad_leg\":%u}",
+            badLeg, badDist, MAX_WP_DIST_M, badLeg);
+        server.send(400, "application/json", e);
+        return;
+    }
+
+    if (!navStageMission(pts, n)) {
+        server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}");
+        return;
+    }
+    Command c = {}; c.type = CMD_MISSION_COMMIT;
+    if (!cmdEnqueue(c)) {
+        navAbortStage();   // control loop will never commit — don't wedge future missions
+        server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}");
+        return;
+    }
+
+    char out[64];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"wp_count\":%u}", n);
+    server.send(200, "application/json", out);
+}
+
+// POST /mission/clear — clear the whole mission (same control-loop path as
+// clearing a single waypoint).
+static void handleMissionClear() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+    Command c = {}; c.type = CMD_WAYPOINT_CLEAR;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
+    server.send(200, "application/json", "{\"ok\":true,\"cleared\":true}");
+}
+
+// GET /mission — the loaded route, so the app can rehydrate the planned polyline
+// after a relaunch mid-mission. Same unsynchronized cross-core read as the wp_*
+// fields in /telemetry (a torn coordinate during a rare simultaneous commit is
+// cosmetic and self-heals on the next poll).
+static void handleMissionGet() {
+    addCORS();
+    DynamicJsonDocument doc(3072);
+    doc["mission_active"] = navMissionActive();
+    doc["wp_count"]       = navWpCount();
+    doc["wp_idx"]         = navWpIdx();
+    JsonArray wps = doc.createNestedArray("waypoints");
+    float lat, lon;
+    char b[16];
+    for (uint8_t i = 0; navWpAt(i, &lat, &lon); i++) {
+        JsonObject o = wps.createNestedObject();
+        snprintf(b, sizeof(b), "%.6f", lat); o["lat"] = b;
+        snprintf(b, sizeof(b), "%.6f", lon); o["lon"] = b;
+    }
+    String out;
+    serializeJson(doc, out);
+    server.send(200, "application/json", out.c_str());
 }
 
 static void handlePid() {
@@ -735,6 +837,11 @@ void telemetryBegin() {
     server.on("/cruise",    HTTP_OPTIONS, handleOptions);
     server.on("/waypoint",  HTTP_POST,    handleWaypoint);
     server.on("/waypoint",  HTTP_OPTIONS, handleOptions);
+    server.on("/mission",       HTTP_GET,     handleMissionGet);
+    server.on("/mission",       HTTP_POST,    handleMission);
+    server.on("/mission",       HTTP_OPTIONS, handleOptions);
+    server.on("/mission/clear", HTTP_POST,    handleMissionClear);
+    server.on("/mission/clear", HTTP_OPTIONS, handleOptions);
     server.on("/pid",       HTTP_POST,    handlePid);
     server.on("/pid",       HTTP_OPTIONS, handleOptions);
     server.on("/led",       HTTP_POST,    handleLed);

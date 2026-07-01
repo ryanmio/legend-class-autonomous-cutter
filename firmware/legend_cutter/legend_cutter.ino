@@ -180,6 +180,7 @@ static void cmdApply(const Command& c) {
     switch (c.type) {
       case CMD_WAYPOINT_SET:   { float d; navTrySetWaypoint(c.lat, c.lon, &d); break; }
       case CMD_WAYPOINT_CLEAR: navClearWaypoint();                             break;
+      case CMD_MISSION_COMMIT: navCommitStagedMission();                       break;
       case CMD_CRUISE:         telemetrySetCruiseUs(c.cruiseUs);               break;
       case CMD_PID:            setPidGains(c.kp, c.kd);                        break;
       case CMD_LED:            lightsSet((LedId)c.ledId, c.ledOn);            break;
