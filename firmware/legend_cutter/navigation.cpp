@@ -175,18 +175,8 @@ void navCommitStagedMission() {
 
 void navAbortStage() { stagePending = false; }   // producer only; the commit never enqueued
 
-bool navStagePending() { return stagePending; }
-
 void navClearWaypoint() {
-    wpCount         = 0;
-    wpIdx           = 0;
-    missionActive   = false;
-    missionComplete = false;
-    capBy           = CAPTURED_BY_NONE;
-    startValid      = false;
-    approachLocked  = false;
-    wpDistM         = 0.0f;
-    wpBearing       = 0.0f;
+    startMission(nullptr, 0);   // n=0 → no route, all leg state reset (one source of truth)
     Serial.println("[MISSION] cleared");
 }
 
@@ -214,19 +204,15 @@ void navUpdate(bool inAuto) {
     // MANUAL/FAILSAFE still get live dist/bearing telemetry above.
     if (!inAuto) return;
 
-    // Fat-finger backstop, scoped to leg 0 ONLY — the single leg that can reach
-    // navUpdate without POST-time range validation (a route posted before the
-    // first fix skips the leg-0 check). Later legs were chain-validated at POST,
-    // so they must NOT trip this: otherwise GPS jitter near a ~1 km leg, or the
-    // documented MANUAL "steer closer to regain WiFi" detour, could erase a whole
-    // validated route (RAM-only, unrecoverable without WiFi). AUTO-only now, so a
-    // MANUAL excursion never wipes the mission.
-    if (wpIdx == 0 && wpDistM > MAX_WP_DIST_M) {
-        Serial.printf("[MISSION] aborted — leg 1 %.0f m away (max %.0f)\n",
-                      wpDistM, MAX_WP_DIST_M);
-        navClearWaypoint();
-        return;
-    }
+    // Over-range active leg → neutral-hold (see navActiveLegTooFar), NEVER wipe.
+    // An over-range leg means the boat is too far from the active waypoint to
+    // trust driving toward it: a route posted before a fix whose leg 0 turns out
+    // far, a sustained GPS glitch on any leg, or the documented MANUAL "steer to
+    // regain WiFi" detour followed by AUTO re-engage. The AUTO branch gates on
+    // navActiveLegTooFar() and holds neutral; the RAM-only route is preserved so
+    // driving back in range (or GPS recovering) resumes the mission. Skip capture
+    // detection while too far — the geometry above already refreshed telemetry.
+    if (wpDistM > MAX_WP_DIST_M) return;
 
     if (!startValid) {
         startLat   = boatLat;
@@ -294,6 +280,10 @@ bool       navStartValid()   { return startValid; }
 float      navStartLat()     { return startLat; }
 float      navStartLon()     { return startLon; }
 
+// True when the active leg is farther than the fat-finger limit — the AUTO
+// branch holds neutral (does not drive) while this is set, without wiping the
+// route. wpDistM is refreshed each navUpdate when a mission is active + has a fix.
+bool    navActiveLegTooFar() { return missionActive && wpDistM > MAX_WP_DIST_M; }
 bool    navMissionActive() { return missionActive; }
 uint8_t navWpCount()       { return wpCount; }
 uint8_t navWpIdx()         { return wpIdx; }

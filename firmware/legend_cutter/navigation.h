@@ -41,7 +41,6 @@ bool navWaypointInRange(float lat, float lon, float* outDistM);
 bool navStageMission(const Waypoint* pts, uint8_t n);  // producer; false if a stage is still pending
 void navCommitStagedMission();                         // consumer (control loop) only
 void navAbortStage();                                  // producer; drop a stage that failed to enqueue
-bool navStagePending();
 
 // Read-only chain validation for the network handler (no state mutation).
 // Every leg must be <= MAX_WP_DIST_M. Leg 0 is measured from the boat if a fix
@@ -69,6 +68,7 @@ float      navStartLat();
 float      navStartLon();
 
 // ── Mission state (telemetry / app) ──────────────────────────────────────────
+bool    navActiveLegTooFar();   // active leg > MAX_WP_DIST_M → AUTO neutral-holds (no wipe)
 bool    navMissionActive();
 uint8_t navWpCount();
 uint8_t navWpIdx();                                 // 0-based active leg index

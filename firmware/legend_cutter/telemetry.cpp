@@ -384,12 +384,18 @@ static void handleWaypoint() {
         server.send(200, "application/json", "{\"ok\":true,\"cleared\":true}");
         return;
     }
-    if (!req.containsKey("lat") || !req.containsKey("lon")) {
-        server.send(400, "text/plain", "Need lat and lon");
+    // Numeric + bounds (mirrors handleMission so the two set-paths don't drift;
+    // null is the clear signal handled above).
+    if (!req["lat"].is<float>() || !req["lon"].is<float>()) {
+        server.send(400, "text/plain", "Need numeric lat and lon");
         return;
     }
     float lat = req["lat"].as<float>();
     float lon = req["lon"].as<float>();
+    if (lat < -90.0f || lat > 90.0f || lon < -180.0f || lon > 180.0f) {
+        server.send(400, "application/json", "{\"ok\":false,\"err\":\"lat/lon out of range\"}");
+        return;
+    }
     float d   = 0.0f;
     // Validate (read-only) here; the control loop performs the actual set.
     if (!navWaypointInRange(lat, lon, &d)) {
@@ -461,9 +467,11 @@ static void handleMission() {
     float   badDist = 0.0f;
     if (!navMissionInRange(pts, n, &badLeg, &badDist)) {
         char e[128];
+        // Human message is 1-based to match the map markers (#1..N); the bad_leg
+        // field stays 0-based so the app can index the draft array directly.
         snprintf(e, sizeof(e),
-            "{\"ok\":false,\"err\":\"leg %u too long: %.0f m (max %.0f m)\",\"bad_leg\":%u}",
-            badLeg, badDist, MAX_WP_DIST_M, badLeg);
+            "{\"ok\":false,\"err\":\"waypoint #%u too far: %.0f m (max %.0f m)\",\"bad_leg\":%u}",
+            (unsigned)(badLeg + 1), badDist, MAX_WP_DIST_M, badLeg);
         server.send(400, "application/json", e);
         return;
     }
@@ -496,9 +504,12 @@ static void handleMissionClear() {
 }
 
 // GET /mission — the loaded route, so the app can rehydrate the planned polyline
-// after a relaunch mid-mission. Same unsynchronized cross-core read as the wp_*
-// fields in /telemetry (a torn coordinate during a rare simultaneous commit is
-// cosmetic and self-heals on the next poll).
+// after a relaunch mid-mission. Unsynchronized cross-core read of route[]/wpCount
+// (same lock-free convention as the wp_* fields in /telemetry). A torn read would
+// require this GET to land within the microseconds of a startMission() commit on
+// the control core — vanishingly unlikely with a single operator, and the app
+// re-fetches on the next mount; not re-polled, so it does NOT self-correct within
+// a session. Acceptable given the odds; noted rather than locked.
 static void handleMissionGet() {
     addCORS();
     DynamicJsonDocument doc(3072);

@@ -146,7 +146,10 @@ static void applyOutputs() {
       }
 
       case MODE_AUTO: {
-        if (navWpSet() && gpsValid() && !navCaptured()) {
+        // navActiveLegTooFar() → hold neutral without wiping the route (a MANUAL
+        // detour + AUTO re-engage, or a sustained GPS glitch, must not drive on a
+        // bad bearing or erase a validated mission).
+        if (navWpSet() && gpsValid() && !navCaptured() && !navActiveLegTooFar()) {
             uint16_t cruise   = telemetryCruiseUs();
             uint16_t engageUs = (cruise > AUTO_CRUISE_CAP_US) ? AUTO_CRUISE_CAP_US : cruise;
             float    steer    = navSteerBearing();
