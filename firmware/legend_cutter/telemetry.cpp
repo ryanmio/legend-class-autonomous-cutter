@@ -436,16 +436,17 @@ static void handleMission() {
     Waypoint pts[MAX_WAYPOINTS];
     uint8_t  n = 0;
     for (JsonObject wp : arr) {
-        if (!wp.containsKey("lat") || !wp.containsKey("lon")) {
-            server.send(400, "text/plain", "Each waypoint needs lat and lon");
+        // Require numeric lat/lon. is<float>() is true for JSON ints/floats and
+        // false for missing, null, or string — this closes the gap where a null
+        // or typo'd value coerces via .as<float>() to 0.0 (an in-range (0,0)
+        // Gulf-of-Guinea waypoint that would slip past the range check).
+        if (!wp["lat"].is<float>() || !wp["lon"].is<float>()) {
+            server.send(400, "text/plain", "Each waypoint needs numeric lat and lon");
             return;
         }
         float la = wp["lat"].as<float>();
         float lo = wp["lon"].as<float>();
-        // Reject NaN / out-of-range (null or non-numeric JSON coerces to 0.0, and
-        // a (0,0) leg would otherwise be accepted whenever the leg-0 range check
-        // is skipped for lack of a fix).
-        if (isnan(la) || isnan(lo) || la < -90.0f || la > 90.0f || lo < -180.0f || lo > 180.0f) {
+        if (la < -90.0f || la > 90.0f || lo < -180.0f || lo > 180.0f) {
             server.send(400, "application/json", "{\"ok\":false,\"err\":\"waypoint lat/lon out of range\"}");
             return;
         }

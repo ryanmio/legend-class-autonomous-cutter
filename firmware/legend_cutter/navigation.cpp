@@ -262,6 +262,12 @@ void navUpdate(bool inAuto) {
         wpIdx++;
         startValid     = false;   // re-record the start of the new leg on next fix
         approachLocked = false;
+        capBy          = CAPTURED_BY_NONE;   // that trigger belonged to the finished leg
+        // Refresh geometry to the NEW leg now, so applyOutputs() steers toward it
+        // this same control cycle instead of the just-passed point for one tick.
+        const Waypoint& nw = route[wpIdx];
+        wpDistM   = haversineDistM(gpsLat(), gpsLon(), nw.lat, nw.lon);
+        wpBearing = haversineBearing(gpsLat(), gpsLon(), nw.lat, nw.lon);
         Serial.printf("Advancing to leg %u/%u.\n", wpIdx + 1, wpCount);
     } else {
         missionActive   = false;
