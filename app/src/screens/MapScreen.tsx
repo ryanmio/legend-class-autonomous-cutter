@@ -288,6 +288,11 @@ export default function MapScreen({ route, navigation }: Props) {
   const [selectedIdx, setSelectedIdx]   = useState<number | null>(null);
   const [cruiseModalOpen, setCruiseModalOpen] = useState(false);
   const [webViewReady, setWebViewReady] = useState(false);
+  // After a local mission change the boat resets to leg 0; until telemetry shows
+  // that, don't trust its wp_idx/captured (count-equality can't catch a same-count
+  // re-plan). State (not a ref) so GET resolution re-runs the fallback-hydrate.
+  const [expectReset, setExpectReset]   = useState(false);
+  const [missionFetch, setMissionFetch] = useState<'pending' | 'done' | 'fail'>('pending');
 
   const inPlan = screenMode === 'plan';
 
@@ -298,11 +303,17 @@ export default function MapScreen({ route, navigation }: Props) {
     Math.max(0, missionRoute.length - 1),
   );
 
-  // Telemetry lags the local route by ~1 poll right after CONFIRM (it still
-  // reports the PREVIOUS mission's wp_count / wp_idx / captured). Only trust
-  // those derived flags once the boat's count matches what we sent — otherwise
-  // a fresh mission briefly shows "MISSION COMPLETE" / the wrong LEG x/N.
-  const telemInSync   = (data?.wp_count ?? -1) === missionRoute.length;
+  // Telemetry lags the local route by ~1 poll after a local mission change (it
+  // still reports the previous mission's wp_count/wp_idx/captured). Count-equality
+  // alone can't detect a same-count re-plan, so ALSO require that the boat has
+  // reset to leg 0 since our last change (expectReset). Until synced, treat the
+  // active leg as 0 and the mission as not-done — otherwise a fresh mission
+  // briefly shows "MISSION COMPLETE"/wrong LEG, and (worse) re-entering PLAN in
+  // that window would slice the route at a stale index and ship a truncated one.
+  // hasMissionTelemetry keeps this graceful against pre-0.7.0 firmware (no
+  // wp_count/wp_idx) — there we simply trust telemetry as the old single-WP app did.
+  const hasMissionTelemetry = data?.wp_count != null;
+  const telemInSync   = !hasMissionTelemetry || (data!.wp_count === missionRoute.length && !expectReset);
   const activeIdxSafe = telemInSync ? activeIdx : 0;
   const missionDone   = telemInSync && data?.captured === true && missionRoute.length > 0;
 
@@ -312,39 +323,48 @@ export default function MapScreen({ route, navigation }: Props) {
   // stomp a fresh user edit.
   const hydratedRef = useRef(false);
   const markHydrated = () => { hydratedRef.current = true; };
-  // GET /mission is authoritative for the full route. The telemetry fallback
-  // (single active waypoint) must run ONLY if GET failed — otherwise the cached
-  // last frame, delivered synchronously on mount, wins the race and collapses a
-  // multi-waypoint route to one point before GET resolves.
-  const missionFetch = useRef<'pending' | 'done' | 'fail'>('pending');
 
+  // GET /mission is authoritative for the full route. The telemetry fallback
+  // (single active waypoint) runs ONLY if GET failed — otherwise the cached last
+  // frame, delivered synchronously on mount, wins the race and collapses a
+  // multi-waypoint route to one point before GET resolves. missionFetch is state
+  // so its 'fail' transition re-renders and re-runs the fallback effect (a ref
+  // wouldn't, and a stationary boat's wp_lat/wp_lon never change to retrigger it).
   useEffect(() => {
     if (hydratedRef.current) return;
     fetchMission(ip)
       .then((m) => {
-        missionFetch.current = 'done';
-        if (hydratedRef.current) return;
-        const pts = (m.waypoints ?? [])
-          .map((w) => ({ lat: parseFloat(w.lat), lon: parseFloat(w.lon) }))
-          .filter((p) => !isNaN(p.lat) && !isNaN(p.lon));
-        if (pts.length) {
-          markHydrated();
-          setMissionRoute(pts);
+        if (!hydratedRef.current) {
+          const pts = (m.waypoints ?? [])
+            .map((w) => ({ lat: parseFloat(w.lat), lon: parseFloat(w.lon) }))
+            .filter((p) => !isNaN(p.lat) && !isNaN(p.lon));
+          if (pts.length) {
+            markHydrated();
+            setMissionRoute(pts);
+          }
         }
+        setMissionFetch('done');
       })
-      .catch(() => { missionFetch.current = 'fail'; });
+      .catch(() => setMissionFetch('fail'));
   }, [ip]);
 
   useEffect(() => {
     if (hydratedRef.current) return;
-    if (missionFetch.current !== 'fail') return;   // wait for GET; only fall back if it failed
+    if (missionFetch !== 'fail') return;   // wait for GET; only fall back if it failed
     if (!data?.wp_set || data.wp_lat == null || data.wp_lon == null) return;
     const lat = parseFloat(data.wp_lat);
     const lon = parseFloat(data.wp_lon);
     if (isNaN(lat) || isNaN(lon)) return;
     markHydrated();
     setMissionRoute([{ lat, lon }]);
-  }, [data?.wp_set, data?.wp_lat, data?.wp_lon]);
+  }, [missionFetch, data?.wp_set, data?.wp_lat, data?.wp_lon]);
+
+  // A fresh mission commits at leg 0 on the boat; once telemetry shows that, our
+  // local route and the boat's are back in sync. (On pre-0.7.0 firmware wp_idx is
+  // absent and expectReset is ignored by telemInSync, so it never blocks.)
+  useEffect(() => {
+    if (expectReset && data?.wp_idx === 0) setExpectReset(false);
+  }, [expectReset, data?.wp_idx]);
 
   // Reflect the live mission into the WebView (hidden while planning).
   useEffect(() => {
@@ -412,6 +432,7 @@ export default function MapScreen({ route, navigation }: Props) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     markHydrated();
     setMissionRoute([pt]);
+    setExpectReset(true);
     sendWaypoint(ip, pt.lat, pt.lon).catch(() => {});
   }, [ip]);
 
@@ -442,6 +463,7 @@ export default function MapScreen({ route, navigation }: Props) {
     }
 
     if (msg.type === 'plantap') {
+      if (!inPlan) return;   // stale tap after leaving PLAN before setTapMode('live') landed
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       if (selectedIdx != null) {
         // Move the selected point here (stays selected for further nudging).
@@ -489,6 +511,7 @@ export default function MapScreen({ route, navigation }: Props) {
       .then(() => {
         markHydrated();
         setMissionRoute(route);
+        setExpectReset(true);   // boat restarts at leg 0; don't trust stale telemetry until it shows that
         setScreenMode('live');
         setDraft([]);
         setSelectedIdx(null);

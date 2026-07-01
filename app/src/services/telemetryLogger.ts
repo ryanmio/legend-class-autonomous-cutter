@@ -358,7 +358,10 @@ export function computeStats(rs: StatsInput): FlightStats {
     const depth = num(r.depth_m);
     if (depth != null && depth > maxDepthM) maxDepthM = depth;
 
-    if (asBool(r.captured)) capturedWaypoint = true;
+    // captured now means "whole mission complete"; wp_idx advancing past 0 means
+    // at least one leg was captured. Either counts as "this flight captured a WP",
+    // so a multi-leg mission aborted before the final leg still shows the badge.
+    if (asBool(r.captured) || (num(r.wp_idx) ?? 0) > 0) capturedWaypoint = true;
   }
 
   return {
