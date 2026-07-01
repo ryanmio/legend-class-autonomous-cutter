@@ -55,7 +55,7 @@ void navResetLegStart();   // re-record the active leg start on the next AUTO fi
 void navUpdate(bool inAuto);   // refresh geometry; capture/advance only in AUTO
 
 // ── Active-leg accessors (report the active leg) ──────────────────────────────
-bool       navWpSet();          // a mission is active and has a current target
+bool       navWpSet();          // a route is loaded (running OR just completed)
 float      navWpLat();
 float      navWpLon();
 float      navWpDistM();

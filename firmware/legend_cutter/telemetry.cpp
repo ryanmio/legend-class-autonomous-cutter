@@ -440,8 +440,17 @@ static void handleMission() {
             server.send(400, "text/plain", "Each waypoint needs lat and lon");
             return;
         }
-        pts[n].lat = wp["lat"].as<float>();
-        pts[n].lon = wp["lon"].as<float>();
+        float la = wp["lat"].as<float>();
+        float lo = wp["lon"].as<float>();
+        // Reject NaN / out-of-range (null or non-numeric JSON coerces to 0.0, and
+        // a (0,0) leg would otherwise be accepted whenever the leg-0 range check
+        // is skipped for lack of a fix).
+        if (isnan(la) || isnan(lo) || la < -90.0f || la > 90.0f || lo < -180.0f || lo > 180.0f) {
+            server.send(400, "application/json", "{\"ok\":false,\"err\":\"waypoint lat/lon out of range\"}");
+            return;
+        }
+        pts[n].lat = la;
+        pts[n].lon = lo;
         n++;
     }
 

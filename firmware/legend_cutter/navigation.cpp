@@ -210,18 +210,23 @@ void navUpdate(bool inAuto) {
     wpDistM   = haversineDistM(boatLat, boatLon, w.lat, w.lon);
     wpBearing = haversineBearing(boatLat, boatLon, w.lat, w.lon);
 
-    // Backstop for the fat-finger guard: a leg accepted before the first GPS fix
-    // gets distance-checked here once position is known. Abort the whole mission.
-    if (wpDistM > MAX_WP_DIST_M) {
-        Serial.printf("[MISSION] aborted — active leg %.0f m away (max %.0f)\n",
+    // Capture detection + advance are armed only while AUTO is driving the leg.
+    // MANUAL/FAILSAFE still get live dist/bearing telemetry above.
+    if (!inAuto) return;
+
+    // Fat-finger backstop, scoped to leg 0 ONLY — the single leg that can reach
+    // navUpdate without POST-time range validation (a route posted before the
+    // first fix skips the leg-0 check). Later legs were chain-validated at POST,
+    // so they must NOT trip this: otherwise GPS jitter near a ~1 km leg, or the
+    // documented MANUAL "steer closer to regain WiFi" detour, could erase a whole
+    // validated route (RAM-only, unrecoverable without WiFi). AUTO-only now, so a
+    // MANUAL excursion never wipes the mission.
+    if (wpIdx == 0 && wpDistM > MAX_WP_DIST_M) {
+        Serial.printf("[MISSION] aborted — leg 1 %.0f m away (max %.0f)\n",
                       wpDistM, MAX_WP_DIST_M);
         navClearWaypoint();
         return;
     }
-
-    // Capture detection + advance are armed only while AUTO is driving the leg.
-    // MANUAL/FAILSAFE still get live dist/bearing telemetry above.
-    if (!inAuto) return;
 
     if (!startValid) {
         startLat   = boatLat;
@@ -265,9 +270,14 @@ void navUpdate(bool inAuto) {
     }
 }
 
-bool       navWpSet()        { return missionActive; }
-float      navWpLat()        { return missionActive ? route[wpIdx].lat : 0.0f; }
-float      navWpLon()        { return missionActive ? route[wpIdx].lon : 0.0f; }
+// A route is loaded — running OR just completed. Stays true after the final
+// capture, matching the original single-waypoint contract, so consumers that
+// read `captured` inside a `wp_set` guard (helm status, telemetry screen,
+// history ring) still see the completion. navMissionActive() is the "still
+// driving" flag that goes false at completion.
+bool       navWpSet()        { return missionActive || missionComplete; }
+float      navWpLat()        { return navWpSet() ? route[wpIdx].lat : 0.0f; }
+float      navWpLon()        { return navWpSet() ? route[wpIdx].lon : 0.0f; }
 float      navWpDistM()      { return wpDistM; }
 float      navWpBearing()    { return wpBearing; }
 float      navSteerBearing() { return approachLocked ? lockedBearing : wpBearing; }
