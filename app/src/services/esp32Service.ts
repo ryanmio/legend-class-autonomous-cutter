@@ -33,13 +33,27 @@ function url(ip: string, path: string) {
 }
 
 async function post(ip: string, path: string, body?: object) {
-  const res = await fetchWithTimeout(url(ip, path), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url(ip, path), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw ambiguousError(path);
+  }
   if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
   return res.json();
+}
+
+// Thrown when a request timed out or dropped before any response arrived —
+// the boat may or may not have received it, unlike a definite HTTP rejection.
+// Callers can check `e.ambiguous` to tell the two apart.
+function ambiguousError(path: string) {
+  const e: any = new Error(`${path}: no response — check connection`);
+  e.ambiguous = true;
+  return e;
 }
 
 export async function checkStatus(ip: string) {
@@ -67,16 +81,21 @@ export interface LatLon { lat: number; lon: number; }
 // rejects with { err, bad_leg } on a too-long leg — surfaced on the thrown error
 // so the UI can highlight the offending point.
 export async function setMission(ip: string, points: LatLon[]) {
-  const res = await fetchWithTimeout(url(ip, '/mission'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(points),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url(ip, '/mission'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(points),
+    });
+  } catch {
+    throw ambiguousError('/mission');
+  }
   const json = await res.json().catch(() => ({} as any));
   if (!res.ok) {
     const e: any = new Error(json.err || `mission failed: ${res.status}`);
     e.bad_leg = json.bad_leg;
-    throw e;
+    throw e;   // a definite rejection — the boat responded and said no
   }
   return json;
 }

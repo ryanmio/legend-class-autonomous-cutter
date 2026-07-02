@@ -14,6 +14,7 @@ import {
   getMission as fetchMission,
   clearMission as sendClearMission,
   LatLon,
+  MissionState,
 } from '../services/esp32Service';
 import { CruiseModal } from '../components/CruiseModal';
 
@@ -43,6 +44,13 @@ function distanceTo(fromLat: number, fromLon: number, toLat: number, toLon: numb
 
 function fmtDist(m: number): string {
   return m >= 1000 ? (m / 1000).toFixed(2) + ' km' : Math.round(m) + ' m';
+}
+
+// Boat's echoed route (string lat/lon from GET /mission) → typed points.
+function parseMissionPoints(m: MissionState): LatLon[] {
+  return (m.waypoints ?? [])
+    .map((w) => ({ lat: parseFloat(w.lat), lon: parseFloat(w.lon) }))
+    .filter((p) => !isNaN(p.lat) && !isNaN(p.lon));
 }
 
 // ── Leaflet map HTML ──────────────────────────────────────────────────────────
@@ -276,95 +284,75 @@ function modeColor(mode: string | undefined): string {
 // ── Screen ────────────────────────────────────────────────────────────────────
 export default function MapScreen({ route, navigation }: Props) {
   const { ip } = route.params;
-  const { data } = useTelemetry();
+  const { data, connected } = useTelemetry();
   const webViewRef = useRef<WebView>(null);
   const insets     = useSafeAreaInsets();
 
-  // The mission the app believes is on the boat (authoritative after any local
-  // action; rehydrated from GET /mission once per mount).
+  // The mission the app believes is on the boat. Optimistic right after a
+  // local action for instant feedback; corrected by GET /mission (the boat's
+  // own answer) whenever we're not sure it's still right.
   const [missionRoute, setMissionRoute] = useState<LatLon[]>([]);
   const [screenMode, setScreenMode]     = useState<'live' | 'plan'>('live');
   const [draft, setDraft]               = useState<LatLon[]>([]);
   const [selectedIdx, setSelectedIdx]   = useState<number | null>(null);
   const [cruiseModalOpen, setCruiseModalOpen] = useState(false);
   const [webViewReady, setWebViewReady] = useState(false);
-  // After a local mission change the boat resets to leg 0; until telemetry shows
-  // that, don't trust its wp_idx/captured (count-equality can't catch a same-count
-  // re-plan). State (not a ref) so GET resolution re-runs the fallback-hydrate.
-  const [expectReset, setExpectReset]   = useState(false);
-  const [missionFetch, setMissionFetch] = useState<'pending' | 'done' | 'fail'>('pending');
+  // True once missionRoute is known to match the boat (a successful GET
+  // /mission, or a POST/clear we know landed). Gates the telemetry fallback
+  // below so it can never overwrite a route we already know is right.
+  const [haveAuthoritative, setHaveAuthoritative] = useState(false);
 
   const inPlan = screenMode === 'plan';
 
   // Active leg index from telemetry, clamped to the local route length (guards
-  // the window right after CONFIRM where telemetry still reflects the old route).
-  const activeIdx = Math.min(
+  // the window right after CONFIRM where telemetry still reflects the old
+  // route — cosmetic only, self-corrects within one /telemetry poll).
+  const activeIdxSafe = Math.min(
     Math.max(0, data?.wp_idx ?? 0),
     Math.max(0, missionRoute.length - 1),
   );
+  const missionDone = data?.captured === true && missionRoute.length > 0;
 
-  // Telemetry lags the local route by ~1 poll after a local mission change (it
-  // still reports the previous mission's wp_count/wp_idx/captured). Count-equality
-  // alone can't detect a same-count re-plan, so ALSO require that the boat has
-  // reset to leg 0 since our last change (expectReset). Until synced, treat the
-  // active leg as 0 and the mission as not-done — otherwise a fresh mission
-  // briefly shows "MISSION COMPLETE"/wrong LEG, and (worse) re-entering PLAN in
-  // that window would slice the route at a stale index and ship a truncated one.
-  // hasMissionTelemetry keeps this graceful against pre-0.7.0 firmware (no
-  // wp_count/wp_idx) — there we simply trust telemetry as the old single-WP app did.
-  const hasMissionTelemetry = data?.wp_count != null;
-  const telemInSync   = !hasMissionTelemetry || (data!.wp_count === missionRoute.length && !expectReset);
-  const activeIdxSafe = telemInSync ? activeIdx : 0;
-  const missionDone   = telemInSync && data?.captured === true && missionRoute.length > 0;
-
-  // Rehydrate the route ONCE per mount. GET /mission is authoritative; if it
-  // fails (older firmware / offline) fall back to the single active waypoint
-  // from telemetry. Any local action also flips the ref so a hydrate can't
-  // stomp a fresh user edit.
-  const hydratedRef = useRef(false);
-  const markHydrated = () => { hydratedRef.current = true; };
-
-  // GET /mission is authoritative for the full route. The telemetry fallback
-  // (single active waypoint) runs ONLY if GET failed — otherwise the cached last
-  // frame, delivered synchronously on mount, wins the race and collapses a
-  // multi-waypoint route to one point before GET resolves. missionFetch is state
-  // so its 'fail' transition re-renders and re-runs the fallback effect (a ref
-  // wouldn't, and a stationary boat's wp_lat/wp_lon never change to retrigger it).
-  useEffect(() => {
-    if (hydratedRef.current) return;
-    fetchMission(ip)
-      .then((m) => {
-        if (!hydratedRef.current) {
-          const pts = (m.waypoints ?? [])
-            .map((w) => ({ lat: parseFloat(w.lat), lon: parseFloat(w.lon) }))
-            .filter((p) => !isNaN(p.lat) && !isNaN(p.lon));
-          if (pts.length) {
-            markHydrated();
-            setMissionRoute(pts);
-          }
-        }
-        setMissionFetch('done');
-      })
-      .catch(() => setMissionFetch('fail'));
+  // Ask the boat what it's actually running and adopt that as truth. Used on
+  // mount, whenever a local action fails or is ambiguous, and before opening
+  // PLAN on an in-progress mission.
+  const resyncMission = useCallback(async (): Promise<MissionState | null> => {
+    try {
+      const m = await fetchMission(ip);
+      setMissionRoute(parseMissionPoints(m));
+      setHaveAuthoritative(true);
+      return m;
+    } catch {
+      return null;
+    }
   }, [ip]);
 
+  // Rehydrate on mount. If the boat can't be reached right now (mid-dropout),
+  // show a best-effort single point from telemetry below and keep retrying in
+  // the background — a dropout on mount must not permanently freeze the map
+  // at a stale single point once the link comes back.
   useEffect(() => {
-    if (hydratedRef.current) return;
-    if (missionFetch !== 'fail') return;   // wait for GET; only fall back if it failed
+    let cancelled = false;
+    let retry: ReturnType<typeof setInterval> | null = null;
+    resyncMission().then((m) => {
+      if (m || cancelled) return;
+      retry = setInterval(() => {
+        resyncMission().then((m2) => { if (m2 && retry) clearInterval(retry); });
+      }, 5000);
+    });
+    return () => { cancelled = true; if (retry) clearInterval(retry); };
+  }, [ip, resyncMission]);
+
+  // Best-effort single point from telemetry, only until GET /mission has told
+  // us the real (possibly multi-point) route — never allowed to clobber it.
+  useEffect(() => {
+    if (haveAuthoritative) return;
     if (!data?.wp_set || data.wp_lat == null || data.wp_lon == null) return;
     const lat = parseFloat(data.wp_lat);
     const lon = parseFloat(data.wp_lon);
     if (isNaN(lat) || isNaN(lon)) return;
-    markHydrated();
-    setMissionRoute([{ lat, lon }]);
-  }, [missionFetch, data?.wp_set, data?.wp_lat, data?.wp_lon]);
-
-  // A fresh mission commits at leg 0 on the boat; once telemetry shows that, our
-  // local route and the boat's are back in sync. (On pre-0.7.0 firmware wp_idx is
-  // absent and expectReset is ignored by telemInSync, so it never blocks.)
-  useEffect(() => {
-    if (expectReset && data?.wp_idx === 0) setExpectReset(false);
-  }, [expectReset, data?.wp_idx]);
+    setMissionRoute((cur) => (cur.length ? cur : [{ lat, lon }]));
+  }, [haveAuthoritative, data?.wp_set, data?.wp_lat, data?.wp_lon]);
 
   // Reflect the live mission into the WebView (hidden while planning).
   useEffect(() => {
@@ -407,7 +395,7 @@ export default function MapScreen({ route, navigation }: Props) {
     const lat    = parseFloat(data.lat ?? '');
     const lon    = parseFloat(data.lon ?? '');
     const hasFix = data.gps_fix === true && !isNaN(lat) && !isNaN(lon);
-    // n from the LOCAL route (authoritative); complete/index guarded by telemInSync.
+    // n from the LOCAL route (authoritative).
     const n = missionRoute.length;
 
     let bearing: number | null = null;
@@ -430,11 +418,15 @@ export default function MapScreen({ route, navigation }: Props) {
   // ── Map tap messages ─────────────────────────────────────────────
   const applySingleWaypoint = useCallback((pt: LatLon) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    markHydrated();
     setMissionRoute([pt]);
-    setExpectReset(true);
-    sendWaypoint(ip, pt.lat, pt.lon).catch(() => {});
-  }, [ip]);
+    setHaveAuthoritative(false);
+    sendWaypoint(ip, pt.lat, pt.lon)
+      .then(() => setHaveAuthoritative(true))
+      .catch(() => {
+        Alert.alert('Not sent', 'The boat may not have received this waypoint — check your connection.');
+        resyncMission();
+      });
+  }, [ip, resyncMission]);
 
   const handleMapMessage = useCallback((raw: string) => {
     let msg: any;
@@ -487,15 +479,30 @@ export default function MapScreen({ route, navigation }: Props) {
   }, [ip, inPlan, missionRoute, selectedIdx, applySingleWaypoint]);
 
   // ── PLAN mode actions ────────────────────────────────────────────
-  const enterPlan = useCallback(() => {
+  const enterPlan = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    // Pre-load for editing: the remaining (uncaptured) legs mid-mission, or the
-    // WHOLE route once complete (so "re-run" resends everything, not just the
-    // final point the active index is pinned to).
-    setDraft(missionRoute.slice(missionDone ? 0 : activeIdxSafe));
+    // Always ask the boat what it's actually running right now — editing an
+    // in-progress mission must never start from a stale guess about which
+    // legs are already captured.
+    const m = await resyncMission();
+    let base = missionRoute;
+    let startAt = 0;
+    if (m) {
+      base = parseMissionPoints(m);
+      // Pre-load the remaining (uncaptured) legs mid-mission, or the WHOLE
+      // route once complete (so "re-run" resends everything).
+      startAt = (m.mission_active && m.wp_idx < base.length) ? m.wp_idx : 0;
+    } else {
+      Alert.alert(
+        'No connection',
+        "Could not reach the boat to confirm its current route — showing the last known state. You'll need a connection to send changes.",
+      );
+      startAt = Math.min(Math.max(0, data?.wp_idx ?? 0), Math.max(0, missionRoute.length - 1));
+    }
+    setDraft(base.slice(startAt));
     setSelectedIdx(null);
     setScreenMode('plan');
-  }, [missionRoute, activeIdxSafe, missionDone]);
+  }, [missionRoute, resyncMission, data?.wp_idx]);
 
   const cancelPlan = useCallback(() => {
     setScreenMode('live');
@@ -509,18 +516,29 @@ export default function MapScreen({ route, navigation }: Props) {
     const route = draft;
     sendMission(ip, route)
       .then(() => {
-        markHydrated();
         setMissionRoute(route);
-        setExpectReset(true);   // boat restarts at leg 0; don't trust stale telemetry until it shows that
+        setHaveAuthoritative(true);
         setScreenMode('live');
         setDraft([]);
         setSelectedIdx(null);
       })
       .catch((e: any) => {
-        Alert.alert('Route rejected', e?.message ?? 'The boat rejected the mission.');
-        if (typeof e?.bad_leg === 'number') setSelectedIdx(Math.min(e.bad_leg, route.length - 1));
+        if (e?.ambiguous) {
+          // Timed out / dropped before a response — the boat may or may not
+          // have gotten it. Resending the identical route is always safe
+          // (it just restarts the mission at leg 0), so let the operator
+          // retry rather than guessing at a rejection reason.
+          Alert.alert(
+            'No response',
+            "Couldn't confirm the boat received this route. If you're back in range, press CONFIRM again.",
+          );
+          resyncMission();
+        } else {
+          Alert.alert('Route rejected', e?.message ?? 'The boat rejected the mission.');
+          if (typeof e?.bad_leg === 'number') setSelectedIdx(Math.min(e.bad_leg, route.length - 1));
+        }
       });
-  }, [ip, draft]);
+  }, [ip, draft, resyncMission]);
 
   const deleteSelected = useCallback(() => {
     if (selectedIdx == null) return;
@@ -534,10 +552,15 @@ export default function MapScreen({ route, navigation }: Props) {
 
   const handleClearMission = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    markHydrated();
     setMissionRoute([]);
-    sendClearMission(ip).catch(() => {});
-  }, [ip]);
+    setHaveAuthoritative(false);
+    sendClearMission(ip)
+      .then(() => setHaveAuthoritative(true))
+      .catch(() => {
+        Alert.alert('Not sent', 'The boat may not have cleared its mission — check your connection.');
+        resyncMission();
+      });
+  }, [ip, resyncMission]);
 
   const handlePickCruise = useCallback((us: number) => {
     sendCruise(ip, { us }).catch(() => {});
@@ -580,6 +603,12 @@ export default function MapScreen({ route, navigation }: Props) {
       {/* ── Top bar: MODE + PLAN badge ─────────────────────────────── */}
       <View style={[styles.topBarRow, { top: topOffset + 8 }]} pointerEvents="box-none">
         <View style={styles.topBarSpacer} />
+        {!connected && (
+          <View style={[styles.chip, styles.modeChip, { borderColor: Colors.danger }]}>
+            <Text style={[styles.chipDot, { color: Colors.danger }]}>●</Text>
+            <Text style={[styles.modeChipText, { color: Colors.danger }]}>NO LINK</Text>
+          </View>
+        )}
         {inPlan && (
           <View style={[styles.chip, styles.modeChip, { borderColor: AMBER }]}>
             <Text style={[styles.modeChipText, { color: AMBER }]}>PLAN</Text>
