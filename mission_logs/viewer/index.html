@@ -834,22 +834,32 @@ async function toggleRecord(){
     return;
   }
   mediaChunks=[];
-  // Prefer mp4 (Safari records it natively — plays in QuickTime/iMessage/editors
-  // with no conversion). Chrome/Firefox fall back to webm (use ffmpeg to convert).
+  // Prefer WebM (VP9/VP8): its MediaRecorder path is far more robust than Safari's
+  // fragmented mp4 muxer, which corrupts under load (lost slices → smeared frames).
+  // mp4/h264 is the last-resort fallback for Safari, which can't encode WebM.
+  // Either way run it through fix-recording.sh for a clean, Apple-openable file.
   const mimeCandidates=[
-    'video/mp4;codecs=h264',
-    'video/mp4',
     'video/webm;codecs=vp9',
     'video/webm;codecs=vp8',
     'video/webm',
+    'video/mp4;codecs=h264',
+    'video/mp4',
   ];
   let mime='';
   for (const m of mimeCandidates){
     if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)){ mime=m; break; }
   }
   const ext = (mime || 'video/webm').indexOf('mp4')>=0 ? 'mp4' : 'webm';
+  // Give the encoder real headroom. The default (~2 Mbps) starves on full-tab,
+  // high-detail satellite imagery and produces block/smear corruption. Scale the
+  // target to the capture resolution, clamped to a sane 8–24 Mbps band.
+  const vt = stream.getVideoTracks()[0];
+  const st = vt && vt.getSettings ? vt.getSettings() : {};
+  const px = (st.width||1920) * (st.height||1080);
+  const bps = Math.max(8e6, Math.min(24e6, Math.round(px * 30 * 0.12)));
   try {
-    mediaRec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    const opts = mime ? { mimeType: mime, videoBitsPerSecond: bps } : { videoBitsPerSecond: bps };
+    mediaRec = new MediaRecorder(stream, opts);
   } catch(e){
     toast('MediaRecorder init failed: '+e.message);
     stream.getTracks().forEach(t=>t.stop());
