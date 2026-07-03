@@ -89,6 +89,7 @@ export interface TelemetryData {
   // ── PID (live values) ─────────────────────────────────────────
   pid_kp?: string;
   pid_kd?: string;
+  diff_gain?: string;      // AUTO diff-thrust gain (v0.8.0+)
 
   // Bilge / damage-control. Three zones (fwd, mid, rear). Pump moved to
   // the REAR compartment 2026-05-27 — only `bilge_rear` drives auto-pump;
@@ -129,6 +130,7 @@ export interface PIDParams {
   kp: number;
   kd: number;
   ki?: number;            // not used in pool — pool tuning is P+D
+  diff_gain?: number;     // AUTO diff-thrust gain [0..2] (v0.8.0+)
 }
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed';

@@ -119,7 +119,8 @@ export async function clearMission(ip: string) {
   return post(ip, '/mission/clear');
 }
 
-// Live PID tuning. Either or both fields accepted; firmware ignores ki.
+// Live PID + diff-gain tuning. Any subset of fields accepted; firmware
+// ignores ki. RAM-only on the boat — reboot restores flashed defaults.
 export async function setPID(ip: string, params: PIDParams) {
   return post(ip, '/pid', params);
 }

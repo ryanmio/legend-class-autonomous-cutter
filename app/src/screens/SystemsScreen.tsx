@@ -1,12 +1,12 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import React, { useCallback } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { NativeStackScreenProps, NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
-import { postBilge, setRadar, setDepth } from '../services/esp32Service';
+import { postBilge, setRadar, setDepth, setPID } from '../services/esp32Service';
 import Screen from '../components/Screen';
 import BoatDamagePanel from '../components/BoatDamagePanel';
 
@@ -260,40 +260,59 @@ function SurveySection() {
 }
 
 // ── SETTINGS ───────────────────────────────────────────────────────────────────
-// PLACEHOLDER — controls disabled.
-// PID save and IMU calibration will be wired when production firmware
-// exposes durable versions of /pid (NVS-persisted) and /calibrate-imu.
-// Today /pid is live-tunable on test_29 but values don't survive reboot,
-// and /calibrate-imu doesn't exist.
+// Heading-hold kd presets for the on-water AUTO tuning sweep (v0.8.0+).
+// Values are RAM-only on the boat: a reboot restores the flashed config.h
+// defaults, so the boat never depends on the app — the winning preset gets
+// hardcoded as the permanent default. kp is fixed at 1.5; each preset pairs
+// kd with a diff_gain holding kd×diff_gain ≈ 2.0, keeping the diff-thrust
+// crossing damping constant so a sweep varies only the rudder D term.
+// Active preset is derived from live telemetry (the boat is source of truth).
+type PidPreset = { kd: number; diffGain: number; hint: string };
+const PID_KP = 1.5;
+const PID_PRESETS: PidPreset[] = [
+  { kd: 2.0, diffGain: 1.0,  hint: 'TRY 1ST'  },
+  { kd: 3.0, diffGain: 0.65, hint: 'FIRMER'   },
+  { kd: 1.2, diffGain: 1.65, hint: 'SNAPPIER' },
+  { kd: 8.0, diffGain: 0.25, hint: 'STOCK'    },
+];
+
 function SettingsSection({ ip }: { ip: string }) {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const [kp, setKp] = useState('3.0');
-  const [ki, setKi] = useState('0.0');
-  const [kd, setKd] = useState('8.0');
+  const { data } = useTelemetry();
+  const liveKd   = data?.pid_kd    != null ? parseFloat(data.pid_kd)    : null;
+  const liveDiff = data?.diff_gain != null ? parseFloat(data.diff_gain) : null;
+
+  const pickPreset = useCallback((p: PidPreset) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setPID(ip, { kp: PID_KP, kd: p.kd, diff_gain: p.diffGain }).catch(() => {});
+  }, [ip]);
 
   return (
     <View style={styles.section}>
       <SectionHeader label="SETTINGS" />
-      <View style={styles.banner}>
-        <Text style={styles.bannerText}>PLACEHOLDER — CONTROLS DISABLED</Text>
-      </View>
 
-      <Text style={styles.subSection}>HEADING-HOLD PID</Text>
-      {([['Kp', kp, setKp], ['Ki', ki, setKi], ['Kd', kd, setKd]] as const).map(([label, val, setter]) => (
-        <View key={label} style={styles.inputRow}>
-          <Text style={styles.inputLabel}>{label}</Text>
-          <TextInput
-            style={styles.input}
-            value={val}
-            onChangeText={setter as (v: string) => void}
-            keyboardType="decimal-pad"
-            editable={false}
-          />
-        </View>
-      ))}
-      <TouchableOpacity style={[styles.btn, styles.btnDisabled]} disabled>
-        <Text style={styles.btnText}>SAVE PID TO ESP32</Text>
-      </TouchableOpacity>
+      <Text style={styles.subSection}>HEADING-HOLD KD PRESETS</Text>
+      <View style={styles.pidRow}>
+        {PID_PRESETS.map((p) => {
+          const active =
+            liveKd != null && Math.abs(liveKd - p.kd) < 0.005 &&
+            liveDiff != null && Math.abs(liveDiff - p.diffGain) < 0.005;
+          return (
+            <TouchableOpacity
+              key={p.kd}
+              style={[styles.pidBtn, active && styles.pidBtnActive]}
+              onPress={() => pickPreset(p)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.pidBtnKd, active && styles.pidBtnTextActive]}>{p.kd.toFixed(1)}</Text>
+              <Text style={[styles.pidBtnHint, active && styles.pidBtnTextActive]}>{p.hint}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={styles.pumpSub}>
+        {`kp ${data?.pid_kp ?? '--'} · kd ${data?.pid_kd ?? '--'} · diff ${data?.diff_gain ?? '--'} — RAM only; reboot restores flashed defaults.`}
+      </Text>
 
       <Text style={styles.subSection}>SENSORS</Text>
       <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Calibration', { ip })}>
@@ -328,16 +347,16 @@ const styles = StyleSheet.create({
   subSection:  { color: Colors.textSecondary, fontSize: 10, letterSpacing: 2, marginTop: 16, marginBottom: 8, fontFamily: 'monospace' },
   placeholder: { color: Colors.textSecondary, fontSize: 12, fontStyle: 'italic', textAlign: 'center', paddingVertical: 8 },
 
-  banner:      { backgroundColor: Colors.surface, borderLeftWidth: 3, borderLeftColor: Colors.warning, padding: 10, borderRadius: 2, marginBottom: 12 },
-  bannerText:  { color: Colors.warning, fontSize: 10, letterSpacing: 2, fontFamily: 'monospace', fontWeight: '700' },
-
-  inputRow:    { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  inputLabel:  { color: Colors.textSecondary, width: 32, fontSize: 14, fontFamily: 'monospace' },
-  input:       { flex: 1, backgroundColor: Colors.surface, color: Colors.textSecondary, padding: 10, borderRadius: 4, fontSize: 15, fontFamily: 'monospace' },
-
   btn:         { backgroundColor: Colors.surfaceLight, padding: 14, borderRadius: 4, alignItems: 'center', marginTop: 8 },
-  btnDisabled: { opacity: 0.4 },
   btnText:     { color: Colors.accent, fontWeight: '800', fontSize: 12, letterSpacing: 2, fontFamily: 'monospace' },
+
+  // PID kd preset buttons — 4 across, the active one inverts to accent (see RADAR).
+  pidRow:           { flexDirection: 'row', gap: 6 },
+  pidBtn:           { flex: 1, backgroundColor: Colors.surface, borderRadius: 4, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: Colors.surfaceLight },
+  pidBtnActive:     { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  pidBtnKd:         { color: Colors.textSecondary, fontWeight: '800', fontSize: 16, fontFamily: 'monospace' },
+  pidBtnHint:       { color: Colors.textSecondary, fontWeight: '700', fontSize: 8, letterSpacing: 1, fontFamily: 'monospace', marginTop: 2 },
+  pidBtnTextActive: { color: '#000' },
 
   pumpBtn:        { backgroundColor: Colors.surfaceLight, padding: 14, borderRadius: 4, alignItems: 'center' },
   pumpBtnOn:      { backgroundColor: Colors.success, borderColor: Colors.success },
