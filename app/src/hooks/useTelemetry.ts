@@ -1,6 +1,7 @@
 // useTelemetry.ts
-// React hook that subscribes to the WebSocket telemetry stream.
-// Re-renders the component when new data arrives (≥10 Hz from ESP32).
+// React hook that subscribes to websocketService's telemetry updates (an
+// HTTP poll roughly every 1 s, despite the module name — see its header).
+// Re-renders the component whenever a new frame arrives.
 
 import { useState, useEffect } from 'react';
 import { TelemetryData } from '../types';
