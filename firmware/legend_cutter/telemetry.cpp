@@ -316,12 +316,19 @@ static void handleTelemetry() {
     snprintf(buf, sizeof(buf), "%.2f", imuMagBaselineUT()); doc["mag_baseline_uT"] = buf;
     snprintf(buf, sizeof(buf), "%.2f", imuLiveMagUT());     doc["mag_uT"]          = buf;
 
-    // A truncated payload is invalid JSON the app can't parse — warn (only
-    // near the edge) so the operator isn't silently blinded.
-    size_t jsonLen = measureJson(doc);
-    if (jsonLen > 1800) Serial.printf("[telemetry] WARN json=%u bytes near 2048 buffer\n", (unsigned)jsonLen);
-
+    // A payload that fills (or overflows) out[] leaves ArduinoJson no room to
+    // null-terminate it; server.send() would then read out[] as a C-string
+    // past its end. Hard-guard rather than ever send that — never observed
+    // in practice (WARN fires well below this), but cheap to make impossible.
     char out[2048];
+    size_t jsonLen = measureJson(doc);
+    if (jsonLen >= sizeof(out) - 1) {
+        Serial.printf("[telemetry] ERROR json=%u exceeds %u buffer, dropping frame\n",
+                      (unsigned)jsonLen, (unsigned)sizeof(out));
+        server.send(500, "application/json", "{\"ok\":false,\"err\":\"telemetry too large\"}");
+        return;
+    }
+    if (jsonLen > 1800) Serial.printf("[telemetry] WARN json=%u bytes near 2048 buffer\n", (unsigned)jsonLen);
     serializeJson(doc, out);
     server.send(200, "application/json", out);
 }
