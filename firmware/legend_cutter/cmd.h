@@ -36,6 +36,7 @@ struct Command {
     float    lat, lon;        // CMD_WAYPOINT_SET
     uint16_t cruiseUs;        // CMD_CRUISE
     float    kp, kd;          // CMD_PID (resolved)
+    float    diffGain;        // CMD_PID (resolved)
     uint8_t  ledId;           // CMD_LED  (LedId)
     bool     ledOn;           // CMD_LED
     bool     bilgeOn;         // CMD_BILGE

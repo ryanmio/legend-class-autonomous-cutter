@@ -165,6 +165,7 @@ static void applyOutputs() {
             // No waypoint, no GPS, or already captured → safe-hold.
             setRudder(NEUTRAL_US);
             setEscs(NEUTRAL_US);
+            imuResetAutoSteer();   // slew accumulator tracks the parked rudder — no snap on resume
         }
         break;
       }
@@ -185,7 +186,7 @@ static void cmdApply(const Command& c) {
       case CMD_WAYPOINT_CLEAR: navClearWaypoint();                             break;
       case CMD_MISSION_COMMIT: navCommitStagedMission();                       break;
       case CMD_CRUISE:         telemetrySetCruiseUs(c.cruiseUs);               break;
-      case CMD_PID:            setPidGains(c.kp, c.kd);                        break;
+      case CMD_PID:            setPidGains(c.kp, c.kd); motorsSetAutoDiffGain(c.diffGain); break;
       case CMD_LED:            lightsSet((LedId)c.ledId, c.ledOn);            break;
       case CMD_BILGE:          bilgeSetManual(c.bilgeOn);                      break;
       case CMD_RADAR:          radarSet(c.radarOn, c.radarSpeed, c.radarBurstMs, c.radarPauseMs); break;

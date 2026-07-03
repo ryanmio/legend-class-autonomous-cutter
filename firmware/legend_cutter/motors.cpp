@@ -12,6 +12,9 @@ static Adafruit_PWMServoDriver pca(PCA9685_ADDR);
 static uint16_t outRudder = NEUTRAL_US;
 static uint16_t outPort   = NEUTRAL_US;
 static uint16_t outStbd   = NEUTRAL_US;
+// RAM only: boots at AUTO_DIFF_GAIN, live-tunable via POST /pid; a reboot
+// restores the flashed default so the boat never depends on the app.
+static float    liveDiffGain = AUTO_DIFF_GAIN;
 
 static uint16_t usToTicks(uint16_t us) {
     return (uint16_t)((us / 20000.0f) * 4096);
@@ -87,7 +90,7 @@ void computePortStbd(uint16_t throttleUs, uint16_t rudderUs,
 // the same steering sense as the rudder.
 void computeDiffThrust(uint16_t throttleUs, float yawCmd,
                        uint16_t& portUs, uint16_t& stbdUs) {
-    int diff = (int)(AUTO_DIFF_GAIN * yawCmd);
+    int diff = (int)(liveDiffGain * yawCmd);
     int headUp  = (int)MAX_FWD_US - (int)throttleUs;          // port room up
     int headDn  = (int)throttleUs - (int)AUTO_DIFF_LOW_FLOOR_US;  // stbd room down
     int maxSplit = headUp < headDn ? headUp : headDn;
@@ -133,3 +136,6 @@ uint16_t mapRudderStickToServo(uint16_t stickUs) {
 uint16_t motorsRudderUs() { return outRudder; }
 uint16_t motorsPortUs()   { return outPort;   }
 uint16_t motorsStbdUs()   { return outStbd;   }
+
+void  motorsSetAutoDiffGain(float gain) { liveDiffGain = gain; }
+float motorsAutoDiffGain()              { return liveDiffGain; }

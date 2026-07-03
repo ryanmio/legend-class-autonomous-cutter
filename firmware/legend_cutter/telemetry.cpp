@@ -296,6 +296,7 @@ static void handleTelemetry() {
     // PID (current live values)
     snprintf(buf, sizeof(buf), "%.2f", pidKp()); doc["pid_kp"] = buf;
     snprintf(buf, sizeof(buf), "%.2f", pidKd()); doc["pid_kd"] = buf;
+    snprintf(buf, sizeof(buf), "%.2f", motorsAutoDiffGain()); doc["diff_gain"] = buf;
 
     // ── Mag calibration / health ─────────────────────────────────────────
     doc["mag_cal_state"]    = imuMagCalStateName();
@@ -560,16 +561,26 @@ static void handlePid() {
             return;
         }
     }
+    float diffGain = motorsAutoDiffGain();
+    if (req.containsKey("diff_gain")) {
+        diffGain = req["diff_gain"].as<float>();
+        if (diffGain < 0.0f || diffGain > 2.0f) {
+            server.send(400, "application/json", "{\"ok\":false,\"err\":\"diff_gain out of [0..2]\"}");
+            return;
+        }
+    }
     Command c = {};
-    c.type = CMD_PID;
-    c.kp   = kp;     // resolved against current above; loop applies both
-    c.kd   = kd;
+    c.type     = CMD_PID;
+    c.kp       = kp;     // resolved against current above; loop applies all three
+    c.kd       = kd;
+    c.diffGain = diffGain;
     if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
 
     StaticJsonDocument<128> resp;
     resp["ok"] = true;
     resp["kp"] = kp;                           // requested values; applied within one control cycle
     resp["kd"] = kd;
+    resp["diff_gain"] = diffGain;
     char out[128];
     serializeJson(resp, out);
     server.send(200, "application/json", out);

@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.7.5"
+#define FIRMWARE_VERSION "0.8.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────

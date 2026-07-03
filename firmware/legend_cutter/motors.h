@@ -26,6 +26,10 @@ uint16_t motorsRudderUs();
 uint16_t motorsPortUs();
 uint16_t motorsStbdUs();
 
+// AUTO diff-thrust gain — RAM only (boots at AUTO_DIFF_GAIN, set via /pid).
+void  motorsSetAutoDiffGain(float gain);
+float motorsAutoDiffGain();
+
 // Raw PCA write helper exposed for other modules (weapons, etc.) that
 // share the same PCA9685 bus.
 void pcaWriteUs(uint8_t pcaChannel, uint16_t us);
