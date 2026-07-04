@@ -260,20 +260,20 @@ function SurveySection() {
 }
 
 // ── SETTINGS ───────────────────────────────────────────────────────────────────
-// Heading-hold kd presets for the on-water AUTO tuning sweep (v0.8.0+).
-// Values are RAM-only on the boat: a reboot restores the flashed config.h
-// defaults, so the boat never depends on the app — the winning preset gets
-// hardcoded as the permanent default. kp is fixed at 1.5; each preset pairs
-// kd with a diff_gain holding kd×diff_gain ≈ 2.0, keeping the diff-thrust
-// crossing damping constant so a sweep varies only the rudder D term.
+// Heading-hold kd presets (v0.8.0+ firmware). Values are RAM-only on the
+// boat: a reboot restores the flashed config.h defaults (kd 2.0 / diff 1.0
+// since v0.8.1), so the boat never depends on the app. kp is fixed at 1.5;
+// each preset pairs kd with a diff_gain holding kd×diff_gain ≈ 2.0, keeping
+// the diff-thrust crossing damping constant so a sweep varies only the
+// rudder D term. LEGACY is the pre-v0.8.1 tune, kept as an escape hatch.
 // Active preset is derived from live telemetry (the boat is source of truth).
 type PidPreset = { kd: number; diffGain: number; hint: string };
 const PID_KP = 1.5;
 const PID_PRESETS: PidPreset[] = [
-  { kd: 2.0, diffGain: 1.0,  hint: 'TRY 1ST'  },
+  { kd: 2.0, diffGain: 1.0,  hint: 'DEFAULT'  },
   { kd: 3.0, diffGain: 0.65, hint: 'FIRMER'   },
   { kd: 1.2, diffGain: 1.65, hint: 'SNAPPIER' },
-  { kd: 8.0, diffGain: 0.25, hint: 'STOCK'    },
+  { kd: 8.0, diffGain: 0.25, hint: 'LEGACY'   },
 ];
 
 function SettingsSection({ ip }: { ip: string }) {
