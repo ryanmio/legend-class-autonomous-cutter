@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.8.0"
+#define FIRMWARE_VERSION "0.8.1"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ static const uint32_t GPS_BAUD   = 9600;
 static const uint32_t IMU_UPDATE_INTERVAL_MS = 20;
 // Default heading-hold gains; live-tunable via POST /pid.
 static const float    DEFAULT_KP   = 1.5f;
-static const float    DEFAULT_KD   = 8.0f;
+static const float    DEFAULT_KD   = 2.0f;
 // AUTO steering smoothing: deadband suppresses hunting near setpoint;
 // slew caps how fast the rudder servo can move (µs/s, 0→full in ~2 s).
 static const float    AUTO_HEADING_DEADBAND_DEG  = 5.0f;
@@ -114,10 +114,10 @@ static const float    AUTO_SLEW_DT_CAP_S         = 0.5f;
 // deadband zeroes its PD output near center, so the motors carry the through-
 // crossing damping that kills the weave — keeping the fragile rudder parked.
 // Driven by the raw (non-deadbanded) PD command; µs split = gain × PD command.
-// Start the gain conservative: too-weak shows as residual weave with the split
-// NOT at clamp (raise gain); the split clamps below the low-side prop-bite floor
-// and within forward headroom, symmetric so average thrust (cruise) is held.
-static const float    AUTO_DIFF_GAIN          = 0.25f;
+// gain × DEFAULT_KD sets the crossing damping; live-tunable alongside kd via
+// POST /pid. The split clamps below the low-side prop-bite floor and within
+// forward headroom, symmetric so average thrust (cruise) is held.
+static const float    AUTO_DIFF_GAIN          = 1.0f;
 static const uint16_t AUTO_DIFF_MAX_SPLIT_US  = 80;     // conservative authority cap
 static const uint16_t AUTO_DIFF_LOW_FLOOR_US  = 1560;   // low motor stays in clean forward thrust
 // Default mag offsets — used only as the fallback when NVS holds no cal, so
