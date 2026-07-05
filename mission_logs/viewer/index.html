@@ -86,6 +86,7 @@
   #hud .v{font-size:14px;font-weight:800;color:var(--txt);font-variant-numeric:tabular-nums}
   #hud .v.amber{color:var(--amber)} #hud .v.cyan{color:var(--cyan)}
   #hud .v.bad{color:var(--bad)}    #hud .v.dim{color:var(--dim)}
+  #hud .v.good{color:var(--good)}  #hud .v.sm{font-size:12px}
   #hud .v.mode-AUTO{color:var(--cyan)} #hud .v.mode-FAILSAFE{color:var(--bad)}
   #hud .clock{font-size:10px;color:var(--dim);margin-top:6px;border-top:1px solid var(--line);
               padding-top:6px;letter-spacing:.1em;text-align:center}
@@ -136,6 +137,26 @@
     78%{opacity:1}
     100%{opacity:0;transform:translateX(-50%) translateY(-4px)}
   }
+
+  /* Numbered waypoint badges — one per waypoint in the active mission.
+     State (pending / active-target / captured) is toggled per playback row. */
+  .wp-badge{
+    position:relative;width:22px;height:22px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:11px;font-family:ui-monospace,Menlo,Consolas,monospace;
+    border:2px solid var(--amber);color:var(--amber);
+    background:rgba(6,16,22,.82);box-shadow:0 1px 6px rgba(0,0,0,.55);
+    transition:background .18s,border-color .18s,color .18s;
+  }
+  .wp-badge.wp-pending{opacity:.72}
+  .wp-badge.wp-captured{border-color:var(--good);color:#04161c;background:var(--good);opacity:1}
+  .wp-badge.wp-active{border-color:var(--hi);color:var(--hi);opacity:1}
+  .wp-badge.wp-active::after{
+    content:'';position:absolute;inset:-5px;border-radius:50%;
+    border:2px solid var(--hi);opacity:.7;pointer-events:none;
+    animation:wpping 1.4s ease-out infinite;
+  }
+  @keyframes wpping{0%{transform:scale(.55);opacity:.75}100%{transform:scale(1.55);opacity:0}}
 
   /* ── Depth strip (between map and controls) ─────────────────────── */
   #strip{
@@ -237,6 +258,7 @@
       <div class="stat">DIST<b id="stat-dist">—</b></div>
       <div class="stat">MAX KT<b id="stat-maxkt">—</b></div>
       <div class="stat">MAX FT<b id="stat-maxft">—</b></div>
+      <div class="stat">WPTS<b id="stat-wpts">—</b></div>
     </div>
     <button id="btn-load">LOAD ANOTHER</button>
   </header>
@@ -249,6 +271,8 @@
       <div class="row"><span class="k">speed</span><span class="v amber" id="hud-speed">—</span></div>
       <div class="row"><span class="k">hdg</span>  <span class="v cyan" id="hud-hdg">—</span></div>
       <div class="row"><span class="k">mode</span> <span class="v" id="hud-mode">—</span></div>
+      <div class="row"><span class="k">wp</span>   <span class="v amber" id="hud-wp">—</span></div>
+      <div class="row"><span class="k">to wp</span><span class="v sm dim" id="hud-wpto">—</span></div>
       <div class="row"><span class="k">batt</span> <span class="v" id="hud-batt">—</span></div>
       <div class="row"><span class="k">sats</span> <span class="v dim" id="hud-sats">—</span></div>
       <div class="clock" id="hud-clock">T+0:00 / 0:00</div>
@@ -264,6 +288,11 @@
     <div id="legend">
       <div class="lg"><span id="lg-dmin">—</span><div class="bar depthbar"></div><span id="lg-dmax">—</span> ft</div>
       <div class="lg"><span>0</span>            <div class="bar speedbar"></div><span id="lg-smax">—</span> kt</div>
+      <div class="lg" style="gap:12px;margin-top:4px">
+        <span><span style="color:var(--good)">●</span> captured</span>
+        <span><span style="color:var(--hi)">◉</span> target</span>
+        <span><span style="color:var(--amber)">○</span> pending</span>
+      </div>
     </div>
   </section>
 
@@ -371,9 +400,12 @@ function prepRow(r){
     bv: num(r.batt_v),
     sa: num(r.sats),
     ca: asBool(r.captured),
+    cb: r.captured_by || null,
     wps:asBool(r.wp_set),
+    wi: num(r.wp_idx), wc: num(r.wp_count),
     wpl:num(r.wp_lat), wpn:num(r.wp_lon),
     wpsl:num(r.wp_start_lat), wpsn:num(r.wp_start_lon),
+    wd: num(r.wp_dist_m), wb: num(r.wp_bearing),
   };
 }
 
@@ -384,8 +416,12 @@ let ROWS=[], TSTART=0, TEND=0, SPAN=0, DMIN=0, DMAX=1, SMAX=1;
 let map, satLayer, osmLayer, currentBase;
 let ghost, live, soundLayer, soundMarkers=[], soundActiveCount=0;
 let trackPts=[], trackIdxAtRow=[], soundIdxAtRow=[], bounds=null;
-let boat, wpMarker=null, wpLegLine=null, capturePulse=null, wpOnMap=false, lastWpLatLng=null;
-let lastRowIdx=-1, lastCapturedFlag=false;
+let boat;
+// Multi-waypoint mission model (see buildMissions). One "mission" per contiguous
+// posted waypoint sequence; each carries its full waypoint list with capture times.
+let MISSIONS=[], CUR_MISSION=-1;
+let wpLayer=null, wpMarkers=[], planLine=null, progLine=null, legLine=null;
+let lastRowIdx=-1, LAST_T=-1;
 
 let playing=false, speed=5, simT=0, lastFrame=0, rafId=0;
 
@@ -418,6 +454,8 @@ function loadFromText(csvText, filename){
   compact.sort((a,b)=>a.t-b.t);
   ROWS=compact;
   TSTART=ROWS[0].t; TEND=ROWS[ROWS.length-1].t; SPAN=Math.max(1,TEND-TSTART);
+  buildMissions();
+  console.log('[viewer] missions:', MISSIONS.length);
   DMIN=Number.isFinite(dmn)?dmn:0;
   DMAX=Number.isFinite(dmx)?dmx:1; if (DMAX<=DMIN) DMAX=DMIN+1;
   SMAX=Math.max(0.5, smx);
@@ -460,6 +498,10 @@ function setFlightMeta(filename){
   document.getElementById('stat-dist').textContent = distM>=1000 ? (distM/1000).toFixed(2)+' km' : Math.round(distM)+' m';
   document.getElementById('stat-maxkt').textContent= maxKts.toFixed(1);
   document.getElementById('stat-maxft').textContent= maxFt.toFixed(1);
+  // Waypoints captured across every mission in the session.
+  let capTot=0, wpTot=0;
+  for (const m of MISSIONS){ for (const w of m.wps){ wpTot++; if (w.capT!=null) capTot++; } }
+  document.getElementById('stat-wpts').textContent = wpTot ? (capTot+'/'+wpTot) : '—';
   document.getElementById('time-total').textContent= fmtMmSs(SPAN);
   document.getElementById('lg-dmin').textContent   = (DMIN*3.28084).toFixed(1);
   document.getElementById('lg-dmax').textContent   = (DMAX*3.28084).toFixed(1);
@@ -474,8 +516,8 @@ function buildMap(){
   trackPts=[]; soundMarkers=[]; soundActiveCount=0;
   trackIdxAtRow=new Array(ROWS.length);
   soundIdxAtRow=new Array(ROWS.length);
-  wpMarker=null; wpLegLine=null; capturePulse=null; wpOnMap=false; lastWpLatLng=null;
-  lastRowIdx=-1; lastCapturedFlag=false;
+  CUR_MISSION=-1; wpMarkers=[]; planLine=null; progLine=null; legLine=null;
+  lastRowIdx=-1; LAST_T=-1;
 
   map=L.map('map', { zoomControl:false, attributionControl:false }).setView([0,0],2);
   satLayer=L.tileLayer(
@@ -517,15 +559,10 @@ function buildMap(){
     }).bindTooltip(s.ft.toFixed(1)+' ft', { direction:'top', offset:[0,-6], opacity:.9 });
   });
 
-  // Active-waypoint marker + leg line. Created once, then moved/shown/hidden
-  // per playback row to follow the waypoint the boat was actually driving to.
-  wpMarker=L.circleMarker([0,0],{
-    radius:7,color:'#ffb347',weight:2,fillColor:'#ffb347',fillOpacity:.18,
-  }).bindTooltip('WAYPOINT', { direction:'top', offset:[0,-8] });
-  wpLegLine=L.polyline([], {
-    color:'#ffb347', weight:2, opacity:.7, dashArray:'1 7', lineCap:'round',
-  });
-  wpOnMap=false; lastWpLatLng=null;
+  // Mission layer holds the active mission's plan line, progress line, and the
+  // numbered waypoint badges. Its contents are (re)built by renderMission() as
+  // playback moves between missions; the leg line (boat→target) lives on the map.
+  wpLayer=L.layerGroup().addTo(map);
 
   const boatHtml=
     '<div class="boat-wrap" id="boatwrap">'+
@@ -627,37 +664,166 @@ function findRowIdx(t){
   }
   return lo;
 }
-// Active waypoint at a playback row. Only shown while the boat is in AUTO and
-// actually driving to it; a dotted tracking line connects the boat to the
-// waypoint. Carries across single-row telemetry gaps where coords drop out.
-function updateWaypoint(idx){
-  if (!wpMarker) return;
-  const r=ROWS[idx];
-  let wr=null;
-  for (let j=idx;j>=0;j--){
-    const rr=ROWS[j];
-    if (rr.wpl!=null && rr.wpn!=null){ wr=rr; break; }
-    if (rr.wps===false) break;
+// ── Mission reconstruction ────────────────────────────────────────────────
+// Telemetry only ever echoes the CURRENTLY-active waypoint (wp_lat/wp_lon), and
+// only latches `captured` at a mission's FINAL waypoint — intermediate waypoints
+// are captured implicitly when wp_idx advances. Because the viewer sees the whole
+// log at once, we can rebuild each mission's full waypoint list (coords appear as
+// the boat visits each leg) and reconstruct every capture time + method:
+//   · intermediate → the row where wp_idx first exceeds it  (by = "sequence")
+//   · final        → the row where `captured` first latches (by = captured_by)
+// A "mission" is a contiguous run of wp_set=true rows sharing one wp_count.
+function buildMissions(){
+  MISSIONS=[];
+  let cur=null, eff=null;
+  for (let k=0;k<ROWS.length;k++){
+    const r=ROWS[k];
+    if (r.wps && r.wc!=null && r.wc>0) eff=r.wc;   // carry-forward across compact rows
+    if (r.wps){
+      const isNew = !cur || (eff!=null && cur.count!=null && eff!==cur.count);
+      if (isNew){ if (cur) MISSIONS.push(cur);
+        cur={ sT:r.t, eT:r.t, count:eff, pts:{}, caps:{}, lastIdx:null, capFlag:false }; }
+      cur.eT=r.t;
+      if (cur.count==null && eff!=null) cur.count=eff;
+      const idx=r.wi;
+      if (idx!=null && r.wpl!=null && r.wpn!=null && cur.pts[idx]==null) cur.pts[idx]=[r.wpl,r.wpn];
+      if (idx!=null && cur.lastIdx!=null && idx>cur.lastIdx){
+        for (let p=cur.lastIdx;p<idx;p++) if (cur.caps[p]==null) cur.caps[p]={t:r.t,by:'sequence'};
+      }
+      if (idx!=null) cur.lastIdx=idx;
+      if (r.ca && !cur.capFlag && idx!=null && cur.caps[idx]==null) cur.caps[idx]={t:r.t,by:r.cb||'distance'};
+      cur.capFlag=!!r.ca;
+    } else if (cur){ MISSIONS.push(cur); cur=null; eff=null; }
   }
-  const show = wr && r.m==='AUTO';
-  if (show){
-    lastWpLatLng=[wr.wpl,wr.wpn];
-    wpMarker.setLatLng(lastWpLatLng);
-    if (!wpOnMap){ wpMarker.addTo(map); wpOnMap=true; }
-    // Dotted tracking line from the boat's current position to the waypoint.
-    const bp = boat ? boat.getLatLng() : null;
-    if (bp){
-      wpLegLine.setLatLngs([[bp.lat,bp.lng],lastWpLatLng]);
-      if (!map.hasLayer(wpLegLine)) wpLegLine.addTo(map);
-    } else if (map.hasLayer(wpLegLine)){
-      map.removeLayer(wpLegLine);
+  if (cur) MISSIONS.push(cur);
+  // Normalize each mission to an ordered waypoint array.
+  for (const m of MISSIONS){
+    const idxs=Object.keys(m.pts).map(Number);
+    let maxIdx = (m.count!=null ? m.count-1 : -1);
+    for (const n of idxs) if (n>maxIdx) maxIdx=n;
+    m.wps=[];
+    for (let idx=0; idx<=maxIdx; idx++){
+      const cap=m.caps[idx]||null;
+      m.wps.push({ idx, ll:m.pts[idx]||null, capT:cap?cap.t:null, capBy:cap?cap.by:null });
     }
-  } else {
-    if (wpOnMap){ map.removeLayer(wpMarker); wpOnMap=false; }
-    if (map.hasLayer(wpLegLine)) map.removeLayer(wpLegLine);
+    if (m.count==null) m.count=m.wps.length;
   }
 }
-function renderForRow(idx){
+// Mission active at time t = the last mission that had already started. Keeps a
+// completed route on-screen after the run until the next mission is posted.
+function activeMissionAt(t){
+  let mi=-1;
+  for (let k=0;k<MISSIONS.length;k++){ if (MISSIONS[k].sT<=t) mi=k; else break; }
+  return mi;
+}
+// Build the map layers for one mission (plan line + numbered badges). Cheap to
+// call every row — it early-outs unless the active mission actually changed.
+function renderMission(mi){
+  if (mi===CUR_MISSION) return;
+  CUR_MISSION=mi;
+  if (wpLayer) wpLayer.clearLayers();
+  wpMarkers=[]; planLine=null; progLine=null;
+  if (legLine && map.hasLayer(legLine)) map.removeLayer(legLine);
+  if (mi<0) return;
+  const m=MISSIONS[mi];
+  const known=m.wps.filter(w=>w.ll);
+  if (known.length>=2){
+    planLine=L.polyline(known.map(w=>w.ll),
+      { color:'#ffb347', weight:2, opacity:.5, dashArray:'2 8', lineCap:'round' }).addTo(wpLayer);
+  }
+  progLine=L.polyline([], { color:'#34c759', weight:3, opacity:.85, lineCap:'round' }).addTo(wpLayer);
+  for (const w of m.wps){
+    if (!w.ll){ wpMarkers[w.idx]=null; continue; }
+    const icon=L.divIcon({
+      html:'<div class="wp-badge wp-pending"><span>'+(w.idx+1)+'</span></div>',
+      className:'', iconSize:[22,22], iconAnchor:[11,11],
+    });
+    const mk=L.marker(w.ll, { icon, zIndexOffset:800 }).addTo(wpLayer);
+    mk.bindTooltip('WP '+(w.idx+1), { direction:'top', offset:[0,-11] });
+    wpMarkers[w.idx]=mk;
+  }
+}
+// Per-row waypoint state: swap the active mission if needed, recolor each badge
+// (pending → target → captured), extend the green progress line, aim the leg
+// line at the current target, and flash any capture the playhead just crossed.
+function updateMission(idx, t){
+  const r=ROWS[idx];
+  // Only show a mission while the boat is actually navigating it: AUTO mode with
+  // a waypoint set. The manual hold before launch, the drift back after a run,
+  // failsafe stretches, and bare single-point re-posts all hide the route.
+  const mi=activeMissionAt(t);
+  const navigating = mi>=0 && r.m==='AUTO' && r.wps;
+  renderMission(navigating ? mi : -1);
+  if (!navigating){
+    if (legLine && map.hasLayer(legLine)) map.removeLayer(legLine);
+    setText('hud-wp','—'); setHudWpClass(false);
+    setText('hud-wpto','—');
+    return;
+  }
+  const m=MISSIONS[CUR_MISSION];
+  let capCount=0;
+  for (const w of m.wps) if (w.capT!=null && t>=w.capT) capCount++;
+  const activeIdx = capCount<m.count ? capCount : -1;   // next uncaptured waypoint
+
+  const progPts=[];
+  for (const w of m.wps){
+    const captured = w.capT!=null && t>=w.capT;
+    if (captured && w.ll) progPts.push(w.ll);
+    const mk=wpMarkers[w.idx]; if (!mk) continue;
+    const el=mk.getElement(), badge=el?el.querySelector('.wp-badge'):null;
+    if (badge){
+      const active = !captured && w.idx===activeIdx;
+      badge.classList.toggle('wp-captured', captured);
+      badge.classList.toggle('wp-active',   active);
+      badge.classList.toggle('wp-pending',  !captured && !active);
+    }
+  }
+  if (progLine) progLine.setLatLngs(progPts);
+
+  // Leg line: boat → active target, only while actually driving in AUTO.
+  const aw = activeIdx>=0 ? m.wps[activeIdx] : null;
+  if (aw && aw.ll && r.m==='AUTO' && boat){
+    const bp=boat.getLatLng();
+    if (!legLine) legLine=L.polyline([], { color:'#ffb347', weight:2, opacity:.75, dashArray:'1 7', lineCap:'round' });
+    legLine.setLatLngs([[bp.lat,bp.lng], aw.ll]);
+    if (!map.hasLayer(legLine)) legLine.addTo(map);
+  } else if (legLine && map.hasLayer(legLine)){
+    map.removeLayer(legLine);
+  }
+
+  // Capture flash — fire for every capture the playhead crossed this step, but
+  // only on normal forward playback (skip big scrub/seek jumps and rewinds).
+  if (t>LAST_T && (t-LAST_T)<5000){
+    for (const w of m.wps){
+      if (w.ll && w.capT!=null && w.capT>LAST_T && w.capT<=t){
+        flashCapture(w.ll, '✓ WP '+(w.idx+1));
+      }
+    }
+  }
+
+  // HUD.
+  const complete = m.count>0 && capCount>=m.count;
+  setText('hud-wp', m.count>0 ? (capCount+' / '+m.count) : '—');
+  setHudWpClass(complete);
+  if (aw && r.wd!=null && r.m==='AUTO'){
+    setText('hud-wpto', Math.round(r.wd)+' m'+(r.wb!=null ? ' · '+padDeg(r.wb)+'°' : ''));
+  } else setText('hud-wpto','—');
+}
+function setHudWpClass(complete){
+  const e=document.getElementById('hud-wp');
+  if (e) e.className='v '+(complete?'good':'amber');
+}
+// A one-shot capture pulse + label at a waypoint (multiple may briefly overlap).
+function flashCapture(latlng, label){
+  if (!map) return;
+  const icon=L.divIcon({
+    html:'<div class="cap-pulse"></div><div class="cap-label">'+label+'</div>',
+    className:'', iconSize:[22,22], iconAnchor:[11,11],
+  });
+  const mk=L.marker(latlng, { icon, zIndexOffset:900 }).addTo(map);
+  setTimeout(()=>{ if (map && map.hasLayer(mk)) map.removeLayer(mk); }, 1800);
+}
+function renderForRow(idx, t){
   const r=ROWS[idx];
   const ti=trackIdxAtRow[idx];
   if (live) live.setLatLngs(trackPts.slice(0, ti));
@@ -681,26 +847,14 @@ function renderForRow(idx){
     }
   }
 
-  // Active waypoint for this row.
-  updateWaypoint(idx);
+  // Active mission: full route, per-waypoint state, capture flashes, WP HUD.
+  // (Runs after boat position is set so the leg line aims from the boat.)
+  updateMission(idx, t!=null ? t : r.t);
 
   // Heading.
   const hdg=pickHeading(idx);
   const el=document.getElementById('boatwrap');
   if (el && hdg!=null) el.style.transform='rotate('+hdg+'deg)';
-
-  // Capture flash.
-  if (r.ca && !lastCapturedFlag && lastWpLatLng){
-    const pulseIcon=L.divIcon({
-      html:'<div class="cap-pulse"></div><div class="cap-label">✓ CAPTURED</div>', className:'',
-      iconSize:[22,22], iconAnchor:[11,11],
-    });
-    if (capturePulse) map.removeLayer(capturePulse);
-    capturePulse=L.marker(lastWpLatLng, { icon:pulseIcon, zIndexOffset:500 }).addTo(map);
-    const me=capturePulse;
-    setTimeout(()=>{ if (me===capturePulse){ map.removeLayer(capturePulse); capturePulse=null; } }, 1800);
-  }
-  lastCapturedFlag=!!r.ca;
 
   // HUD.
   setText('hud-depth', r.d!=null ? (r.d*3.28084).toFixed(1)+' ft' : '—');
@@ -727,7 +881,10 @@ function setTimeMs(t){
   if (t<TSTART) t=TSTART;
   if (t>TEND)   t=TEND;
   const idx=findRowIdx(t);
-  if (idx!==lastRowIdx){ renderForRow(idx); lastRowIdx=idx; }
+  if (idx!==lastRowIdx){ renderForRow(idx, t); lastRowIdx=idx; }
+  // Advance the playhead clock used by updateMission() to detect forward capture
+  // crossings. Set after renderForRow so it reads the previous frame's time.
+  LAST_T=t;
   // Always update clock + scrub + strip for smooth scrubbing.
   stripSetPlayhead(t);
   const elapsed=t-TSTART;
