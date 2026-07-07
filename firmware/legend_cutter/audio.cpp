@@ -13,20 +13,31 @@ static DFRobot_DF1201S  df;
 static bool             ready = false;
 
 bool audioBegin() {
-    dfSerial.begin(DFP_BAUD, SERIAL_8N1, DFP_RX_PIN, DFP_TX_PIN);
-    delay(1000);
-    uint32_t startMs = millis();
-    while (!df.begin(dfSerial)) {
-        if (millis() - startMs > 3000) return false;
+    // Two tries with a full UART re-open between them: if the first handshake
+    // comes back empty (a shared-rail sag during the DFPlayer's power-up),
+    // reopening the port and asking again catches it once it has settled.
+    for (int attempt = 0; attempt < 2; attempt++) {
+        dfSerial.begin(DFP_BAUD, SERIAL_8N1, DFP_RX_PIN, DFP_TX_PIN);
+        delay(1000);
+        bool ok = false;
+        uint32_t startMs = millis();
+        while (!(ok = df.begin(dfSerial))) {
+            if (millis() - startMs > 3000) break;
+            delay(250);
+        }
+        if (ok) {
+            df.setVol(DFP_VOLUME);
+            df.switchFunction(df.MUSIC);
+            delay(2000);
+            df.setPlayMode(df.SINGLE);
+            df.enableAMP();
+            ready = true;
+            return true;
+        }
+        dfSerial.end();
         delay(250);
     }
-    df.setVol(DFP_VOLUME);
-    df.switchFunction(df.MUSIC);
-    delay(2000);
-    df.setPlayMode(df.SINGLE);
-    df.enableAMP();
-    ready = true;
-    return true;
+    return false;
 }
 
 bool audioAvailable() { return ready; }

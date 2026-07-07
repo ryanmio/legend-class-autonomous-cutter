@@ -8,7 +8,8 @@
 #include "ibus.h"
 #include "motors.h"   // pcaWriteUs()
 
-static uint16_t panUs = NEUTRAL_US;
+static uint16_t panUs  = NEUTRAL_US;
+static bool     primed = false;   // false until the servo has been driven once
 
 static uint16_t clampPan(uint16_t rawUs) {
     if (rawUs < 1000) rawUs = 1000;
@@ -23,25 +24,36 @@ static uint16_t clampPan(uint16_t rawUs) {
 }
 
 void weaponsBegin() {
-    panUs = NEUTRAL_US;
-    pcaWriteUs(CH_GUN_PAN, panUs);
+    // Park at neutral but don't drive the servo yet — its boot snap draws a
+    // current spike on the shared rail while the DFPlayer is powering up. The
+    // first drive happens on the first weaponsUpdate() pass instead.
+    panUs  = NEUTRAL_US;
+    primed = false;
 }
 
 void weaponsUpdate() {
-    // No RC = freeze at neutral. The mode-FSM in the .ino handles full
+    // No RC = ease back to neutral. The mode-FSM in the .ino handles full
     // failsafe; here we just track the knob whenever RC is alive.
-    if (!ibusEverGood()) {
-        if (panUs != NEUTRAL_US) {
-            panUs = NEUTRAL_US;
-            pcaWriteUs(CH_GUN_PAN, panUs);
-        }
-        return;
-    }
-    uint16_t next = clampPan(ibusChannel(IBUS_IDX_GUN_PAN));
-    if (next != panUs) {
-        panUs = next;
+    uint16_t target = ibusEverGood() ? clampPan(ibusChannel(IBUS_IDX_GUN_PAN))
+                                     : NEUTRAL_US;
+
+    // Establish the neutral hold once, then only ever slew from there.
+    if (!primed) {
+        primed = true;
         pcaWriteUs(CH_GUN_PAN, panUs);
     }
+    if (panUs == target) return;
+
+    // Move toward the target by at most one step per pass so the servo ramps
+    // into position instead of slamming.
+    if (panUs < target) {
+        uint16_t d = target - panUs;
+        panUs += (d < GUN_PAN_SLEW_STEP_US) ? d : GUN_PAN_SLEW_STEP_US;
+    } else {
+        uint16_t d = panUs - target;
+        panUs -= (d < GUN_PAN_SLEW_STEP_US) ? d : GUN_PAN_SLEW_STEP_US;
+    }
+    pcaWriteUs(CH_GUN_PAN, panUs);
 }
 
 uint16_t weaponsGunPanUs() { return panUs; }

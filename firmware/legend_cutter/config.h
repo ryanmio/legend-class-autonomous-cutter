@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.8.1"
+#define FIRMWARE_VERSION "0.8.2"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -231,6 +231,9 @@ static const uint16_t GUN_PAN_MIN_US      = 1000;
 static const uint16_t GUN_PAN_MAX_US      = 2000;
 static const uint16_t GUN_PAN_DEADBAND_US = 15;
 static const bool     GUN_PAN_REVERSE     = true;
+// Ease the servo toward its target by this much per control pass instead of
+// snapping — softer on the linkage and on the shared rail's current draw.
+static const uint16_t GUN_PAN_SLEW_STEP_US = 10;
 
 // ── Navigation / waypoint ──────────────────────────────────────────────────
 // Max waypoints in one mission (matches the test_28 sequencer oracle). A single
