@@ -53,6 +53,15 @@ function modeColor(mode: string | undefined): string {
   }
 }
 
+// Compact reading-age for the DEPTH sub-caption. Depth polls every ~20 s, so
+// freshness matters — a stale age is the tell that polling stopped.
+function depthAgeShort(ms: number | undefined): string {
+  if (ms == null) return '';
+  if (ms < 2000)  return 'now';
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  return `${Math.round(ms / 60000)}m`;
+}
+
 // One-line English summary of what the boat is doing right now. Mode
 // (MANUAL/AUTO/FAILSAFE) is conveyed by the colored chip in the header,
 // so this sentence describes the *condition* — never repeats the mode.
@@ -134,6 +143,17 @@ export default function HelmScreen({ route, navigation }: Props) {
   const cruiseUs = data?.cruise_us;
   const wpReady  = data?.wp_set && data?.wp_dist_m != null;
   const sentence = stateSentence(data, connected);
+
+  // DEPTH caption (uses the Readout's already-reserved sub slot, so no layout
+  // change): show reading freshness when we have a depth, or "no echo" when the
+  // sonar is actively pinging but getting no clean bottom return (scattered /
+  // near-field floor) — so a bare "--" never looks like the sonar is off.
+  const depthActive = data?.depth_mode === 'run' ||
+    (data?.depth_age_ms != null && data.depth_age_ms < 25000);
+  const depthSub =
+    data?.depth_m != null ? depthAgeShort(data.depth_age_ms)
+    : depthActive         ? 'no echo'
+    :                       '';
 
   const handlePickCruise = useCallback((us: number) => {
     sendCruise(ip, { us }).catch(() => {});
@@ -224,6 +244,7 @@ export default function HelmScreen({ route, navigation }: Props) {
             label="DEPTH"
             value={data?.depth_m != null ? `${data.depth_m}` : '--'}
             unit={data?.depth_m != null ? 'M' : undefined}
+            sub={depthSub}
           />
           <Readout
             label="BATT"

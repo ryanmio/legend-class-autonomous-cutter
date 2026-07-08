@@ -111,9 +111,11 @@ export interface TelemetryData {
   pump_phase_ms?: number;     // ms since current phase began; absent when off
 
   // Depth sonar (RCWL-1655). Present from test_29 onward.
-  depth_m?: string;             // metres, 2-decimal string. Absent = no current reading (stop or post-boot).
+  depth_m?: string;             // metres, 2-decimal string. Absent = no valid echo (stop, post-boot, or no clean bottom return).
   depth_mode?: 'off' | 'run';
-  depth_age_ms?: number;        // millis since last successful ping
+  depth_age_ms?: number;        // millis since last ping attempt (present once the sonar has pinged, even with no valid echo)
+  depth_raw_us?: number;        // raw echo pulse width µs (v0.6.1+). 0 = timeout/no return; >0 below the ~1 m floor = near-field artifact
+
   sonar_ok?: boolean;           // aspirational — not in test_29
 
   nav_on?: boolean;

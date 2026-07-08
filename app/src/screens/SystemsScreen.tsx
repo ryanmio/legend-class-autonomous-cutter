@@ -182,18 +182,30 @@ function DepthSection({ ip }: { ip: string }) {
   const depthStr = data?.depth_m;
   const mode     = data?.depth_mode ?? 'off';
   const ageMs    = data?.depth_age_ms;
+  const rawUs    = data?.depth_raw_us;
+  const pinged   = ageMs != null;   // the sonar has pinged at least once
 
   const tap = useCallback((m: 'stop' | 'check' | 'run') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setDepth(ip, m).catch(() => {});
   }, [ip]);
 
-  const ageLabel =
-    depthStr == null      ? 'no reading' :
-    ageMs == null         ? '' :
-    ageMs < 2000          ? 'just now' :
-    ageMs < 60000         ? `${Math.round(ageMs / 1000)} s ago` :
-                            `${Math.round(ageMs / 60000)} min ago`;
+  const ageText =
+    ageMs == null  ? '' :
+    ageMs < 2000   ? 'just now' :
+    ageMs < 60000  ? `${Math.round(ageMs / 1000)} s ago` :
+                     `${Math.round(ageMs / 60000)} min ago`;
+
+  // With no depth number, still prove the sonar is alive (it pinged) and say
+  // why there's no reading: a flat timeout (nothing returned) vs a near-field
+  // return below the ~1 m floor, which v0.6.1 reports as no-echo instead of a
+  // false-shallow. A changing age is the liveness cue.
+  const statusLabel =
+    depthStr != null ? ageText
+    : !pinged        ? 'no ping yet'
+    : rawUs == null  ? `no reading · ${ageText}`
+    : rawUs === 0    ? `no echo (timeout) · ${ageText}`
+    :                  `near-field only · ${ageText}`;
 
   return (
     <View style={styles.section}>
@@ -204,7 +216,7 @@ function DepthSection({ ip }: { ip: string }) {
           <Text style={styles.depthUnit}>{depthStr != null ? ' M' : ''}</Text>
         </Text>
         <Text style={styles.depthMeta}>
-          {mode === 'run' ? 'POLLING · ' : ''}{ageLabel}
+          {mode === 'run' ? 'POLLING · ' : ''}{statusLabel}
         </Text>
       </View>
       <View style={styles.depthBtnRow}>
