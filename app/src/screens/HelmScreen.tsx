@@ -130,6 +130,7 @@ export default function HelmScreen({ route, navigation }: Props) {
   useEffect(() => subscribeRunning(setLogging), []);
 
   const battV    = data?.batt_v != null ? parseFloat(data.batt_v) : undefined;
+  const headingDeg = data?.heading != null ? parseFloat(data.heading) : NaN;
   const cruiseUs = data?.cruise_us;
   const wpReady  = data?.wp_set && data?.wp_dist_m != null;
   const sentence = stateSentence(data, connected);
@@ -212,7 +213,7 @@ export default function HelmScreen({ route, navigation }: Props) {
         <View style={styles.readoutRow}>
           <Readout
             label="HEADING"
-            value={data?.heading != null ? `${Math.round(data.heading)}°` : '--'}
+            value={Number.isFinite(headingDeg) ? `${Math.round(headingDeg)}°` : '--'}
           />
           <Readout
             label="SPEED"

@@ -141,7 +141,7 @@ export default function FlightsScreen({ navigation }: Props) {
               <Text style={styles.empty}>
                 No flights recorded yet.{'\n\n'}
                 Logging starts automatically when the boat is throttled up
-                and ends when telemetry is lost for 60 s, the boat reboots,
+                and ends when telemetry is lost for 5 min, the boat reboots,
                 or you tap STOP on Telemetry.
               </Text>
             )
