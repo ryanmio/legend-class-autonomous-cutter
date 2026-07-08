@@ -27,6 +27,7 @@
 import { Share, AppState, AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { TelemetryData } from '../types';
 import { subscribe, getCurrentIP } from './websocketService';
 import { fetchHistorySince, HistoryRecord } from './historyService';
@@ -244,6 +245,30 @@ export async function exportShare(): Promise<void> {
   }
   const csv = getCSV();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  // Prefer a real .csv file attachment over a text-message body: a long
+  // buffer pasted as message text is truncated/mangled by most share
+  // targets and never lands as an openable file. Mirrors the saved-flight
+  // export in FlightDetailScreen. Falls back to a text message on
+  // platforms without the native share sheet (web).
+  try {
+    if (await Sharing.isAvailableAsync()) {
+      await ensureFlightDir();
+      const uri = FLIGHT_DIR + `_export_${stamp}.csv`;
+      await FileSystem.writeAsStringAsync(uri, csv);
+      try {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'text/csv',
+          UTI: 'public.comma-separated-values-text',
+          dialogTitle: `legend-cutter-telemetry-${stamp}.csv`,
+        });
+      } finally {
+        await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+      }
+      return;
+    }
+  } catch {
+    // fall through to the text-message share below
+  }
   await Share.share({
     title: `legend-cutter-telemetry-${stamp}.csv`,
     message: csv,
