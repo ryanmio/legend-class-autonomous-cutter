@@ -47,7 +47,7 @@
   #dropzone .hint{margin-top:28px;font-size:9px;color:var(--dim);letter-spacing:.15em;text-align:center;max-width:560px;line-height:1.6}
 
   /* ── App shell ──────────────────────────────────────────────────── */
-  #app{display:grid;grid-template-rows:auto 1fr auto auto;height:100%}
+  #app{display:grid;grid-template-rows:auto 1fr auto auto auto;height:100%}
   #app[hidden]{display:none}
 
   /* Top bar */
@@ -174,6 +174,29 @@
   #strip .max{top:20px}
   #strip .min{bottom:6px}
 
+  /* ── Mode / gap timeline strip ──────────────────────────────────── */
+  #modestrip{
+    height:36px;background:var(--surface);border-top:1px solid var(--line);
+    position:relative;cursor:pointer;user-select:none;
+  }
+  #modestrip .ms-label{
+    position:absolute;top:4px;left:8px;right:8px;font-size:9px;letter-spacing:.2em;
+    color:var(--dim);pointer-events:none;display:flex;gap:14px;align-items:center;z-index:2;
+  }
+  #modestrip .ms-key{display:flex;align-items:center;gap:5px;letter-spacing:.04em}
+  #modestrip .ms-key i{width:11px;height:8px;border-radius:2px;display:inline-block}
+  .k-auto{background:#00bfff}.k-manual{background:#ffb347}.k-fs{background:#ff5a4d}
+  .k-gap{background:repeating-linear-gradient(45deg,#ff5a4d,#ff5a4d 2px,transparent 2px,transparent 5px)}
+  #modestrip-track{position:absolute;left:0;right:0;bottom:0;height:16px}
+  #modestrip .mblk{position:absolute;top:0;height:16px}
+  #modestrip .mblk.m-AUTO{background:#00bfff}
+  #modestrip .mblk.m-MANUAL{background:#ffb347}
+  #modestrip .mblk.m-FAILSAFE{background:#ff5a4d}
+  #modestrip .mblk.m-IDLE,#modestrip .mblk.m-NONE{background:#3a5560}
+  #modestrip .mblk.gap{background:repeating-linear-gradient(45deg,rgba(255,90,77,.9),rgba(255,90,77,.9) 3px,transparent 3px,transparent 7px)}
+  #modestrip .mblk.gap.reboot{background:repeating-linear-gradient(45deg,#ff5a4d,#ff5a4d 3px,#1a0e00 3px,#1a0e00 7px)}
+  #modestrip-ph{position:absolute;bottom:0;height:16px;width:2px;background:var(--hi);pointer-events:none;transform:translateX(-1px)}
+
   /* ── Bottom transport bar ──────────────────────────────────────── */
   #controls{
     display:flex;align-items:center;gap:10px;
@@ -254,13 +277,16 @@
       <span id="flight-when"></span>
     </div>
     <div class="stats">
+      <div class="stat">AUTO<b id="stat-auto">—</b></div>
+      <div class="stat">GAPS<b id="stat-gaps">—</b></div>
       <div class="stat">DUR<b id="stat-dur">—</b></div>
       <div class="stat">DIST<b id="stat-dist">—</b></div>
       <div class="stat">MAX KT<b id="stat-maxkt">—</b></div>
-      <div class="stat">MAX FT<b id="stat-maxft">—</b></div>
       <div class="stat">WPTS<b id="stat-wpts">—</b></div>
     </div>
+    <button id="btn-add">+ CSV</button>
     <button id="btn-load">LOAD ANOTHER</button>
+    <input type="file" id="addpicker" accept=".csv,text/csv" multiple style="display:none"/>
   </header>
 
   <section id="map-wrap">
@@ -294,6 +320,17 @@
         <span><span style="color:var(--amber)">○</span> pending</span>
       </div>
     </div>
+  </section>
+
+  <section id="modestrip">
+    <div class="ms-label">MODE
+      <span class="ms-key"><i class="k-auto"></i>AUTO</span>
+      <span class="ms-key"><i class="k-manual"></i>MANUAL</span>
+      <span class="ms-key"><i class="k-fs"></i>FAILSAFE</span>
+      <span class="ms-key"><i class="k-gap"></i>GAP / reboot</span>
+    </div>
+    <div id="modestrip-track"></div>
+    <div id="modestrip-ph"></div>
   </section>
 
   <section id="strip">
@@ -390,6 +427,8 @@ function prepRow(r){
   const gps=asBool(r.gps_fix) && lat!=null && lon!=null;
   return {
     t, gps, lat, lon,
+    up: num(r.uptime),
+    sid:(r.session_id!=null && r.session_id!=='') ? String(r.session_id) : null,
     d:  num(r.depth_m),
     dm: r.depth_mode || null,
     da: num(r.depth_age_ms),
@@ -413,9 +452,17 @@ function prepRow(r){
 // STATE
 // ══════════════════════════════════════════════════════════════════════════
 let ROWS=[], TSTART=0, TEND=0, SPAN=0, DMIN=0, DMAX=1, SMAX=1;
+// Accumulator across every CSV loaded this session, so a run split into several
+// files (each WiFi reconnect starts a new flight file) can be stitched back into
+// one continuous replay. Deduped by session+uptime-second, then sorted by ts.
+let ACC=[], LOADED=[];
+// Continuous-AUTO proof: filled by analyzeCoverage() after every (re)load.
+let COVERAGE=null;
+const GAP_MS=5000;   // consecutive-sample delta above this = a disconnect gap
 let map, satLayer, osmLayer, currentBase;
-let ghost, live, soundLayer, soundMarkers=[], soundActiveCount=0;
+let live, soundLayer, soundMarkers=[], soundActiveCount=0;
 let trackPts=[], trackIdxAtRow=[], soundIdxAtRow=[], bounds=null;
+let modeTrackLayer=null, gapLayer=null;
 let boat;
 // Multi-waypoint mission model (see buildMissions). One "mission" per contiguous
 // posted waypoint sequence; each carries its full waypoint list with capture times.
@@ -428,59 +475,116 @@ let playing=false, speed=5, simT=0, lastFrame=0, rafId=0;
 // ══════════════════════════════════════════════════════════════════════════
 // CSV INGEST
 // ══════════════════════════════════════════════════════════════════════════
-function loadFromText(csvText, filename){
-  console.log('[viewer] loadFromText start, length=', csvText.length);
+// Dedup key: within one boot, uptime-seconds is unique, so session+uptime dedups
+// an app-live row against the same second backfilled from /history. Falls back to
+// the wall-clock second when the firmware didn't stamp session_id/uptime.
+function rowKey(p){
+  if (p.sid!=null && p.up!=null) return p.sid+'|'+Math.round(p.up);
+  return 'T'+Math.round(p.t/1000);
+}
+// merge=false replaces the accumulator (LOAD ANOTHER); merge=true stitches this
+// file onto whatever is already loaded (ADD CSV / dropping onto an open replay).
+function loadFromText(csvText, filename, merge){
+  console.log('[viewer] loadFromText start, length=', csvText.length, 'merge=', !!merge);
   const parsed=parseCSV(csvText);
   console.log('[viewer] parseCSV returned', parsed.length, 'rows');
-  if (parsed.length){
-    console.log('[viewer] header keys:', Object.keys(parsed[0]).slice(0,8), '... (' + Object.keys(parsed[0]).length + ' total)');
-    console.log('[viewer] row 0 sample: ts=', parsed[0].ts, 'gps_fix=', parsed[0].gps_fix, 'lat=', parsed[0].lat);
-  }
-  if (!parsed.length){ toast('That CSV is empty.'); return; }
+  if (!parsed.length){ toast('That CSV is empty.'); return false; }
   const compact=[];
-  let dmn=Infinity, dmx=-Infinity, smx=0;
-  let skipNoTs=0, skipOther=0;
+  let skipNoTs=0;
   for (const r of parsed){
     const p=prepRow(r);
     if (!p){ skipNoTs++; continue; }
-    if (p.sp!=null && p.sp>smx) smx=p.sp;
-    if (p.dm==='run' && p.d!=null && p.d>0){
-      if (p.d<dmn) dmn=p.d; if (p.d>dmx) dmx=p.d;
-    }
     compact.push(p);
   }
   console.log('[viewer] prep:', compact.length, 'kept,', skipNoTs, 'skipped (no ts)');
-  if (compact.length===0){ toast('No parseable rows (need column "ts" with ISO timestamp).'); return; }
-  compact.sort((a,b)=>a.t-b.t);
-  ROWS=compact;
+  if (compact.length===0){ toast('No parseable rows (need column "ts" with ISO timestamp).'); return false; }
+
+  if (!merge){ ACC=[]; LOADED=[]; }
+  ACC.push(...compact);
+  LOADED.push(filename||'(csv)');
+  // Dedup by key, keeping the first-seen row for each key, then order by time.
+  const seen=new Map();
+  for (const p of ACC) if (!seen.has(rowKey(p))) seen.set(rowKey(p), p);
+  ROWS=[...seen.values()].sort((a,b)=>a.t-b.t);
+
+  let dmn=Infinity, dmx=-Infinity, smx=0;
+  for (const p of ROWS){
+    if (p.sp!=null && p.sp>smx) smx=p.sp;
+    if (p.dm==='run' && p.d!=null && p.d>0){ if (p.d<dmn) dmn=p.d; if (p.d>dmx) dmx=p.d; }
+  }
   TSTART=ROWS[0].t; TEND=ROWS[ROWS.length-1].t; SPAN=Math.max(1,TEND-TSTART);
   buildMissions();
-  console.log('[viewer] missions:', MISSIONS.length);
+  analyzeCoverage();
+  console.log('[viewer] missions:', MISSIONS.length, 'coverage:', COVERAGE);
   DMIN=Number.isFinite(dmn)?dmn:0;
   DMAX=Number.isFinite(dmx)?dmx:1; if (DMAX<=DMIN) DMAX=DMIN+1;
   SMAX=Math.max(0.5, smx);
-  console.log('[viewer] hiding dropzone, showing app');
   document.getElementById('dropzone').hidden=true;
   document.getElementById('app').hidden=false;
-  setFlightMeta(filename);
-  console.log('[viewer] calling buildMap');
+  setFlightMeta();
   buildMap();
-  console.log('[viewer] calling buildStrip');
   buildStrip();
-  console.log('[viewer] seeking to 0');
+  buildModeStrip();
   seekFrac(0);
-  console.log('[viewer] loadFromText done');
+  if (merge) toast('Merged '+filename+' — '+ROWS.length+' rows across '+LOADED.length+' files.');
+  console.log('[viewer] loadFromText done,', ROWS.length, 'rows');
+  return true;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CONTINUOUS-AUTO PROOF
+// Walk the merged timeline once and quantify: how much wall-clock was spent in
+// AUTO, where the boat left AUTO, where data is missing (disconnect gaps), and
+// where the boat rebooted (session_id changed → RAM ring + AUTO waypoint lost).
+// This is what turns "we did the run" into "here is proof of a continuous
+// autonomous run" — no more scrubbing frame-by-frame to check the mode field.
+// ══════════════════════════════════════════════════════════════════════════
+function analyzeCoverage(){
+  const perMode={};
+  let coveredMs=0, autoMs=0, gapMs=0, biggestGap=0;
+  const gaps=[], nonAuto=[], reboots=[];
+  let segStart=null;   // current non-AUTO run
+  for (let i=0;i<ROWS.length;i++){
+    const r=ROWS[i], nx=ROWS[i+1];
+    perMode[r.m||'NONE']=(perMode[r.m||'NONE']||0)+1;
+    // Non-AUTO run accounting (by sample, gap-agnostic).
+    if (r.m!=='AUTO'){ if (!segStart) segStart={t0:r.t, m:r.m}; }
+    else if (segStart){ nonAuto.push({t0:segStart.t0, t1:r.t, m:segStart.m}); segStart=null; }
+    if (!nx) break;
+    const dt=nx.t-r.t;
+    const reboot = r.sid!=null && nx.sid!=null && r.sid!==nx.sid;
+    if (reboot) reboots.push({t:nx.t});
+    if (dt>GAP_MS || reboot){
+      gapMs+=dt; if (dt>biggestGap) biggestGap=dt;
+      gaps.push({t0:r.t, t1:nx.t, ms:dt, reboot:!!reboot});
+    } else {
+      coveredMs+=dt;
+      if (r.m==='AUTO') autoMs+=dt;
+    }
+  }
+  if (segStart) nonAuto.push({t0:segStart.t0, t1:ROWS[ROWS.length-1].t, m:segStart.m});
+  const total=ROWS.length;
+  const autoSamples=perMode['AUTO']||0;
+  const autoPct = coveredMs>0 ? autoMs/coveredMs : (total?autoSamples/total:0);
+  COVERAGE={ perMode, total, autoSamples, autoPct, coveredMs, autoMs, gapMs, biggestGap,
+             gaps, nonAuto, reboots };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
 // TOP-BAR META + STATS
 // ══════════════════════════════════════════════════════════════════════════
-function setFlightMeta(filename){
-  document.getElementById('flight-name').textContent = filename || '—';
+function setFlightMeta(){
+  const name = LOADED.length<=1 ? (LOADED[0]||'—')
+             : LOADED[0]+'  (+'+(LOADED.length-1)+' more)';
+  document.getElementById('flight-name').textContent = name;
   const d=new Date(TSTART);
   const pad=n=>String(n).padStart(2,'0');
   document.getElementById('flight-when').textContent =
     `  ·  ${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // Coverage stats (informational): AUTO share of connected time + gap count.
+  const c=COVERAGE;
+  document.getElementById('stat-auto').textContent = c ? (c.autoPct*100).toFixed(1)+'%' : '—';
+  document.getElementById('stat-gaps').textContent = c ? (c.gaps.length ? c.gaps.length+' · '+fmtMmSs(c.gapMs) : 'none') : '—';
   // duration / distance / max speed / max depth
   let distM=0, prev=null;
   let maxKts=0, maxFt=0;
@@ -497,7 +601,7 @@ function setFlightMeta(filename){
   document.getElementById('stat-dur').textContent  = fmtMmSs(SPAN);
   document.getElementById('stat-dist').textContent = distM>=1000 ? (distM/1000).toFixed(2)+' km' : Math.round(distM)+' m';
   document.getElementById('stat-maxkt').textContent= maxKts.toFixed(1);
-  document.getElementById('stat-maxft').textContent= maxFt.toFixed(1);
+  void maxFt;
   // Waypoints captured across every mission in the session.
   let capTot=0, wpTot=0;
   for (const m of MISSIONS){ for (const w of m.wps){ wpTot++; if (w.capT!=null) capTot++; } }
@@ -516,6 +620,7 @@ function buildMap(){
   trackPts=[]; soundMarkers=[]; soundActiveCount=0;
   trackIdxAtRow=new Array(ROWS.length);
   soundIdxAtRow=new Array(ROWS.length);
+  modeTrackLayer=null; gapLayer=null;
   CUR_MISSION=-1; wpMarkers=[]; planLine=null; progLine=null; legLine=null;
   lastRowIdx=-1; LAST_T=-1;
 
@@ -527,10 +632,10 @@ function buildMap(){
   currentBase=satLayer; currentBase.addTo(map);
 
   let gpsCount=0, soundCount=0;
-  const soundList=[];
+  const soundList=[], gpsRows=[];
   for (let i=0;i<ROWS.length;i++){
     const r=ROWS[i];
-    if (r.gps){ trackPts.push([r.lat,r.lon]); gpsCount++; }
+    if (r.gps){ trackPts.push([r.lat,r.lon]); gpsRows.push(r); gpsCount++; }
     if (validSound(r)){
       const ft=r.d*3.28084;
       soundList.push({ll:[r.lat,r.lon], d:r.d, ft, color:depthColor(r.d)});
@@ -548,8 +653,39 @@ function buildMap(){
   bounds=L.latLngBounds(trackPts);
   map.fitBounds(bounds, { padding:[40,40], maxZoom:19 });
 
-  ghost=L.polyline(trackPts, { color:'#3a5560', weight:2, opacity:.65 }).addTo(map);
-  live =L.polyline([],       { color:'#00bfff', weight:3.5, opacity:.95 }).addTo(map);
+  // Proof layer: the full track, split into segments colored by the mode the boat
+  // was in along each leg. AUTO reads as the calm blue norm; any MANUAL / FAILSAFE
+  // stretch jumps out in amber / red. Disconnect gaps (or reboots) break the line
+  // and draw a red dashed "GAP" segment so a missing stretch can't masquerade as a
+  // straight autonomous run. This replaces the old single grey ghost polyline.
+  modeTrackLayer=L.layerGroup().addTo(map);
+  gapLayer=L.layerGroup();
+  let runPts=[[gpsRows[0].lat,gpsRows[0].lon]], runMode=gpsRows[0].m;
+  const flushRun=()=>{
+    if (runPts.length>=2)
+      L.polyline(runPts, { color:modeColor(runMode), weight:4, opacity:.9, lineCap:'round', lineJoin:'round' })
+        .bindTooltip((runMode||'—')+' leg', {sticky:true})
+        .addTo(modeTrackLayer);
+  };
+  for (let i=1;i<gpsRows.length;i++){
+    const a=gpsRows[i-1], b=gpsRows[i];
+    const gap = (b.t-a.t)>GAP_MS || (a.sid!=null && b.sid!=null && a.sid!==b.sid);
+    if (gap){
+      flushRun();
+      L.polyline([[a.lat,a.lon],[b.lat,b.lon]],
+        { color:'#ff5a4d', weight:2, opacity:.85, dashArray:'3 7', lineCap:'round' })
+        .bindTooltip('GAP · '+fmtMmSs(b.t-a.t)+' no data', {sticky:true})
+        .addTo(gapLayer);
+      runPts=[[b.lat,b.lon]]; runMode=b.m; continue;
+    }
+    if (b.m!==runMode){ flushRun(); runPts=[[a.lat,a.lon]]; runMode=b.m; }
+    runPts.push([b.lat,b.lon]);
+  }
+  flushRun();
+
+  // Thin bright reveal of the played-so-far path, drawn over the mode colors.
+  live =L.polyline([], { color:'#ffffff', weight:1.6, opacity:.85 }).addTo(map);
+  gapLayer.addTo(map);   // gaps on top so a disconnect stays visible during replay
 
   soundLayer=L.layerGroup().addTo(map);
   soundMarkers=soundList.map(s=>{
@@ -651,6 +787,51 @@ function stripSetPlayhead(t){
   if (!ph) return;
   const x=((t-TSTART)/SPAN)*1000;
   ph.setAttribute('x1', x); ph.setAttribute('x2', x);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// MODE / GAP TIMELINE
+// A full-width bar across the whole run, colored by mode with disconnect gaps
+// hatched. Reads the continuous-AUTO story at a glance — one solid blue bar =
+// AUTO start to finish; any amber/red block or hatched gap is an exception you
+// can click to jump to. Renders even with no GPS fix (unlike the map track).
+// ══════════════════════════════════════════════════════════════════════════
+function buildModeStrip(){
+  const host=document.getElementById('modestrip-track');
+  if (!host) return;
+  host.innerHTML='';
+  const clk=t=>{ const d=new Date(t); const p=n=>('0'+n).slice(-2); return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); };
+  const blocks=[];
+  let cur=null;   // {t0, m}
+  for (let i=0;i<ROWS.length;i++){
+    const r=ROWS[i], nx=ROWS[i+1];
+    if (!cur) cur={t0:r.t, m:r.m};
+    else if (r.m!==cur.m){ blocks.push({type:'mode', t0:cur.t0, t1:r.t, m:cur.m}); cur={t0:r.t, m:r.m}; }
+    if (!nx){ blocks.push({type:'mode', t0:cur.t0, t1:r.t, m:cur.m}); break; }
+    const dt=nx.t-r.t;
+    const reboot = r.sid!=null && nx.sid!=null && r.sid!==nx.sid;
+    if (dt>GAP_MS || reboot){
+      blocks.push({type:'mode', t0:cur.t0, t1:r.t, m:cur.m});
+      blocks.push({type:'gap', t0:r.t, t1:nx.t, reboot:!!reboot});
+      cur=null;
+    }
+  }
+  for (const b of blocks){
+    const left=((b.t0-TSTART)/SPAN)*100;
+    const width=Math.max(0.15, ((b.t1-b.t0)/SPAN)*100);
+    const el=document.createElement('div');
+    el.className='mblk '+(b.type==='gap' ? 'gap'+(b.reboot?' reboot':'') : 'm-'+(b.m||'NONE'));
+    el.style.left=left+'%'; el.style.width=width+'%';
+    el.title = b.type==='gap'
+      ? (b.reboot?'REBOOT — ':'GAP — ')+'no data '+clk(b.t0)+'–'+clk(b.t1)+' ('+fmtMmSs(b.t1-b.t0)+')'
+      : (b.m||'—')+'  '+clk(b.t0)+'–'+clk(b.t1)+' ('+fmtMmSs(b.t1-b.t0)+')';
+    host.appendChild(el);
+  }
+}
+function modeStripSetPlayhead(t){
+  const ph=document.getElementById('modestrip-ph');
+  if (!ph) return;
+  ph.style.left=(((t-TSTART)/SPAN)*100)+'%';
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -887,6 +1068,7 @@ function setTimeMs(t){
   LAST_T=t;
   // Always update clock + scrub + strip for smooth scrubbing.
   stripSetPlayhead(t);
+  modeStripSetPlayhead(t);
   const elapsed=t-TSTART;
   document.getElementById('time-elapsed').textContent=fmtMmSs(elapsed);
   document.getElementById('hud-clock').textContent='T+'+fmtMmSs(elapsed)+' / '+fmtMmSs(SPAN);
@@ -949,8 +1131,8 @@ function toggleBase(){
 function toggleTrack(){
   if (!live) return;
   const on=!map.hasLayer(live);
-  if (on){ live.addTo(map); ghost.addTo(map); }
-  else   { map.removeLayer(live); map.removeLayer(ghost); }
+  if (on){ live.addTo(map); if (modeTrackLayer) modeTrackLayer.addTo(map); if (gapLayer) gapLayer.addTo(map); }
+  else   { map.removeLayer(live); if (modeTrackLayer) map.removeLayer(modeTrackLayer); if (gapLayer) map.removeLayer(gapLayer); }
   document.getElementById('btn-track').classList.toggle('off', !on);
 }
 function toggleSound(){
@@ -1052,6 +1234,12 @@ function validSound(r){
          && r.lat!=null && r.lon!=null
          && (r.da==null || r.da<5000);
 }
+function modeColor(m){
+  if (m==='AUTO')     return '#00bfff';
+  if (m==='MANUAL')   return '#ffb347';
+  if (m==='FAILSAFE') return '#ff5a4d';
+  return '#86a6ab';   // IDLE / unknown
+}
 function depthColor(m){
   let t=(m-DMIN)/(DMAX-DMIN);
   if (t<0) t=0; if (t>1) t=1;
@@ -1135,9 +1323,11 @@ function wireEvents(){
       toast('Drop had no files. Try the CHOOSE FILE button.');
       return;
     }
-    const file = files[0];
-    console.log('[viewer] file:', file.name, file.size, 'bytes');
-    readFile(file);
+    // Dropping onto an already-open replay merges (stitch split-run files);
+    // dropping on the initial dropzone starts fresh.
+    const mergeOnto = !document.getElementById('app').hidden;
+    console.log('[viewer] dropped', files.length, 'file(s), merge=', mergeOnto);
+    readFiles(files, mergeOnto);
   });
 
   // File picker (works on every browser, no drag required).
@@ -1163,6 +1353,17 @@ function wireEvents(){
   document.getElementById('btn-load').addEventListener('click', ()=>{
     document.getElementById('filepicker').value='';
     document.getElementById('filepicker').click();
+  });
+  // ADD CSV — merge one or more files onto the current replay (stitch a run that
+  // the helm app split across several files on each reconnect).
+  const addpicker=document.getElementById('addpicker');
+  document.getElementById('btn-add').addEventListener('click', ()=>{ addpicker.value=''; addpicker.click(); });
+  addpicker.addEventListener('change', e=>{ if (e.target.files && e.target.files.length) readFiles(e.target.files, true); });
+
+  // Mode timeline click-to-seek.
+  document.getElementById('modestrip').addEventListener('click', e=>{
+    const rect=e.currentTarget.getBoundingClientRect();
+    seekFrac((e.clientX-rect.left)/rect.width);
   });
 
   // Layer controls.
@@ -1247,22 +1448,29 @@ if (document.readyState === 'loading') {
   wireEvents();
 }
 
-function readFile(file){
-  console.log('[viewer] readFile', file.name, file.size);
-  toast('Loading ' + file.name + ' …');
-  const reader=new FileReader();
-  reader.onload=()=>{
-    console.log('[viewer] FileReader loaded', String(reader.result).length, 'chars');
-    try {
-      loadFromText(String(reader.result), file.name);
-    } catch(err) {
-      console.error('[viewer] loadFromText threw', err);
-      toast('Parse error: ' + (err && err.message || err));
-    }
+// Read one or more files sequentially. The first uses the caller's merge flag
+// (false = replace); every subsequent file in the batch merges, so dropping /
+// picking several split-run CSVs at once stitches them in one shot.
+function readFiles(fileList, merge){
+  const list=Array.from(fileList||[]);
+  if (!list.length){ toast('No file selected.'); return; }
+  if (!merge) toast('Loading ' + list[0].name + (list.length>1?' (+'+(list.length-1)+')':'') + ' …');
+  const next=idx=>{
+    if (idx>=list.length) return;
+    const f=list[idx];
+    console.log('[viewer] readFile', f.name, f.size);
+    const reader=new FileReader();
+    reader.onload=()=>{
+      try { loadFromText(String(reader.result), f.name, idx===0 ? merge : true); }
+      catch(err){ console.error('[viewer] loadFromText threw', err); toast('Parse error: '+(err&&err.message||err)); }
+      next(idx+1);
+    };
+    reader.onerror=()=>{ toast('Failed to read '+f.name+': '+reader.error); next(idx+1); };
+    reader.readAsText(f);
   };
-  reader.onerror=()=>{ toast('Failed to read file: '+reader.error); };
-  reader.readAsText(file);
+  next(0);
 }
+function readFile(file, merge){ readFiles([file], merge); }
 </script>
 </body>
 </html>
