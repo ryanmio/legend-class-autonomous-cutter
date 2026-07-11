@@ -15,6 +15,7 @@ import Screen from '../components/Screen';
 import {
   FlightMeta, listFlights, deleteFlight,
   loadFlightCSV, loadFlightRows, extractTrack, getFlightFileUri, TrackPoint,
+  coreDiagnosticColumnsMissing,
 } from '../services/telemetryLogger';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'FlightDetail'>;
@@ -207,7 +208,7 @@ export default function FlightDetailScreen({ route, navigation }: Props) {
     webViewRef.current.injectJavaScript(`window.drawTrack(${payload});true;`);
   }, [webViewReady, track]);
 
-  const onShare = useCallback(async () => {
+  const doShare = useCallback(async () => {
     try {
       const uri = getFlightFileUri(id);
       const canShareFile = await Sharing.isAvailableAsync();
@@ -226,6 +227,27 @@ export default function FlightDetailScreen({ route, navigation }: Props) {
       Alert.alert('Share failed', String(e));
     }
   }, [id]);
+
+  const onShare = useCallback(async () => {
+    // Guard against silent schema drift before exporting a flight we may be
+    // betting a diagnosis on: if a firmware-boundary column (wifi_assoc/rssi) or
+    // a core key is missing, make the operator acknowledge it rather than ship a
+    // quietly-deficient CSV. Confirm-to-proceed so data is never lost.
+    const rows = await loadFlightRows(id);
+    const missing = coreDiagnosticColumnsMissing(rows);
+    if (missing.length) {
+      Alert.alert(
+        'Diagnostic columns missing',
+        `This flight's CSV is missing: ${missing.join(', ')}.\n\nThe reconnect-layer diagnosis may be incomplete — check the boat firmware version. Share anyway?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Share anyway', onPress: () => { void doShare(); } },
+        ],
+      );
+      return;
+    }
+    await doShare();
+  }, [id, doShare]);
 
   const onDelete = useCallback(() => {
     if (!meta) return;

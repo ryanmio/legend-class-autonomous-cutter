@@ -264,14 +264,20 @@ function cmpSemver(a: string, b: string): number {
   for (let i = 0; i < 3; i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d < 0 ? -1 : 1; }
   return 0;
 }
-function flightRanInstrumentedFw(forRows: LogRow[]): boolean {
+type AnyRow = Record<string, unknown>;
+function flightRanInstrumentedFw(forRows: AnyRow[]): boolean {
   for (const r of forRows) {
-    const v = (r as unknown as { v?: unknown }).v;
+    const v = r.v;
     if (typeof v === 'string' && cmpSemver(v, '0.8.3') >= 0) return true;
   }
   return false;
 }
-export function missingDiagnosticColumns(forRows: LogRow[]): string[] {
+// Checkable on ANY row set — the live buffer OR a saved flight parsed back from
+// disk: the core telemetry keys plus the firmware-boundary fields, which are the
+// real silent-drift risk since they cross from firmware into the app. Excludes
+// the reconnect columns (their presence is gap-conditional and known only at
+// capture time — see missingDiagnosticColumns).
+export function coreDiagnosticColumnsMissing(forRows: AnyRow[]): string[] {
   if (forRows.length === 0) return [];
   const present = new Set<string>();
   for (const r of forRows) for (const k of Object.keys(r)) present.add(k);
@@ -280,7 +286,15 @@ export function missingDiagnosticColumns(forRows: LogRow[]): string[] {
   if (flightRanInstrumentedFw(forRows)) {
     for (const k of ['wifi_assoc', 'rssi']) if (!present.has(k)) missing.push(k);
   }
-  if (sawReconnectStamp) {
+  return missing;
+}
+// Full capture-time check (live buffer): core fields + the reconnect columns,
+// asserted only when this flight actually stamped a reconnect (sawReconnectStamp).
+export function missingDiagnosticColumns(forRows: LogRow[]): string[] {
+  const missing = coreDiagnosticColumnsMissing(forRows as unknown as AnyRow[]);
+  if (forRows.length > 0 && sawReconnectStamp) {
+    const present = new Set<string>();
+    for (const r of forRows) for (const k of Object.keys(r)) present.add(k);
     for (const k of [COL_POLL_TRACE, COL_RECONNECT_VIA]) if (!present.has(k)) missing.push(k);
   }
   return missing;
