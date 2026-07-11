@@ -200,7 +200,7 @@ static void handleStatus() {
 
 static void handleTelemetry() {
     addCORS();
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<3072> doc;
     doc["v"]            = FIRMWARE_VERSION;
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
@@ -329,9 +329,10 @@ static void handleTelemetry() {
 
     // A payload that fills (or overflows) out[] leaves ArduinoJson no room to
     // null-terminate it; server.send() would then read out[] as a C-string
-    // past its end. Hard-guard rather than ever send that — never observed
-    // in practice (WARN fires well below this), but cheap to make impossible.
-    char out[2048];
+    // past its end. Hard-guard rather than ever send that. static (not stack):
+    // handlers run only on the single network task, so it's non-reentrant, and
+    // keeping 3 KB off the task stack leaves NET_TASK_STACK more headroom, not less.
+    static char out[3072];
     size_t jsonLen = measureJson(doc);
     if (jsonLen >= sizeof(out) - 1) {
         Serial.printf("[telemetry] ERROR json=%u exceeds %u buffer, dropping frame\n",
@@ -339,7 +340,7 @@ static void handleTelemetry() {
         server.send(500, "application/json", "{\"ok\":false,\"err\":\"telemetry too large\"}");
         return;
     }
-    if (jsonLen > 1800) Serial.printf("[telemetry] WARN json=%u bytes near 2048 buffer\n", (unsigned)jsonLen);
+    if (jsonLen > 2800) Serial.printf("[telemetry] WARN json=%u bytes near 3072 buffer\n", (unsigned)jsonLen);
     serializeJson(doc, out);
     server.send(200, "application/json", out);
 }
