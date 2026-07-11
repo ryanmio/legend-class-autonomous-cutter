@@ -24,12 +24,12 @@
 // Legacy AsyncStorage layout (flight:<id> → CSV body) is migrated on
 // first listFlights() call after upgrade.
 
-import { Share, AppState, AppStateStatus, Alert } from 'react-native';
+import { Share, AppState, AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { TelemetryData } from '../types';
-import { subscribe, getCurrentIP, getLastFailureKind, drainFailureTrace } from './websocketService';
+import { subscribe, getCurrentIP, drainFailCounts } from './websocketService';
 import { fetchHistorySince, HistoryRecord } from './historyService';
 
 export interface LogRow extends TelemetryData {
@@ -111,21 +111,17 @@ export function start() {
   if (unsubscribe) return;
   lastCheckpointAt = 0;   // checkpoint on the next tick, not 30 s in
   pendingGaps = [];       // a fresh flight inherits no stale gaps
-  sawReconnectStamp = false;
-  backgroundedSinceLastFrame = false;
+  pendingPollFail = null;
   unsubscribe = subscribe((data) => {
     const row = { ts: Date.now(), ...data } as LogRow;
     // If autoOnFrame just flagged this frame as a reconnect (it runs first —
-    // subscribed at init, before this recorder), stamp both reconnect columns
-    // together. pendingPollTrace is the single "this is a reconnect row" signal
-    // (always set on a detected gap), so blank poll_trace ⇒ not a reconnect row.
-    // Pairs with the boat-side wifi_assoc on the backfilled rows.
-    if (pendingPollTrace !== null) {
-      const rec = row as unknown as Record<string, unknown>;
-      rec[COL_POLL_TRACE]    = pendingPollTrace;
-      rec[COL_RECONNECT_VIA] = pendingReconnectVia;
-      pendingPollTrace = null;
-      pendingReconnectVia = null;
+    // subscribed at init, before this recorder), stamp the app's failed-poll
+    // tally over the gap. A blank poll_fail ⇒ not a reconnect row; "t0 n0" ⇒
+    // reconnect but the app wasn't polling. Pairs with the boat-side wifi_assoc
+    // on the backfilled rows.
+    if (pendingPollFail !== null) {
+      (row as unknown as Record<string, unknown>).poll_fail = pendingPollFail;
+      pendingPollFail = null;
     }
     rows.push(row);
     if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
@@ -246,67 +242,6 @@ export function parseCSV(csv: string): Array<Record<string, string>> {
   return out;
 }
 
-// ── Export schema guard ────────────────────────────────────────────────────
-// The CSV header is the union of keys across rows (see columns()), so a field
-// the layer diagnosis depends on could silently vanish — a firmware rename, an
-// app change — and still produce a valid-looking CSV missing that column. For a
-// run we can't easily repeat, that silent drift is the real risk. This is a
-// conditional presence check (NOT a full allowlist) that reports any expected
-// field that's absent when it's expected:
-//   uptime, session_id         — always (every live telemetry frame carries them)
-//   wifi_assoc, rssi           — only if the boat ran instrumented firmware (v>=0.8.3)
-//   poll_trace, reconnect_via  — only if this flight actually stamped a reconnect
-// Column ORDER is deterministic (ts, v, then the rest alphabetical), but the SET
-// is presence-dependent, so consumers must parse by header name, not index.
-function cmpSemver(a: string, b: string): number {
-  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < 3; i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d < 0 ? -1 : 1; }
-  return 0;
-}
-type AnyRow = Record<string, unknown>;
-function flightRanInstrumentedFw(forRows: AnyRow[]): boolean {
-  for (const r of forRows) {
-    const v = r.v;
-    if (typeof v === 'string' && cmpSemver(v, '0.8.3') >= 0) return true;
-  }
-  return false;
-}
-// Checkable on ANY row set — the live buffer OR a saved flight parsed back from
-// disk: the core telemetry keys plus the firmware-boundary fields, which are the
-// real silent-drift risk since they cross from firmware into the app. Excludes
-// the reconnect columns (their presence is gap-conditional and known only at
-// capture time — see missingDiagnosticColumns).
-// NOTE: this is pure observability and MUST NEVER throw into a save/share/record
-// path — a malformed row must not cost a flight. Both entry points swallow any
-// error and report "nothing missing" (fail open: never block the real action).
-export function coreDiagnosticColumnsMissing(forRows: AnyRow[]): string[] {
-  try {
-    if (forRows.length === 0) return [];
-    const present = new Set<string>();
-    for (const r of forRows) if (r) for (const k of Object.keys(r)) present.add(k);
-    const missing: string[] = [];
-    for (const k of ['uptime', 'session_id']) if (!present.has(k)) missing.push(k);
-    if (flightRanInstrumentedFw(forRows)) {
-      for (const k of ['wifi_assoc', 'rssi']) if (!present.has(k)) missing.push(k);
-    }
-    return missing;
-  } catch { return []; }
-}
-// Full capture-time check (live buffer): core fields + the reconnect columns,
-// asserted only when this flight actually stamped a reconnect (sawReconnectStamp).
-export function missingDiagnosticColumns(forRows: LogRow[]): string[] {
-  try {
-    const missing = coreDiagnosticColumnsMissing(forRows as unknown as AnyRow[]);
-    if (forRows.length > 0 && sawReconnectStamp) {
-      const present = new Set<string>();
-      for (const r of forRows) if (r) for (const k of Object.keys(r)) present.add(k);
-      for (const k of [COL_POLL_TRACE, COL_RECONNECT_VIA]) if (!present.has(k)) missing.push(k);
-    }
-    return missing;
-  } catch { return []; }
-}
-
 // Builds CSV from the current in-memory buffer — kept for backward
 // compatibility with code that calls getCSV() directly. New code
 // should prefer the saved-flight flow (saveFlight / loadFlight).
@@ -321,16 +256,6 @@ export async function exportShare(): Promise<void> {
   if (rows.length === 0) {
     await Share.share({ message: 'No telemetry rows captured yet.' });
     return;
-  }
-  // Surface silent schema drift at export time (non-blocking — still export the
-  // file so a hard-to-repeat run's data is never lost to a failed assertion).
-  const missing = missingDiagnosticColumns(rows);
-  if (missing.length) {
-    console.warn('[telemetryLogger] export missing diagnostic columns:', missing.join(', '));
-    Alert.alert(
-      'Diagnostic columns missing',
-      `This export is missing: ${missing.join(', ')}.\n\nThe file still exported, but the reconnect-layer diagnosis may be incomplete — check the boat firmware and app versions before relying on it.`,
-    );
   }
   const csv = getCSV();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -647,8 +572,6 @@ async function finalizeAndSave(): Promise<void> {
   const startTs = snapshot[0].ts;
   const endTs   = snapshot[snapshot.length - 1].ts;
   const id      = new Date(startTs).toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const missing = missingDiagnosticColumns(snapshot);
-  if (missing.length) console.warn(`[telemetryLogger] saved flight ${id} missing diagnostic columns:`, missing.join(', '));
   const csv     = rowsToCSV(snapshot);
   const stats   = computeStats(snapshot as unknown as StatsInput);
 
@@ -719,17 +642,9 @@ let autoTickHandle: ReturnType<typeof setInterval> | null = null;
 // uptime (s) of the previous frame we saw — used to spot a gap on reconnect.
 let autoPrevUptimeS: number | null = null;
 // Set by autoOnFrame when it detects a reconnect gap; consumed by the row
-// recorder to tag the reconnect frame with the app's socket-failure kind and the
-// per-attempt outcome trace across the gap.
-let pendingReconnectVia: string | null = null;
-let pendingPollTrace:    string | null = null;
-// Column names the layer diagnosis depends on — single source of truth so the
-// writer and the on-export presence check move together (rename-safe).
-const COL_RECONNECT_VIA = 'reconnect_via';
-const COL_POLL_TRACE    = 'poll_trace';
-// True once this flight has stamped at least one reconnect row, so the export
-// schema check asserts the reconnect columns only when a gap actually occurred.
-let sawReconnectStamp = false;
+// recorder to tag the reconnect frame with the app's failed-poll tally over the
+// gap ("t<timeouts> n<neterrors>"; "t0 n0" ⇒ the app wasn't polling).
+let pendingPollFail: string | null = null;
 
 // Pending gap backfills. A gap is detected the instant a frame's uptime jumps
 // past the previous frame's, but the /history fetch that fills it can fail
@@ -764,14 +679,10 @@ export function lastFrameAt(): number { return autoLastFrameAt; }
 // like a WiFi dropout. See onAppStateChange + autoTick.
 let appState: AppStateStatus = 'active';
 let appStateSub: { remove: () => void } | null = null;
-// Set whenever the app backgrounds; read at gap detection to tell "app wasn't
-// polling" (bg) apart from a foreground gap on the reconnect row's poll_trace.
-let backgroundedSinceLastFrame = false;
 
 function onAppStateChange(next: AppStateStatus) {
   const wasActive = appState === 'active';
   appState = next;
-  if (next !== 'active') backgroundedSinceLastFrame = true;
   if (next === 'active' && !wasActive && unsubscribe) {
     // Returned to foreground: the silence while away wasn't the boat leaving,
     // so give it a fresh boat-gone window. The missed records (incl. depth) are
@@ -831,26 +742,15 @@ function autoOnFrame(data: TelemetryData) {
       version: data.v,
       attempts: 0,
     });
-    // What the app's poller saw while the gap was open. poll_trace disambiguates
-    // an otherwise-blank cell into three distinct meanings (a blank cell on a
-    // normal row still just means "not a reconnect row"):
-    //   'bg'       app was backgrounded → poll timer frozen, no polls fired
-    //   'fg-empty' foreground but no failed polls recorded (anomaly)
-    //   tokens     one '<t|n>@<sec>' per failed poll (t=timeout, n=neterror),
-    //              sec = seconds since the gap's first failed poll
-    const trace = drainFailureTrace();
-    pendingReconnectVia = getLastFailureKind() ?? 'none';
-    pendingPollTrace = backgroundedSinceLastFrame
-      ? 'bg'
-      : trace.length === 0
-        ? 'fg-empty'
-        : trace.map((a) => `${a.k === 'timeout' ? 't' : 'n'}@${Math.round((a.t - trace[0].t) / 1000)}`).join(',');
-    sawReconnectStamp = true;
+    // What the app's poller saw while the gap was open: timeouts vs neterrors.
+    // "t0 n0" ⇒ the app wasn't polling (backgrounded) — no AppState bookkeeping
+    // needed, since a foreground gap always registers failed polls.
+    const c = drainFailCounts();
+    pendingPollFail = `t${c.t} n${c.n}`;
     void pumpBackfills();
   }
 
   if (data.uptime != null) autoPrevUptimeS = data.uptime;
-  backgroundedSinceLastFrame = false;   // consumed for this frame; next gap re-evaluates
 }
 
 // Drain the pending-gap queue, oldest first, one fetch at a time. On a fetch
