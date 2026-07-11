@@ -4,6 +4,7 @@ import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as Haptics from 'expo-haptics';
+import { useKeepAwake } from 'expo-keep-awake';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { useTelemetry } from '../hooks/useTelemetry';
@@ -284,6 +285,7 @@ function modeColor(mode: string | undefined): string {
 // ── Screen ────────────────────────────────────────────────────────────────────
 export default function MapScreen({ route, navigation }: Props) {
   const { ip } = route.params;
+  useKeepAwake();   // operator watches the boat here; don't let the screen (and its polling) sleep
   const { data, connected } = useTelemetry();
   const webViewRef = useRef<WebView>(null);
   const insets     = useSafeAreaInsets();

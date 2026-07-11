@@ -29,7 +29,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { TelemetryData } from '../types';
-import { subscribe, getCurrentIP } from './websocketService';
+import { subscribe, getCurrentIP, getLastFailureKind } from './websocketService';
 import { fetchHistorySince, HistoryRecord } from './historyService';
 
 export interface LogRow extends TelemetryData {
@@ -112,7 +112,15 @@ export function start() {
   lastCheckpointAt = 0;   // checkpoint on the next tick, not 30 s in
   pendingGaps = [];       // a fresh flight inherits no stale gaps
   unsubscribe = subscribe((data) => {
-    rows.push({ ts: Date.now(), ...data });
+    const row = { ts: Date.now(), ...data } as LogRow;
+    // If autoOnFrame just flagged this frame as a reconnect (it runs first —
+    // subscribed at init, before this recorder), stamp what the app's socket saw
+    // during the gap. Pairs with the boat-side wifi_assoc on the backfilled rows.
+    if (pendingReconnectVia) {
+      (row as unknown as Record<string, unknown>).reconnect_via = pendingReconnectVia;
+      pendingReconnectVia = null;
+    }
+    rows.push(row);
     if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
     notifyCount();
   });
@@ -630,6 +638,9 @@ let autoEscAboveSince: number | null = null;
 let autoTickHandle: ReturnType<typeof setInterval> | null = null;
 // uptime (s) of the previous frame we saw — used to spot a gap on reconnect.
 let autoPrevUptimeS: number | null = null;
+// Set by autoOnFrame when it detects a reconnect gap; consumed by the row
+// recorder to tag the reconnect frame with the app's socket-failure kind.
+let pendingReconnectVia: string | null = null;
 
 // Pending gap backfills. A gap is detected the instant a frame's uptime jumps
 // past the previous frame's, but the /history fetch that fills it can fail
@@ -727,6 +738,10 @@ function autoOnFrame(data: TelemetryData) {
       version: data.v,
       attempts: 0,
     });
+    // What the app's poller saw while the gap was open (hung vs refused). The
+    // row recorder stamps it onto this reconnect frame; null if no failure was
+    // recorded (e.g. the app was backgrounded, not polling).
+    pendingReconnectVia = getLastFailureKind();
     void pumpBackfills();
   }
 

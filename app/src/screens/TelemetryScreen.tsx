@@ -4,6 +4,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { BATT_LOW_V, BATT_CRIT_V } from '../types';
+import { useKeepAwake } from 'expo-keep-awake';
 import { useTelemetry } from '../hooks/useTelemetry';
 import {
   getRowCount, subscribeCount, exportShare, clear as clearLogger,
@@ -59,6 +60,7 @@ function fmtElapsed(ms: number): string {
 }
 
 export default function TelemetryScreen({ navigation }: Props) {
+  useKeepAwake();   // live telemetry surface; keep the screen (and its polling) awake in the field
   const { data, connected } = useTelemetry();
   const [logRows, setLogRows] = useState(getRowCount());
   const [logging, setLogging] = useState(isRunning());
