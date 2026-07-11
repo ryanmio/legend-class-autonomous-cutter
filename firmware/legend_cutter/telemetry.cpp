@@ -333,6 +333,15 @@ static void handleTelemetry() {
     // handlers run only on the single network task, so it's non-reentrant, and
     // keeping 3 KB off the task stack leaves NET_TASK_STACK more headroom, not less.
     static char out[3072];
+    // The doc pool is heap-elastic: a failed allocation drops members silently and
+    // measureJson() then reports the TRUNCATED length, which would pass the size
+    // guard below and ship a 200 with fields missing or null. Size cannot see this
+    // (truncation makes the payload smaller), so check the pool itself.
+    if (doc.overflowed()) {
+        Serial.println("[telemetry] ERROR json doc overflowed (heap), dropping frame");
+        server.send(500, "application/json", "{\"ok\":false,\"err\":\"telemetry truncated\"}");
+        return;
+    }
     size_t jsonLen = measureJson(doc);
     if (jsonLen >= sizeof(out) - 1) {
         Serial.printf("[telemetry] ERROR json=%u exceeds %u buffer, dropping frame\n",
@@ -542,6 +551,14 @@ static void handleMissionGet() {
         JsonObject o = wps.createNestedObject();
         snprintf(b, sizeof(b), "%.6f", lat); o["lat"] = b;
         snprintf(b, sizeof(b), "%.6f", lon); o["lon"] = b;
+    }
+    // Same heap-elastic pool hazard as /telemetry: a truncated route would draw a
+    // polyline that silently disagrees with the mission the boat is flying, and
+    // this GET is not re-polled, so it would not self-correct within a session.
+    if (doc.overflowed()) {
+        Serial.println("[mission] ERROR json doc overflowed (heap), refusing truncated route");
+        server.send(500, "application/json", "{\"ok\":false,\"err\":\"mission truncated\"}");
+        return;
     }
     String out;
     serializeJson(doc, out);
