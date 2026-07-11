@@ -636,7 +636,15 @@ async function recoverDraft(): Promise<void> {
 
 let autoInitialized      = false;
 let autoLastSessionId: number | null = null;
+// Wall-clock ms of the last real telemetry frame received. Written ONLY by
+// autoOnFrame — never bumped on foreground — so it is a true "last contact"
+// timestamp for the Telemetry display (lastFrameAt).
 let autoLastFrameAt      = 0;
+// Foreground-grace anchor for the boat-gone detector ONLY. Bumped when the app
+// returns to the foreground while recording, so a backgrounded app's frozen
+// poll timer (its silence) isn't misread as "boat gone". Kept separate from
+// autoLastFrameAt so the display timer never jumps on foreground/navigation.
+let autoForegroundedAt   = 0;
 let autoEscAboveSince: number | null = null;
 let autoTickHandle: ReturnType<typeof setInterval> | null = null;
 // uptime (s) of the previous frame we saw — used to spot a gap on reconnect.
@@ -668,9 +676,10 @@ let pumpRunning = false;
 
 // Exposed so a future UI affordance can show "telemetry gap, recovering".
 export function pendingGapCount(): number { return pendingGaps.length; }
-// Wall-clock ms of the last live frame received (0 until the first frame).
-// Read-only; lets the Telemetry screen show "time since contact lost" without
-// reaching into engine state or altering any behavior.
+// Wall-clock ms of the last real frame received (0 until the first frame).
+// Frame-only — never bumped on foreground — so the Telemetry "time since
+// contact lost" display reflects true continuous elapsed time and survives
+// backgrounding and in-app navigation. Read-only; alters no behavior.
 export function lastFrameAt(): number { return autoLastFrameAt; }
 // Foreground state. While the app is backgrounded (e.g. you switch to the
 // camera) iOS freezes its poll timer, so it stops hearing the boat even though
@@ -685,9 +694,11 @@ function onAppStateChange(next: AppStateStatus) {
   appState = next;
   if (next === 'active' && !wasActive && unsubscribe) {
     // Returned to foreground: the silence while away wasn't the boat leaving,
-    // so give it a fresh boat-gone window. The missed records (incl. depth) are
-    // pulled in when the next poll frame arrives and autoOnFrame sees the jump.
-    autoLastFrameAt = Date.now();
+    // so give the boat-gone detector a fresh window via its own grace anchor
+    // (not autoLastFrameAt — that must stay a true last-contact timestamp). The
+    // missed records (incl. depth) are pulled in when the next poll frame
+    // arrives and autoOnFrame sees the uptime jump.
+    autoForegroundedAt = Date.now();
   }
 }
 
@@ -862,8 +873,14 @@ function autoTick() {
   // its silence says nothing about the boat. (Also covers the first tick after
   // resume firing before onAppStateChange — appState still reads non-active.)
   if (appState !== 'active') return;
-  if (autoLastFrameAt === 0) return;
-  if (now - autoLastFrameAt > AUTO_GONE_THRESHOLD_MS) {
+  // Judge silence against the later of the last real frame and the last
+  // foreground bump. This equals the old single-variable value (each event
+  // overwrote it with its own timestamp, so the live value was always the most
+  // recent of the two) — boat-gone behavior is unchanged; only the display
+  // anchor was split out.
+  const goneAnchor = Math.max(autoLastFrameAt, autoForegroundedAt);
+  if (goneAnchor === 0) return;
+  if (now - goneAnchor > AUTO_GONE_THRESHOLD_MS) {
     stop();  // saves the flight
   }
 }
