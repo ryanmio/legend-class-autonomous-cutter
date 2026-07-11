@@ -21,6 +21,10 @@ import { TelemetryData } from '../types';
 
 type Listener = (data: TelemetryData) => void;
 export type FailureKind = 'timeout' | 'neterror' | null;
+// One failed poll during an outage. k='timeout' = our 2s abort fired with no
+// response; k='neterror' = the fetch stack rejected (refused/reset/no-route —
+// RN doesn't expose which). t = Date.now() when it resolved.
+export interface PollAttempt { t: number; k: 'timeout' | 'neterror'; }
 
 const POLL_MS    = 1000;
 const TIMEOUT_MS = 2000;
@@ -30,6 +34,14 @@ let timeoutId: ReturnType<typeof setTimeout> | null = null;
 let currentIP  = '';
 let misses     = 0;
 let _lastFailureKind: FailureKind = null;
+// Per-attempt outcome trace for the CURRENT failure streak — drained by the
+// flight logger onto the reconnect frame so the next diagnostic run captures the
+// app's view of a gap (were the failed polls timeouts = boat/AP unreachable, or
+// neterrors = phone-side stack failure) alongside the boat's wifi_assoc. Reset
+// at the start of each streak; capped so a very long gap can't grow it unbounded.
+const TRACE_MAX = 600;
+let failureTrace: PollAttempt[] = [];
+let lastPollOk   = true;
 const listeners  = new Set<Listener>();
 let _connected   = false;
 // Most recent telemetry frame received this session. Exposed via
@@ -50,6 +62,7 @@ async function poll() {
     if (res.ok) {
       const data: TelemetryData = await res.json();
       misses     = 0;
+      lastPollOk = true;   // leave failureTrace intact for the logger to drain
       _lastData  = data;
       _connected = true;
       listeners.forEach((fn) => fn(data));
@@ -73,6 +86,9 @@ async function poll() {
 function registerMiss(kind: Exclude<FailureKind, null>) {
   misses++;
   _lastFailureKind = kind;
+  if (lastPollOk) failureTrace = [];   // first failure after a good poll → new streak
+  lastPollOk = false;
+  if (failureTrace.length < TRACE_MAX) failureTrace.push({ t: Date.now(), k: kind });
   if (misses >= MISS_LIMIT) _connected = false;
 }
 
@@ -83,6 +99,8 @@ export function connect(ip: string) {
   _lastData  = null;
   misses     = 0;
   _lastFailureKind = null;
+  failureTrace = [];
+  lastPollOk   = true;
   poll();                                          // immediate first poll; chains itself
 }
 
@@ -92,6 +110,8 @@ export function disconnect() {
   _lastData  = null;
   misses     = 0;
   _lastFailureKind = null;
+  failureTrace = [];
+  lastPollOk   = true;
   if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
 }
 
@@ -111,6 +131,15 @@ export function isConnected(): boolean {
 // rows to localize which layer dropped.
 export function getLastFailureKind(): FailureKind {
   return _lastFailureKind;
+}
+
+// Drains (returns and clears) the per-attempt failure trace for the streak that
+// just ended. The flight logger calls this on the reconnect frame to stamp the
+// gap. Empty if the app wasn't polling (e.g. backgrounded) or there was no gap.
+export function drainFailureTrace(): PollAttempt[] {
+  const tr = failureTrace;
+  failureTrace = [];
+  return tr;
 }
 
 export function getLastData(): TelemetryData | null {

@@ -29,7 +29,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { TelemetryData } from '../types';
-import { subscribe, getCurrentIP, getLastFailureKind } from './websocketService';
+import { subscribe, getCurrentIP, getLastFailureKind, drainFailureTrace } from './websocketService';
 import { fetchHistorySince, HistoryRecord } from './historyService';
 
 export interface LogRow extends TelemetryData {
@@ -119,6 +119,10 @@ export function start() {
     if (pendingReconnectVia) {
       (row as unknown as Record<string, unknown>).reconnect_via = pendingReconnectVia;
       pendingReconnectVia = null;
+    }
+    if (pendingPollTrace) {
+      (row as unknown as Record<string, unknown>).poll_trace = pendingPollTrace;
+      pendingPollTrace = null;
     }
     rows.push(row);
     if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
@@ -639,8 +643,10 @@ let autoTickHandle: ReturnType<typeof setInterval> | null = null;
 // uptime (s) of the previous frame we saw — used to spot a gap on reconnect.
 let autoPrevUptimeS: number | null = null;
 // Set by autoOnFrame when it detects a reconnect gap; consumed by the row
-// recorder to tag the reconnect frame with the app's socket-failure kind.
+// recorder to tag the reconnect frame with the app's socket-failure kind and the
+// per-attempt outcome trace across the gap.
 let pendingReconnectVia: string | null = null;
+let pendingPollTrace:    string | null = null;
 
 // Pending gap backfills. A gap is detected the instant a frame's uptime jumps
 // past the previous frame's, but the /history fetch that fills it can fail
@@ -739,9 +745,16 @@ function autoOnFrame(data: TelemetryData) {
       attempts: 0,
     });
     // What the app's poller saw while the gap was open (hung vs refused). The
-    // row recorder stamps it onto this reconnect frame; null if no failure was
+    // row recorder stamps these onto this reconnect frame; null if no failure was
     // recorded (e.g. the app was backgrounded, not polling).
     pendingReconnectVia = getLastFailureKind();
+    // Per-attempt trace: one token per failed poll, chronological, "<kind>@<sec>"
+    // where sec is seconds since the first failed poll of the gap (t=timeout,
+    // n=neterror). Endpoints are pinned by the surrounding rows' timestamps.
+    const trace = drainFailureTrace();
+    pendingPollTrace = trace.length
+      ? trace.map((a) => `${a.k === 'timeout' ? 't' : 'n'}@${Math.round((a.t - trace[0].t) / 1000)}`).join(',')
+      : null;
     void pumpBackfills();
   }
 
