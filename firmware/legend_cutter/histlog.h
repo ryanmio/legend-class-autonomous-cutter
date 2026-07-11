@@ -1,12 +1,21 @@
 // histlog.h
-// Onboard telemetry history — a RAM ring buffer of compact per-second records,
-// recorded continuously whether or not WiFi/the app is connected. On reconnect
-// the app pulls whatever it missed via GET /history (handler in telemetry.cpp)
-// so the flight log stays unbroken across a WiFi dropout.
+// Onboard telemetry history — a RAM ring buffer of compact records, recorded
+// continuously whether or not WiFi/the app is connected. On reconnect the app
+// pulls whatever it missed via GET /history (handler in telemetry.cpp) so the
+// flight log stays unbroken across a WiFi dropout.
+//
+// Uniform-rate retention: capture is 1 s, so any dropout of ≤20 min is recorded
+// entirely at 1 s. If the app has been gone longer than HISTLOG_COARSEN_AFTER_MS,
+// the ring coarsens ONCE — it retroactively thins the stored data to
+// HISTLOG_COARSE_MS spacing and continues capturing at that rate, so the whole
+// recording is a single uniform interval (2 s → ~40 min). This one-time thin
+// runs on core 1 only while the app is absent (that is its trigger), so no
+// /history read races it; histlogCoarsening() gates the read as a backstop.
 //
 // RAM-only by design: a reboot clears it, but the app already ends a flight on
 // a reboot (session_id change), so the ring never holds data the system would
-// otherwise have kept. Sizing is in config.h (HISTLOG_CAPACITY/_INTERVAL_MS).
+// otherwise have kept. Sizing/cadence is in config.h (HISTLOG_CAPACITY,
+// HISTLOG_INTERVAL_MS, HISTLOG_COARSE_MS, HISTLOG_COARSEN_AFTER_MS).
 //
 // This module only RECORDS and exposes a read API; it never touches outputs,
 // WiFi, or the live /telemetry contract — flashing it changes no behavior.
@@ -58,3 +67,4 @@ void     histlogBegin();                  // reset the ring (call once in setup)
 void     histlogUpdate();                 // rate-limited capture (call every loop)
 uint16_t histlogCount();                  // valid records currently buffered
 const HistRecord* histlogAt(uint16_t i);  // i=0 oldest … count-1 newest; NULL if oob
+bool     histlogCoarsening();             // true only during the one-time in-place thin

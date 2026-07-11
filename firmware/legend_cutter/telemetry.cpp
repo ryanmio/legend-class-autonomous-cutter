@@ -46,11 +46,17 @@ static uint32_t  sessionId = 0;     // hardware-random, set once in telemetryBeg
 static volatile bool   wifiAssocPub = false;
 static volatile int8_t wifiRssiPub  = 0;    // dBm when associated, else 0
 
+// millis() of the last app request, written by the core-0 handlers and read
+// cross-core by histlog (core 1). Lock-free, expendable — same discipline as
+// the WiFi publishes above.
+static volatile uint32_t lastClientMs = 0;
+
 uint16_t    telemetryCruiseUs()             { return cruiseUs; }
 void        telemetrySetCruiseUs(uint16_t us) { cruiseUs = us; }  // control loop only (cmdApply)
 const char* telemetryBoatIP()               { return boatIP.c_str(); }
 bool        telemetryWifiAssoc()            { return wifiAssocPub; }
 int8_t      telemetryWifiRssiDbm()          { return wifiRssiPub; }
+uint32_t    telemetryLastClientMs()         { return lastClientMs; }
 
 // Network task's worst-case-ever free stack (bytes). Queried from the loop's
 // serial console; uxTaskGetStackHighWaterMark works cross-task given the handle.
@@ -200,6 +206,7 @@ static void handleStatus() {
 
 static void handleTelemetry() {
     addCORS();
+    lastClientMs = millis();   // app is here; keeps histlog at 1 s (no coarsen)
     StaticJsonDocument<3072> doc;
     doc["v"]            = FIRMWARE_VERSION;
     doc["session_id"]   = sessionId;
@@ -859,6 +866,22 @@ static void appendHistRecord(String& out, const HistRecord* r) {
 
 static void handleHistory() {
     addCORS();
+    lastClientMs = millis();   // app is back; resets histlog cadence to 1 s
+
+    // Backstop for the "no /history reader during the one-time coarsen" invariant.
+    // The coarsen runs on core 1 only after the app has been gone >20 min, so a
+    // reader is not normally present; if one lands in that µs window, serve an
+    // empty page — the app's backfill loop retries and gets the clean view next.
+    if (histlogCoarsening()) {
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        char busy[80];
+        snprintf(busy, sizeof(busy), "{\"session_id\":%lu,\"more\":false,\"records\":[]}",
+                 (unsigned long)sessionId);
+        server.sendContent(busy);
+        server.sendContent("");
+        return;
+    }
 
     uint32_t since = 0;
     if (server.hasArg("since_ms")) since = strtoul(server.arg("since_ms").c_str(), NULL, 10);

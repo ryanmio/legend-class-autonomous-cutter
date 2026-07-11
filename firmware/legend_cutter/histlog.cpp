@@ -19,17 +19,55 @@
 extern const char* vesselModeName();
 extern bool        vesselFailsafeAck();
 
-static HistRecord ring[HISTLOG_CAPACITY];   // ~43 KB static (.bss)
+static HistRecord ring[HISTLOG_CAPACITY];   // ~58 KB static (.bss)
 static uint16_t   head          = 0;        // next write slot
 static uint16_t   count         = 0;        // valid records (≤ HISTLOG_CAPACITY)
 static uint32_t   seqCounter    = 0;
 static uint32_t   lastCaptureMs = 0;
+
+// Uniform-rate retention state. intervalMs starts fine (1 s); after a >20 min
+// app absence it flips to coarse (2 s) for the rest of that dropout. `coarsened`
+// makes the one-time thin fire exactly once; `coarsening` is the read backstop.
+static uint32_t       intervalMs = HISTLOG_INTERVAL_MS;
+static bool           coarsened  = false;
+static volatile bool  coarsening = false;   // read cross-core by /history (core 0)
 
 void histlogBegin() {
     head = 0;
     count = 0;
     seqCounter = 0;
     lastCaptureMs = 0;
+    intervalMs = HISTLOG_INTERVAL_MS;
+    coarsened = false;
+    coarsening = false;
+}
+
+bool histlogCoarsening() { return coarsening; }
+
+// One-time retroactive thin. Keeps every `stride`-th record counting BACK FROM
+// THE NEWEST — so the newest survives and the ongoing capture phase lines up
+// with the kept data (uniform spacing across the seam). Single forward pass over
+// the same anchor: each dest slot (oldest+k) is a logical position already read
+// earlier in the pass, so no kept record is overwritten before it is copied —
+// no scratch buffer, no shift-under-reader. Runs on core 1 only when the app has
+// been gone >20 min, so no /history read is in flight; `coarsening` guards the
+// µs window in case a reconnect lands exactly here.
+static void coarsenRing(uint16_t stride) {
+    if (count == 0) return;
+    coarsening = true;
+    uint16_t oldest = (head + HISTLOG_CAPACITY - count) % HISTLOG_CAPACITY;
+    uint16_t kept   = (uint16_t)((count + stride - 1) / stride);   // ceil(count/stride)
+    uint16_t first  = (uint16_t)((count - 1) - (uint16_t)((kept - 1) * stride)); // oldest kept logical idx
+    for (uint16_t k = 0; k < kept; k++) {
+        uint16_t srcLogical = (uint16_t)(first + k * stride);
+        ring[(oldest + k) % HISTLOG_CAPACITY] = ring[(oldest + srcLogical) % HISTLOG_CAPACITY];
+    }
+    count         = kept;                                          // reduced count published last
+    head          = (uint16_t)((oldest + kept) % HISTLOG_CAPACITY);
+    lastCaptureMs = ring[(oldest + kept - 1) % HISTLOG_CAPACITY].uptimeMs; // phase-anchor to newest kept
+    intervalMs    = HISTLOG_COARSE_MS;
+    coarsened     = true;
+    coarsening    = false;
 }
 
 static uint8_t modeCode(const char* m) {
@@ -41,7 +79,22 @@ static uint8_t modeCode(const char* m) {
 
 void histlogUpdate() {
     uint32_t now = millis();
-    if (lastCaptureMs != 0 && (now - lastCaptureMs) < HISTLOG_INTERVAL_MS) return;
+
+    // One-time coarsening: the app has been gone STRICTLY MORE than the window
+    // (a dropout of ≤20 min stays 1 s — the boundary is exclusive) and the ring
+    // is still fine. Thin what's stored and switch cadence to coarse.
+    if (!coarsened && (now - telemetryLastClientMs()) > HISTLOG_COARSEN_AFTER_MS) {
+        coarsenRing((uint16_t)(HISTLOG_COARSE_MS / HISTLOG_INTERVAL_MS));
+    }
+    // Contact resumed after a coarsened dropout → return to 1 s for the NEXT
+    // dropout. Stored coarse data is untouched; the app's since_ms cursor bounds
+    // future backfills, so recordings never mix rates.
+    if (coarsened && (now - telemetryLastClientMs()) < (2u * HISTLOG_INTERVAL_MS)) {
+        intervalMs = HISTLOG_INTERVAL_MS;
+        coarsened  = false;
+    }
+
+    if (lastCaptureMs != 0 && (now - lastCaptureMs) < intervalMs) return;
     lastCaptureMs = now;
 
     HistRecord r;

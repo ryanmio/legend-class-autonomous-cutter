@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.8.5"
+#define FIRMWARE_VERSION "0.9.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -277,6 +277,13 @@ static const uint8_t  CMD_QUEUE_LEN   = 8;     // SPSC ring depth (commands are 
 //   1200 @ 1 Hz ≈ 20 min (~57 KB static) — covers any realistic single dropout,
 //   since the app backfills on each reconnect (the ring only spans one gap).
 static const uint16_t HISTLOG_CAPACITY    = 1200;
-static const uint32_t HISTLOG_INTERVAL_MS = 1000;
+static const uint32_t HISTLOG_INTERVAL_MS = 1000;   // fine (1 s) capture cadence
 // Max records returned per /history response; the app pages with since_ms.
 static const uint16_t HISTLOG_PAGE_MAX    = 100;
+// Uniform-rate retention. The ring captures at 1 s so a dropout of ≤20 min is
+// recorded entirely at 1 s. If the app has been gone longer than COARSEN_AFTER,
+// the ring coarsens ONCE (retroactively thins stored data to the coarse rate and
+// continues at it) so the whole recording stays a single uniform interval —
+// 1200 records × 2 s ≈ 40 min. Set COARSE_MS to 3000 for ≈60 min at 3 s spacing.
+static const uint32_t HISTLOG_COARSE_MS       = 2000;             // coarse cadence (2 s → 40 min)
+static const uint32_t HISTLOG_COARSEN_AFTER_MS = 20UL * 60 * 1000; // app-absent before coarsening

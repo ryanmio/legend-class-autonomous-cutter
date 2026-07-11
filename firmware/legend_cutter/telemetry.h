@@ -32,3 +32,8 @@ const char* telemetryBoatIP();          // c-string; empty if not connected
 // safe to call from the control loop / histlog (core 1) without a network call.
 bool       telemetryWifiAssoc();        // true if the STA is associated to the AP
 int8_t     telemetryWifiRssiDbm();      // last RSSI dBm when associated, else 0
+
+// millis() of the last app HTTP request (/telemetry or /history), bumped by the
+// core-0 handlers. Read cross-core by histlog (core 1) to tell how long the app
+// has been gone — the trigger for one-time history coarsening. 0 = none yet.
+uint32_t   telemetryLastClientMs();
