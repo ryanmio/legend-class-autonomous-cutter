@@ -232,19 +232,24 @@ export default function FlightDetailScreen({ route, navigation }: Props) {
     // Guard against silent schema drift before exporting a flight we may be
     // betting a diagnosis on: if a firmware-boundary column (wifi_assoc/rssi) or
     // a core key is missing, make the operator acknowledge it rather than ship a
-    // quietly-deficient CSV. Confirm-to-proceed so data is never lost.
-    const rows = await loadFlightRows(id);
-    const missing = coreDiagnosticColumnsMissing(rows);
-    if (missing.length) {
-      Alert.alert(
-        'Diagnostic columns missing',
-        `This flight's CSV is missing: ${missing.join(', ')}.\n\nThe reconnect-layer diagnosis may be incomplete — check the boat firmware version. Share anyway?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Share anyway', onPress: () => { void doShare(); } },
-        ],
-      );
-      return;
+    // quietly-deficient CSV. The check must NEVER block the share — any failure
+    // loading/checking falls straight through to sharing.
+    try {
+      const rows = await loadFlightRows(id);
+      const missing = coreDiagnosticColumnsMissing(rows);
+      if (missing.length) {
+        Alert.alert(
+          'Diagnostic columns missing',
+          `This flight's CSV is missing: ${missing.join(', ')}.\n\nThe reconnect-layer diagnosis may be incomplete — check the boat firmware version. Share anyway?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Share anyway', onPress: () => { void doShare(); } },
+          ],
+        );
+        return;
+      }
+    } catch {
+      // fall through — never let the guard prevent a share
     }
     await doShare();
   }, [id, doShare]);

@@ -277,27 +277,34 @@ function flightRanInstrumentedFw(forRows: AnyRow[]): boolean {
 // real silent-drift risk since they cross from firmware into the app. Excludes
 // the reconnect columns (their presence is gap-conditional and known only at
 // capture time — see missingDiagnosticColumns).
+// NOTE: this is pure observability and MUST NEVER throw into a save/share/record
+// path — a malformed row must not cost a flight. Both entry points swallow any
+// error and report "nothing missing" (fail open: never block the real action).
 export function coreDiagnosticColumnsMissing(forRows: AnyRow[]): string[] {
-  if (forRows.length === 0) return [];
-  const present = new Set<string>();
-  for (const r of forRows) for (const k of Object.keys(r)) present.add(k);
-  const missing: string[] = [];
-  for (const k of ['uptime', 'session_id']) if (!present.has(k)) missing.push(k);
-  if (flightRanInstrumentedFw(forRows)) {
-    for (const k of ['wifi_assoc', 'rssi']) if (!present.has(k)) missing.push(k);
-  }
-  return missing;
+  try {
+    if (forRows.length === 0) return [];
+    const present = new Set<string>();
+    for (const r of forRows) if (r) for (const k of Object.keys(r)) present.add(k);
+    const missing: string[] = [];
+    for (const k of ['uptime', 'session_id']) if (!present.has(k)) missing.push(k);
+    if (flightRanInstrumentedFw(forRows)) {
+      for (const k of ['wifi_assoc', 'rssi']) if (!present.has(k)) missing.push(k);
+    }
+    return missing;
+  } catch { return []; }
 }
 // Full capture-time check (live buffer): core fields + the reconnect columns,
 // asserted only when this flight actually stamped a reconnect (sawReconnectStamp).
 export function missingDiagnosticColumns(forRows: LogRow[]): string[] {
-  const missing = coreDiagnosticColumnsMissing(forRows as unknown as AnyRow[]);
-  if (forRows.length > 0 && sawReconnectStamp) {
-    const present = new Set<string>();
-    for (const r of forRows) for (const k of Object.keys(r)) present.add(k);
-    for (const k of [COL_POLL_TRACE, COL_RECONNECT_VIA]) if (!present.has(k)) missing.push(k);
-  }
-  return missing;
+  try {
+    const missing = coreDiagnosticColumnsMissing(forRows as unknown as AnyRow[]);
+    if (forRows.length > 0 && sawReconnectStamp) {
+      const present = new Set<string>();
+      for (const r of forRows) if (r) for (const k of Object.keys(r)) present.add(k);
+      for (const k of [COL_POLL_TRACE, COL_RECONNECT_VIA]) if (!present.has(k)) missing.push(k);
+    }
+    return missing;
+  } catch { return []; }
 }
 
 // Builds CSV from the current in-memory buffer — kept for backward
