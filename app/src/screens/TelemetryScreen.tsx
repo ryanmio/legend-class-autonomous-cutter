@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -8,7 +8,7 @@ import { useTelemetry } from '../hooks/useTelemetry';
 import {
   getRowCount, subscribeCount, exportShare, clear as clearLogger,
   start as startLogger, stop as stopLogger,
-  isRunning, subscribeRunning,
+  isRunning, subscribeRunning, lastFrameAt, pendingGapCount,
 } from '../services/telemetryLogger';
 import Screen from '../components/Screen';
 
@@ -51,6 +51,11 @@ function magRowWarn(data: { mag_uT?: string; mag_baseline_uT?: string; mag_calib
     return Math.abs(live - base) / base > 0.25;
   }
   return false;
+}
+
+function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 export default function TelemetryScreen({ navigation }: Props) {
@@ -99,6 +104,9 @@ export default function TelemetryScreen({ navigation }: Props) {
             )}
           </View>
         </View>
+
+        {/* ── Contact / sync status ─────────────────────────────── */}
+        <SyncStatus />
 
         {/* ── Battery card (prominent) ──────────────────────────── */}
         <View style={[styles.battCard, { borderLeftColor: voltageColor(battV) }]}>
@@ -254,6 +262,62 @@ function Section({ label }: { label: string }) {
   );
 }
 
+// Contact / sync status bar (Telemetry screen only — the Helm screen stays
+// uncluttered). Renders NOTHING while connected and caught up; appears only when
+// it has something to say: how long since the last frame while out of contact,
+// SYNCING… while the /history backfill drains on reconnect, then a brief
+// SYNC COMPLETE. Pure read of logger state via a 1 Hz tick — changes nothing.
+const CONTACT_STALE_MS = 4_000;         // no frame in this long ⇒ out of contact
+const RING_WARN_MS     = 15 * 60_000;   // boat ring holds ~20 min; amber as it fills
+const RING_CRIT_MS     = 20 * 60_000;   // past the ring — oldest un-synced data overwriting
+
+function SyncStatus() {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const last = lastFrameAt();
+  const pending = pendingGapCount();
+  const sinceContact = last > 0 ? now - last : Infinity;
+  const inContact = sinceContact < CONTACT_STALE_MS;
+
+  // Brief "SYNC COMPLETE" the moment the backfill queue drains from >0 to 0.
+  const prevPending = useRef(0);
+  const [syncedAt, setSyncedAt] = useState(0);
+  useEffect(() => {
+    if (prevPending.current > 0 && pending === 0) setSyncedAt(Date.now());
+    prevPending.current = pending;
+  }, [pending]);
+
+  let text: string | null;
+  let color: string = Colors.success;
+  if (!inContact) {
+    color = sinceContact > RING_CRIT_MS ? Colors.danger
+          : sinceContact > RING_WARN_MS ? Colors.warning
+          : Colors.textSecondary;
+    text = last > 0 ? `NO CONTACT · ${fmtElapsed(sinceContact)}` : 'NO CONTACT';
+  } else if (pending > 0) {
+    color = Colors.warning;
+    text = 'SYNCING…';
+  } else if (now - syncedAt < 4_000) {
+    text = 'SYNC COMPLETE ✓';
+  } else {
+    // Connected and caught up — nothing to report, so render nothing and stay
+    // out of the way. The top-bar ● dot already signals "connected".
+    text = null;
+  }
+
+  if (text == null) return null;
+
+  return (
+    <View style={[styles.syncBar, { borderColor: color }]}>
+      <Text style={[styles.syncText, { color }]}>{text}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
 
@@ -275,6 +339,10 @@ const styles = StyleSheet.create({
   battMetaRow:    { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 12 },
   battMeta:       { color: Colors.textSecondary, fontSize: 12, fontFamily: 'monospace' },
   battThreshold:  { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', opacity: 0.6 },
+
+  // Contact / sync status bar
+  syncBar:       { borderWidth: 1, borderRadius: 4, paddingVertical: 6, paddingHorizontal: 12, marginBottom: 12, alignItems: 'center', backgroundColor: Colors.surface },
+  syncText:      { fontSize: 12, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
 
   // Failsafe ACK callout
   ackCallout:    { backgroundColor: Colors.danger, padding: 10, borderRadius: 4, marginBottom: 12 },

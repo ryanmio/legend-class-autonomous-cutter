@@ -75,11 +75,14 @@ const MAX_ROWS = 7200;
 // Auto-engine tuning.
 const AUTO_ESC_DEADBAND_US   = 30;        // |esc_us - 1500| must exceed this
 const AUTO_ESC_DEBOUNCE_MS   = 500;       // ...for this long to auto-start
-// Boat truly gone → finalize so the flight isn't lost. Set well above any
-// realistic WiFi dropout: a blip is bridged by /history backfill, not by
-// ending the flight. Tied to the boat's ~20 min history ring — beyond it the
-// gap can't be fully recovered anyway. Manual stop ends a flight immediately.
-const AUTO_GONE_THRESHOLD_MS = 300_000;   // 5 min of no frames = boat is gone
+// Boat truly gone → finalize so the flight isn't lost. Set to the boat's full
+// ~20 min history ring: a WiFi dropout (or the app being backgrounded for the
+// camera) is bridged by /history backfill, not by ending the flight, so this
+// only needs to fire when the boat is genuinely gone. Crash-safety is the 30 s
+// draft checkpoint + launch recovery, independent of this — so a longer window
+// costs no data. Only judged while foregrounded (see autoTick). Manual STOP
+// ends a flight immediately.
+const AUTO_GONE_THRESHOLD_MS = 1_200_000;   // 20 min of no frames = boat is gone
 const AUTO_TICK_MS           = 5_000;     // how often to check for telemetry loss
 // Uptime jump (s) between two received frames that means we missed data and
 // should backfill the hole from /history. Normal cadence is ~1 s/frame.
@@ -650,6 +653,10 @@ let pumpRunning = false;
 
 // Exposed so a future UI affordance can show "telemetry gap, recovering".
 export function pendingGapCount(): number { return pendingGaps.length; }
+// Wall-clock ms of the last live frame received (0 until the first frame).
+// Read-only; lets the Telemetry screen show "time since contact lost" without
+// reaching into engine state or altering any behavior.
+export function lastFrameAt(): number { return autoLastFrameAt; }
 // Foreground state. While the app is backgrounded (e.g. you switch to the
 // camera) iOS freezes its poll timer, so it stops hearing the boat even though
 // the boat is fine and still recording. We must not mistake that silence for
