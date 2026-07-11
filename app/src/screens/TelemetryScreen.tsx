@@ -9,7 +9,7 @@ import { useTelemetry } from '../hooks/useTelemetry';
 import {
   getRowCount, subscribeCount, exportShare, clear as clearLogger,
   start as startLogger, stop as stopLogger,
-  isRunning, subscribeRunning, lastFrameAt, pendingGapCount,
+  isRunning, subscribeRunning, lastFrameAt, pendingGapCount, syncProgress,
 } from '../services/telemetryLogger';
 import Screen from '../components/Screen';
 
@@ -302,7 +302,14 @@ function SyncStatus() {
     text = last > 0 ? `NO CONTACT · ${fmtElapsed(sinceContact)}` : 'NO CONTACT';
   } else if (pending > 0) {
     color = Colors.warning;
-    text = 'SYNCING…';
+    // Show received-of-estimated rows so the operator sees it advancing (a
+    // stalled or resetting count = bad link). The ~Y is a fuzzy estimate, so
+    // it's prefixed with ~ and never gates completion (that's the pending→0
+    // edge above). Falls back to a bare label before the first page lands.
+    const p = syncProgress();
+    text = p && p.total > 0
+      ? `SYNCING ${p.synced} of ~${p.total} rows`
+      : 'SYNCING…';
   } else if (now - syncedAt < 4_000) {
     text = 'SYNC COMPLETE ✓';
   } else {

@@ -40,10 +40,19 @@ export async function fetchHistoryPage(ip: string, sinceMs: number): Promise<His
 // Page through every record newer than sinceMs (firmware caps each page; we
 // follow the cursor until `more` is false). Returns the boat's session_id so
 // the caller can refuse to merge across a reboot.
+//
+// onPage (optional) reports progress: called after each page is confirmed
+// received (the fetch resolved and its records are in hand), with the running
+// count of records received so far this call. It is display-only — it does not
+// change the return value, and the caller still advances its persistent
+// watermark only after this whole call resolves and the records are merged. If
+// a page throws, this call rejects and the accumulated `out` is discarded, so
+// the reported progress for a failed call is provisional by design.
 export async function fetchHistorySince(
   ip: string,
   sinceMs: number,
   maxPages = 50,
+  onPage?: (receivedSoFar: number) => void,
 ): Promise<{ sessionId: number; records: HistoryRecord[] }> {
   let cursor = sinceMs;
   let sessionId = 0;
@@ -56,6 +65,7 @@ export async function fetchHistorySince(
       out.push(r);
       cursor = r.uptime_ms;
     }
+    onPage?.(out.length);   // page confirmed received; report cumulative count
     if (!p.more) break;
   }
   return { sessionId, records: out };

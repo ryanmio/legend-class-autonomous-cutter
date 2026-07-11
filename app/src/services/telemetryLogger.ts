@@ -31,6 +31,7 @@ import * as Sharing from 'expo-sharing';
 import { TelemetryData } from '../types';
 import { subscribe, getCurrentIP, drainFailCounts } from './websocketService';
 import { fetchHistorySince, HistoryRecord } from './historyService';
+import { HISTORY_RING_CAPACITY } from '../constants';
 
 export interface LogRow extends TelemetryData {
   ts: number;             // ms since epoch when the frame was received
@@ -670,12 +671,30 @@ interface PendingGap {
   sessionId: number | null; // boat session at detection; reboot guard
   version?: string;
   attempts: number;
+  totalEst: number;         // estimated rows in this gap (≈ its span in seconds,
+                            // capped at the ring depth) — the "of ~Y" denominator
 }
 let pendingGaps: PendingGap[] = [];
 let pumpRunning = false;
 
+// Sync-progress display state for the gap currently being pumped. syncSynced is
+// a running count of rows CONFIRMED RECEIVED this attempt; it resets to 0 at the
+// start of each gap attempt (a failed attempt refetches from sinceMs, so prior
+// rows are re-pulled, not added — a resetting count is the honest "bad link,
+// looping" signal). Pure display: never advances any watermark. Sampled by the
+// Telemetry screen's 1 Hz tick, like pendingGapCount — no listener needed.
+let syncSynced   = 0;
+let syncTotalEst = 0;
+
 // Exposed so a future UI affordance can show "telemetry gap, recovering".
 export function pendingGapCount(): number { return pendingGaps.length; }
+// Rows confirmed-received vs estimated total for the in-flight backfill, or null
+// when nothing is pending. synced is clamped ≤ total (the ~Y estimate is fuzzy);
+// completion is driven off pendingGapCount()→0, never off synced reaching total.
+export function syncProgress(): { synced: number; total: number } | null {
+  if (pendingGaps.length === 0) return null;
+  return { synced: syncSynced, total: syncTotalEst };
+}
 // Wall-clock ms of the last real frame received (0 until the first frame).
 // Frame-only — never bumped on foreground — so the Telemetry "time since
 // contact lost" display reflects true continuous elapsed time and survives
@@ -752,6 +771,12 @@ function autoOnFrame(data: TelemetryData) {
       sessionId: data.session_id ?? null,
       version: data.v,
       attempts: 0,
+      // Estimated rows in the gap ≈ its span in seconds (ring stores ~1/s),
+      // bounded by what the ring can actually hold. Display-only denominator.
+      totalEst: Math.min(
+        Math.max(1, Math.round(data.uptime - autoPrevUptimeS)),
+        HISTORY_RING_CAPACITY,
+      ),
     });
     // What the app's poller saw while the gap was open: timeouts vs neterrors.
     // "t0 n0" ⇒ the app wasn't polling (backgrounded) — no AppState bookkeeping
@@ -779,8 +804,16 @@ async function pumpBackfills(): Promise<void> {
       const ip = getCurrentIP();
       if (!ip) break;                                  // no link; retry on next tick
       const g = pendingGaps[0];
+      // New attempt at this gap → progress restarts from 0. A prior failed
+      // attempt refetched from g.sinceMs, so its rows are being re-pulled, not
+      // accumulated; the reset is the truthful "it's looping" signal.
+      syncSynced   = 0;
+      syncTotalEst = g.totalEst;
       try {
-        const { sessionId, records } = await fetchHistorySince(ip, g.sinceMs, BACKFILL_MAX_PAGES);
+        const { sessionId, records } = await fetchHistorySince(
+          ip, g.sinceMs, BACKFILL_MAX_PAGES,
+          (received) => { syncSynced = Math.min(received, syncTotalEst); },
+        );
         // Boat rebooted across this gap → ring is a different flight, the hole
         // is unrecoverable. Drop it rather than retrying forever.
         if (g.sessionId != null && sessionId !== g.sessionId) {

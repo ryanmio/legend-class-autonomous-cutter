@@ -7,6 +7,12 @@ export const HTTP_PORT = 80;
 
 export const TELEMETRY_RECONNECT_MS = 2000;
 
+// Depth of the boat's onboard telemetry history ring (records ≈ seconds).
+// Mirrors firmware config.h HISTLOG_CAPACITY — the boat returns at most this
+// many rows for a gap, so it's the ceiling for the sync-progress "of ~Y" total.
+// Keep in sync when the firmware ring is resized.
+export const HISTORY_RING_CAPACITY = 1200;
+
 // Dark nautical colour palette
 export const Colors = {
   background:   '#0a0f1a',
