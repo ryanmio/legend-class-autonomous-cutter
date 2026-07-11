@@ -40,9 +40,17 @@ static String       boatIP;
 static uint16_t  cruiseUs  = DEFAULT_CRUISE_US;
 static uint32_t  sessionId = 0;     // hardware-random, set once in telemetryBegin()
 
+// WiFi link state, published by networkTask (core 0) ~2 Hz and read cross-core
+// by histlogUpdate (core 1). Lock-free, expendable — same discipline as the
+// telemetry reads, so the control loop never touches a network function.
+static volatile bool   wifiAssocPub = false;
+static volatile int8_t wifiRssiPub  = 0;    // dBm when associated, else 0
+
 uint16_t    telemetryCruiseUs()             { return cruiseUs; }
 void        telemetrySetCruiseUs(uint16_t us) { cruiseUs = us; }  // control loop only (cmdApply)
 const char* telemetryBoatIP()               { return boatIP.c_str(); }
+bool        telemetryWifiAssoc()            { return wifiAssocPub; }
+int8_t      telemetryWifiRssiDbm()          { return wifiRssiPub; }
 
 // Network task's worst-case-ever free stack (bytes). Queried from the loop's
 // serial console; uxTaskGetStackHighWaterMark works cross-task given the handle.
@@ -197,6 +205,8 @@ static void handleTelemetry() {
     doc["session_id"]   = sessionId;
     doc["uptime"]       = millis() / 1000;
     doc["heap"]         = ESP.getFreeHeap();
+    doc["wifi_assoc"]   = wifiAssocPub;    // live rows are trivially associated;
+    doc["rssi"]         = wifiRssiPub;     // rssi is the real-time signal meter
     doc["mode"]         = vesselModeName();
     doc["cruise_us"]    = cruiseUs;
     doc["failsafe_ack"] = vesselFailsafeAck();
@@ -818,6 +828,11 @@ static void appendHistRecord(String& out, const HistRecord* r) {
     if (r->wpDist10 >= 0) {
         snprintf(buf, sizeof(buf), ",\"wp_dist_m\":\"%.1f\"", r->wpDist10 / 10.0f); out += buf;
     }
+    // Link state at capture — the whole point of the store-and-sync instrument:
+    // a backfilled gap now shows whether the boat was still on the hotspot.
+    snprintf(buf, sizeof(buf), ",\"wifi_assoc\":%s,\"rssi\":%d",
+             (r->flags & HIST_F_WIFI_ASSOC) ? "true" : "false", (int)r->rssiDbm);
+    out += buf;
     snprintf(buf, sizeof(buf), ",\"pump\":%s,\"failsafe_ack\":%s}",
              (r->flags & HIST_F_PUMP)         ? "true" : "false",
              (r->flags & HIST_F_FAILSAFE_ACK) ? "true" : "false");
@@ -920,9 +935,19 @@ void telemetryBegin() {
 // Owns all networking. A blocking send here delays only telemetry (expendable);
 // the control loop is on the other core and never waits behind it.
 static void networkTask(void*) {
+    static uint32_t lastWifiPubMs = 0;
     for (;;) {
         server.handleClient();
         wifiMaintain();
+        // Sample link state ~2 Hz so histlog/telemetry can report it. Cheap local
+        // driver reads, kept on core 0 — the control loop never calls WiFi.
+        uint32_t now = millis();
+        if (now - lastWifiPubMs >= 500) {
+            lastWifiPubMs = now;
+            bool assoc   = (WiFi.status() == WL_CONNECTED);
+            wifiAssocPub = assoc;
+            wifiRssiPub  = assoc ? (int8_t)WiFi.RSSI() : 0;
+        }
         vTaskDelay(1);          // yield ~1 tick; telemetry is best-effort
     }
 }

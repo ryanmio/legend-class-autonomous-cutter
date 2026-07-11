@@ -27,3 +27,8 @@ uint16_t   telemetryCruiseUs();         // current cruise target (read by the co
 void       telemetrySetCruiseUs(uint16_t us);  // applied by the control loop via cmdApply
 uint32_t   telemetryNetStackFreeBytes();       // network task worst-case free stack (bench 's' console)
 const char* telemetryBoatIP();          // c-string; empty if not connected
+
+// WiFi link state, sampled by the core-0 network task. Plain volatile reads —
+// safe to call from the control loop / histlog (core 1) without a network call.
+bool       telemetryWifiAssoc();        // true if the STA is associated to the AP
+int8_t     telemetryWifiRssiDbm();      // last RSSI dBm when associated, else 0

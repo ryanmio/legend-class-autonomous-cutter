@@ -40,7 +40,7 @@ struct HistRecord {
     uint8_t  flags;        // HIST_F_* bitfield
     uint8_t  wpIdx;        // active leg, 0-based (valid only if WP_SET flag)
     uint8_t  wpCount;      // total legs in the mission (valid only if WP_SET flag)
-    uint8_t  _pad;
+    int8_t   rssiDbm;      // STA RSSI dBm (valid only if WIFI_ASSOC flag; 0 = not associated)
 };
 
 static const uint8_t HIST_F_GPS_FIX      = 1 << 0;
@@ -48,6 +48,11 @@ static const uint8_t HIST_F_WP_SET       = 1 << 1;
 static const uint8_t HIST_F_CAPTURED     = 1 << 2;
 static const uint8_t HIST_F_PUMP         = 1 << 3;
 static const uint8_t HIST_F_FAILSAFE_ACK = 1 << 4;
+// Was the boat associated to the AP at capture time? Recorded on every sample so
+// a backfilled gap reveals whether the boat left the hotspot (assoc=0) or stayed
+// on it while only the app's socket died (assoc=1). Reuses the old struct pad +
+// one free flag bit — zero added bytes per record.
+static const uint8_t HIST_F_WIFI_ASSOC   = 1 << 5;
 
 void     histlogBegin();                  // reset the ring (call once in setup)
 void     histlogUpdate();                 // rate-limited capture (call every loop)

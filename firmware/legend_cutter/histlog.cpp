@@ -10,6 +10,7 @@
 #include "battery.h"
 #include "bilge.h"
 #include "sonar.h"
+#include "telemetry.h"
 
 #include <string.h>
 #include <math.h>
@@ -88,6 +89,13 @@ void histlogUpdate() {
     }
     if (bilgePumpOn())       flags |= HIST_F_PUMP;
     if (vesselFailsafeAck()) flags |= HIST_F_FAILSAFE_ACK;
+    // WiFi link state, published by the core-0 network task (getters below are
+    // plain volatile reads — no network call on this core-1 path). rssiDbm stays
+    // memset-0 when not associated.
+    if (telemetryWifiAssoc()) {
+        flags |= HIST_F_WIFI_ASSOC;
+        r.rssiDbm = telemetryWifiRssiDbm();
+    }
     r.flags = flags;
 
     ring[head] = r;
