@@ -70,7 +70,12 @@ export function startHeartbeat(): void {
       return;
     }
 
-    const desc = `state=${lastGoodState}>${AppState.currentState} busy=${lastGoodBusy}`;
+    // `at` is the wall-clock instant the freeze STARTED (now, less how late we
+    // are). A freeze that predates the first row — one right after connect —
+    // otherwise lands on row 0 with no way to place it in time; this is what
+    // makes it cross-correlatable against the Mac probe's absolute timeline.
+    const startedAt = new Date(now - late).toISOString().slice(11, 23);
+    const desc = `at=${startedAt} state=${lastGoodState}>${AppState.currentState} busy=${lastGoodBusy}`;
     freezeCount++;
     if (late > maxLateMs) {
       maxLateMs   = late;
