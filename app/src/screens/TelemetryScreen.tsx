@@ -59,7 +59,7 @@ function fmtElapsed(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export default function TelemetryScreen({ navigation }: Props) {
+export default function TelemetryScreen({ navigation, route }: Props) {
   useKeepAwake();   // live telemetry surface; keep the screen (and its polling) awake in the field
   const { data, connected } = useTelemetry();
   const [logRows, setLogRows] = useState(getRowCount());
@@ -94,7 +94,12 @@ export default function TelemetryScreen({ navigation }: Props) {
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
             <Text style={styles.backBtnText}>‹ HELM</Text>
           </TouchableOpacity>
-          <Text style={styles.pageTitle}>TELEMETRY</Text>
+          <View style={styles.titleCol}>
+            <Text style={styles.pageTitle}>TELEMETRY</Text>
+            {/* Long-press to copy — the boat's IP is otherwise only on the
+                Connection screen, which is unreachable mid-flight. */}
+            <Text style={styles.pageIp} selectable>{route.params.ip}</Text>
+          </View>
           <View style={styles.topBarRight}>
             <Text style={[styles.connDot, { color: connected ? Colors.success : Colors.danger }]}>●</Text>
             {data?.mode && (
@@ -334,7 +339,9 @@ const styles = StyleSheet.create({
   topBar:        { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   backBtn:       { paddingVertical: 6, paddingRight: 12 },
   backBtnText:   { color: Colors.accent, fontSize: 12, fontFamily: 'monospace', letterSpacing: 2, fontWeight: '700' },
-  pageTitle:     { flex: 1, textAlign: 'center', color: Colors.textPrimary, fontSize: 14, fontFamily: 'monospace', letterSpacing: 4, fontWeight: '800' },
+  titleCol:      { flex: 1, alignItems: 'center' },
+  pageTitle:     { textAlign: 'center', color: Colors.textPrimary, fontSize: 14, fontFamily: 'monospace', letterSpacing: 4, fontWeight: '800' },
+  pageIp:        { color: Colors.textSecondary, fontSize: 10, fontFamily: 'monospace', letterSpacing: 1, marginTop: 2 },
   topBarRight:   { flexDirection: 'row', alignItems: 'center', gap: 6 },
   connDot:       { fontSize: 10 },
   modeChip:      { borderWidth: 1.5, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3, minWidth: 80, alignItems: 'center' },
