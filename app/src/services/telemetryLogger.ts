@@ -30,6 +30,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { TelemetryData } from '../types';
 import { subscribe, getCurrentIP, drainFailCounts } from './websocketService';
+import { startHeartbeat, drainFreeze, setBusy } from './jsHeartbeat';
 import { fetchHistorySince, HistoryRecord } from './historyService';
 import { HISTORY_RING_CAPACITY } from '../constants';
 
@@ -101,6 +102,12 @@ const DISTANCE_STEP_MIN_M    = 1.5;
 const MODE_TIME_GAP_CAP_MS   = 10_000;
 
 let rows: LogRow[] = [];
+// Boat-seconds already present in `rows`, keyed by floor(uptime) — shared by BOTH
+// the live-append and backfill paths so a second can't enter twice. Kept in sync
+// with `rows`: added at each push, cleared whenever `rows` is emptied. (Trimming
+// old rows leaves stale entries, which is harmless — uptime is monotonic within a
+// flight, so a trimmed second never legitimately recurs.)
+let seenSeconds = new Set<number>();
 let unsubscribe: (() => void) | null = null;
 let countListeners:   Array<(count: number) => void>   = [];
 let runningListeners: Array<(running: boolean) => void> = [];
@@ -114,6 +121,17 @@ export function start() {
   pendingGaps = [];       // a fresh flight inherits no stale gaps
   pendingPollFail = null;
   unsubscribe = subscribe((data) => {
+    // Per-second dedup, shared with the backfill path: a boat-second the backfill
+    // already merged (its /history read can reach past the last live frame) must
+    // not be re-added when its live frame arrives a beat later, or the seam gets a
+    // delta-0 duplicate. Key on floor(uptime) — the same convention mergeBackfill
+    // now uses — so the two routes key identically. Check before consuming
+    // pendingPollFail so a skipped dup can't drop a reconnect marker (dup frames
+    // are never reconnect frames anyway).
+    const sec = typeof data.uptime === 'number' ? Math.floor(data.uptime) : null;
+    if (sec !== null && seenSeconds.has(sec)) return;
+    if (sec !== null) seenSeconds.add(sec);
+
     const row = { ts: Date.now(), ...data } as LogRow;
     // If autoOnFrame just flagged this frame as a reconnect (it runs first —
     // subscribed at init, before this recorder), stamp the app's failed-poll
@@ -123,6 +141,14 @@ export function start() {
     if (pendingPollFail !== null) {
       (row as unknown as Record<string, unknown>).poll_fail = pendingPollFail;
       pendingPollFail = null;
+    }
+    // Worst JS-timer freeze since the previous row. Drained per-row rather than
+    // per-gap so a freeze is captured even when it opened no telemetry gap — and
+    // so one that happens before the first row (a stall right after connect) lands
+    // on the first row of the flight instead of being lost.
+    const freeze = drainFreeze();
+    if (freeze !== null) {
+      (row as unknown as Record<string, unknown>).js_freeze = freeze;
     }
     rows.push(row);
     if (rows.length > MAX_ROWS) rows.splice(0, rows.length - MAX_ROWS);
@@ -146,6 +172,7 @@ export function stop() {
 // recording — matches the existing TelemetryScreen CLEAR button.
 export function clear() {
   rows = [];
+  seenSeconds.clear();             // dedup set mirrors rows
   deleteDraft().catch(() => {});   // don't let a stale draft resurrect discarded rows
   notifyCount();
 }
@@ -568,6 +595,7 @@ async function finalizeAndSave(): Promise<void> {
   // Reset state before the async write so a new flight can start
   // building without racing with the save.
   rows = [];
+  seenSeconds.clear();             // dedup set mirrors rows
   notifyCount();
 
   const startTs = snapshot[0].ts;
@@ -588,11 +616,14 @@ async function finalizeAndSave(): Promise<void> {
 // Best-effort mirror of the current buffer. Called on a timer while recording.
 async function checkpointDraft(): Promise<void> {
   if (rows.length === 0) return;
+  setBusy('checkpoint', true);
   try {
     await ensureFlightDir();
     await FileSystem.writeAsStringAsync(DRAFT_PATH, rowsToCSV(rows));
   } catch (e) {
     console.warn('[telemetryLogger] draft checkpoint failed', e);
+  } finally {
+    setBusy('checkpoint', false);
   }
 }
 
@@ -798,6 +829,7 @@ function autoOnFrame(data: TelemetryData) {
 async function pumpBackfills(): Promise<void> {
   if (pumpRunning) return;
   pumpRunning = true;
+  setBusy('backfill', true);
   try {
     while (pendingGaps.length > 0) {
       if (!unsubscribe) { pendingGaps = []; break; }  // flight ended
@@ -841,6 +873,7 @@ async function pumpBackfills(): Promise<void> {
     }
   } finally {
     pumpRunning = false;
+    setBusy('backfill', false);
   }
 }
 
@@ -855,17 +888,13 @@ function mergeBackfill(
 ): void {
   if (records.length === 0) return;
 
-  const seenSec = new Set<number>();
-  for (const r of rows) {
-    const u = (r as unknown as { uptime?: number }).uptime;
-    if (typeof u === 'number') seenSec.add(Math.round(u));
-  }
-
   let added = 0;
   for (const rec of records) {
-    const sec = Math.round(rec.uptime_ms / 1000);
-    if (seenSec.has(sec)) continue;  // already have a live frame for this second
-    seenSec.add(sec);
+    // floor, not round — matches the boat's live uptime (millis()/1000, a floor)
+    // so a backfilled second and its live twin share one key and can't both land.
+    const sec = Math.floor(rec.uptime_ms / 1000);
+    if (seenSeconds.has(sec)) continue;  // already have this second (live or backfilled)
+    seenSeconds.add(sec);
 
     const { seq, uptime_ms, ...fields } = rec;
     void seq;
@@ -923,6 +952,8 @@ function autoTick() {
 export function initAutoLogger() {
   if (autoInitialized) return;
   autoInitialized = true;
+  startHeartbeat();      // JS-thread liveness probe; must run from app mount so a
+                         // stall right after connect is caught, not just a mid-run one
   void recoverDraft();   // salvage a flight the app was killed mid-recording
   subscribe(autoOnFrame);
   appState = AppState.currentState ?? 'active';

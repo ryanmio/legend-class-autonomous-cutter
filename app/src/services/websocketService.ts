@@ -37,6 +37,7 @@ let _lastData:   TelemetryData | null = null;
 async function poll() {
   const ip = currentIP;
   if (!ip) return;
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let fresh: TelemetryData | null = null;
@@ -58,8 +59,15 @@ async function poll() {
     registerMiss(e?.name === 'AbortError' ? 'timeout' : 'neterror');
   } finally {
     clearTimeout(timer);
+    // Re-chain on a fixed wall-clock cadence: subtract the time this poll already
+    // took (RTT + parse) so successive polls start ~POLL_MS apart, not
+    // POLL_MS + RTT apart. A fixed period avoids aliasing the boat's 1 Hz
+    // telemetry, which previously dropped ~1 boat-second every ~13 s. Clamp ≥0 so
+    // a poll slower than POLL_MS just fires the next immediately.
     // Only re-chain if nothing else (a new connect()/disconnect()) took over.
-    if (currentIP === ip) timeoutId = setTimeout(poll, POLL_MS);
+    if (currentIP === ip) {
+      timeoutId = setTimeout(poll, Math.max(0, POLL_MS - (Date.now() - startedAt)));
+    }
   }
   if (fresh) {
     const data = fresh;
