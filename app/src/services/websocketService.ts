@@ -17,9 +17,18 @@ import { TelemetryData } from '../types';
 type Listener = (data: TelemetryData) => void;
 type FailureKind = 'timeout' | 'neterror';
 
-const POLL_MS    = 1000;
-const TIMEOUT_MS = 2000;
-const MISS_LIMIT = 2;   // consecutive failed polls before declaring disconnected
+const POLL_MS       = 1000;
+const TIMEOUT_MS    = 2000;
+const MISS_LIMIT    = 2;      // consecutive failed polls before declaring disconnected
+// While polls are FAILING, back off exponentially instead of re-polling every ~1 s.
+// Each failed poll abandons a TCP connection; on a link too weak to deliver the
+// teardown that leaves a half-open socket on the boat's single-client web server,
+// which holds it ~5 s (HTTP_MAX_DATA_WAIT). ~1 new connection/s outruns that and
+// jams the boat for everyone (see RECONNECT_STALL_REPORT.md). Backoff throttles the
+// churn below the boat's shed rate. The cap is deliberately > the boat's 5 s hold so
+// half-open sockets can't accumulate; kept low (8 s) because the boat is under
+// active supervision and we want to re-poll soon after the link returns.
+const BACKOFF_MAX_MS = 8000;
 
 let timeoutId: ReturnType<typeof setTimeout> | null = null;
 let currentIP  = '';
@@ -59,14 +68,19 @@ async function poll() {
     registerMiss(e?.name === 'AbortError' ? 'timeout' : 'neterror');
   } finally {
     clearTimeout(timer);
-    // Re-chain on a fixed wall-clock cadence: subtract the time this poll already
-    // took (RTT + parse) so successive polls start ~POLL_MS apart, not
-    // POLL_MS + RTT apart. A fixed period avoids aliasing the boat's 1 Hz
-    // telemetry, which previously dropped ~1 boat-second every ~13 s. Clamp ≥0 so
-    // a poll slower than POLL_MS just fires the next immediately.
-    // Only re-chain if nothing else (a new connect()/disconnect()) took over.
+    // Re-chain. Only if nothing else (a new connect()/disconnect()) took over.
     if (currentIP === ip) {
-      timeoutId = setTimeout(poll, Math.max(0, POLL_MS - (Date.now() - startedAt)));
+      // Healthy link (misses === 0, reset on this poll's success): keep the fixed
+      // ~1 Hz cadence — subtract the elapsed poll time so successive polls start
+      // ~POLL_MS apart and don't alias the boat's 1 Hz stream. The first success
+      // after an outage lands here, so a recovered link instantly returns to 1 Hz.
+      // Failing link: back off exponentially (1→2→4→8 s, capped) to throttle the
+      // connection churn that jams the boat. Flat delay after the poll (not
+      // start-relative) so the inter-connection gap actually grows.
+      const delay = misses === 0
+        ? Math.max(0, POLL_MS - (Date.now() - startedAt))
+        : Math.min(POLL_MS * 2 ** (misses - 1), BACKOFF_MAX_MS);
+      timeoutId = setTimeout(poll, delay);
     }
   }
   if (fresh) {

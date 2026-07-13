@@ -29,7 +29,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { TelemetryData } from '../types';
-import { subscribe, getCurrentIP, drainFailCounts } from './websocketService';
+import { subscribe, getCurrentIP, drainFailCounts, isConnected } from './websocketService';
 import { startHeartbeat, drainFreeze, setBusy } from './jsHeartbeat';
 import { fetchHistorySince, HistoryRecord } from './historyService';
 import { HISTORY_RING_CAPACITY } from '../constants';
@@ -833,6 +833,15 @@ async function pumpBackfills(): Promise<void> {
   try {
     while (pendingGaps.length > 0) {
       if (!unsubscribe) { pendingGaps = []; break; }  // flight ended
+      // Don't pull /history while the live telemetry link is unhealthy. A backfill
+      // over a failing link almost always fails anyway ("syncing 0 of N"), and each
+      // attempt opens another connection to the boat's single-client server — the
+      // same churn that jams it during an outage (see RECONNECT_STALL_REPORT.md).
+      // break (not shift): the gap stays QUEUED and fills on the next tick/frame
+      // once the live link is back — the first successful poll flips isConnected()
+      // true, and the reconnect frame runs this pump. So a gap is deferred, not
+      // dropped, even across an arbitrarily long outage.
+      if (!isConnected()) break;
       const ip = getCurrentIP();
       if (!ip) break;                                  // no link; retry on next tick
       const g = pendingGaps[0];
