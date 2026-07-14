@@ -9,6 +9,7 @@
 static Adafruit_INA219 ina(INA219_ADDR);
 static bool     ok       = false;
 static float    volts    = 0.0f;
+static float    busVolts = 0.0f;
 static float    amps     = 0.0f;
 static uint32_t lastPoll = 0;
 
@@ -21,10 +22,12 @@ void batteryUpdate() {
     if (!ok) return;
     if (millis() - lastPoll < INA_POLL_INTERVAL_MS) return;
     lastPoll = millis();
-    volts = ina.getBusVoltage_V() + (ina.getShuntVoltage_mV() / 1000.0f);
+    busVolts = ina.getBusVoltage_V();
+    volts = busVolts + (ina.getShuntVoltage_mV() / 1000.0f);
     amps  = ina.getCurrent_mA() / 1000.0f;
 }
 
 bool  batteryAvailable() { return ok; }
 float batteryVolts()     { return volts; }
+float batteryBusVolts()  { return busVolts; }
 float batteryAmps()      { return amps; }

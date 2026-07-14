@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.9.0"
+#define FIRMWARE_VERSION "0.10.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -159,6 +159,20 @@ static const float    MAG_CAL_CENTER_SHIFT_UT = 3.0f;   // re-bin coverage if ce
 
 // ── Battery (INA219) ───────────────────────────────────────────────────────
 static const uint32_t INA_POLL_INTERVAL_MS = 250;
+
+// ── Low-voltage alarm (passive annunciation ONLY — never touches control) ────
+// Reads the INA219 bus voltage. Below LOWER the HV bus is dead (laptop-USB
+// powers only the logic rail, batt_v ≈ 0) → stay silent (bench/USB). Trigger
+// only inside the (LOWER, UPPER) window sustained for TRIGGER_SUSTAIN_MS, which
+// rejects transient motor-load sag. Latches: clears only on bus > UPPER sustained
+// for CLEAR_SUSTAIN_MS; once latched a dip below LOWER keeps annunciating (not a
+// return to bench/USB). RAM latch — a power cycle clears it. HORN_INTERVAL_MS is
+// the repeat cadence of the annunciation horn while latched.
+static const float    LOWVOLT_LOWER_V            = 6.0f;
+static const float    LOWVOLT_UPPER_V            = 13.2f;
+static const uint32_t LOWVOLT_TRIGGER_SUSTAIN_MS = 30000;
+static const uint32_t LOWVOLT_CLEAR_SUSTAIN_MS   = 30000;
+static const uint32_t LOWVOLT_HORN_INTERVAL_MS   = 10000;
 
 // ── Depth sonar (RCWL-1655) ────────────────────────────────────────────────
 // RCWL-1655 — NOT a JSN-SR04T. Confirmed bench-good 2026-03-15 in test_04.

@@ -19,6 +19,7 @@
 #include "audio.h"
 #include "radar.h"
 #include "lights.h"
+#include "lowvolt.h"
 #include "weapons.h"
 #include "histlog.h"
 #include "cmd.h"
@@ -273,6 +274,7 @@ static void handleTelemetry() {
         snprintf(buf, sizeof(buf), "%.2f", batteryVolts()); doc["batt_v"] = buf;
         // batt_a dropped: shunt failed, reads a constant 0. Voltage still good.
     }
+    doc["low_volt_alarm"] = lowVoltActive();
 
     // Position
     doc["gps_fix"] = gpsValid();
@@ -704,6 +706,20 @@ static void handleAudio() {
     server.send(200, "application/json", out);
 }
 
+// Bench test path for the low-voltage alarm. Forces the REAL latch (via the cmd
+// queue → lowVoltForceLatch on core 1), so it exercises the actual annunciation:
+// repeating horn, nav-light double-blink, and the low_volt_alarm telemetry flag.
+// On the bench (USB, HV bus ≈ 0 V, below LOWER) the latch will not self-clear, so
+// it annunciates until a power cycle — same as any real latch.
+static void handleTestLowVolt() {
+    addCORS();
+    if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
+    if (server.method() != HTTP_POST)    { server.send(405, "text/plain", "Method Not Allowed"); return; }
+    Command c = {}; c.type = CMD_LOWVOLT_TEST;
+    if (!cmdEnqueue(c)) { server.send(503, "application/json", "{\"ok\":false,\"err\":\"busy\"}"); return; }
+    server.send(200, "application/json", "{\"ok\":true,\"forced\":\"low_volt_alarm\"}");
+}
+
 static void handleBilge() {
     addCORS();
     if (server.method() == HTTP_OPTIONS) { server.send(204); return; }
@@ -951,6 +967,8 @@ void telemetryBegin() {
     server.on("/led",       HTTP_OPTIONS, handleOptions);
     server.on("/audio",     HTTP_POST,    handleAudio);
     server.on("/audio",     HTTP_OPTIONS, handleOptions);
+    server.on("/test/lowvolt", HTTP_POST,    handleTestLowVolt);
+    server.on("/test/lowvolt", HTTP_OPTIONS, handleOptions);
     server.on("/bilge",     HTTP_POST,    handleBilge);
     server.on("/bilge",     HTTP_OPTIONS, handleOptions);
     server.on("/radar",     HTTP_POST,    handleRadar);
@@ -976,7 +994,8 @@ void telemetryBegin() {
 // Owns all networking. A blocking send here delays only telemetry (expendable);
 // the control loop is on the other core and never waits behind it.
 static void networkTask(void*) {
-    static uint32_t lastWifiPubMs = 0;
+    static uint32_t lastWifiPubMs   = 0;
+    static uint32_t lastAlarmHornMs = 0;
     for (;;) {
         server.handleClient();
         wifiMaintain();
@@ -989,6 +1008,22 @@ static void networkTask(void*) {
             wifiAssocPub = assoc;
             wifiRssiPub  = assoc ? (int8_t)WiFi.RSSI() : 0;
         }
+
+        // Low-voltage alarm horn — serviced HERE (core 0) on purpose: the DF1201S
+        // UART is already a core-0-only peripheral (POST /audio), and audioPlay()'s
+        // mandatory pause+50 ms would otherwise block the control loop. This runs
+        // UNCONDITIONALLY — no client, no WiFi association required — because the
+        // alarm's whole purpose is the app-closed case. handleClient()/wifiMaintain()
+        // above are non-blocking when idle, so nothing gates or stalls this poll.
+        if (lowVoltActive()) {
+            if (audioAvailable() && now - lastAlarmHornMs >= LOWVOLT_HORN_INTERVAL_MS) {
+                lastAlarmHornMs = now;
+                audioPlay(AUDIO_HORN);
+            }
+        } else {
+            lastAlarmHornMs = 0;    // next latch fires the horn immediately
+        }
+
         vTaskDelay(1);          // yield ~1 tick; telemetry is best-effort
     }
 }

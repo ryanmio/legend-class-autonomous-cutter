@@ -34,6 +34,7 @@
 #include "audio.h"
 #include "radar.h"
 #include "lights.h"
+#include "lowvolt.h"
 #include "weapons.h"
 #include "telemetry.h"
 #include "histlog.h"
@@ -194,6 +195,7 @@ static void cmdApply(const Command& c) {
       case CMD_DEPTH_PING:     sonarPingNow();                                 break;
       case CMD_MAGCAL_START:   imuMagCalBegin();                               break;
       case CMD_MAGCAL_ABORT:   imuMagCalAbort();                               break;
+      case CMD_LOWVOLT_TEST:   lowVoltForceLatch();                           break;
     }
 }
 static void cmdDrain() {
@@ -225,6 +227,7 @@ void setup() {
     Serial.printf("\n[BOOT] %s firmware v%s\n", VESSEL_NAME, FIRMWARE_VERSION);
 
     lightsBegin();
+    lowVoltBegin();
     bilgeBegin();
     radarBegin();
     sonarBegin();
@@ -285,6 +288,7 @@ void loop() {
     gpsUpdate();
     imuUpdateCogTrim();
     cmdDrain();                // apply operator commands queued by the core-0 network task
+    lowVoltUpdate();           // passive low-voltage alarm SM + nav-flash (after cmdDrain: alarm overrides manual nav)
     histlogUpdate();           // rate-limited capture into the RAM history ring
 
     // Compute + apply.

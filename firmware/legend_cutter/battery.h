@@ -10,5 +10,6 @@ bool batteryBegin();   // false if INA219 not at INA219_ADDR
 void batteryUpdate();
 
 bool  batteryAvailable();
-float batteryVolts();
+float batteryVolts();      // bus + shunt (telemetry convention; shunt reads ~0)
+float batteryBusVolts();   // INA219 bus voltage only — the true HV rail (low-volt alarm)
 float batteryAmps();

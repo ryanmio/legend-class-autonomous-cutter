@@ -25,6 +25,7 @@ enum CmdType : uint8_t {
     CMD_DEPTH_PING,
     CMD_MAGCAL_START,
     CMD_MAGCAL_ABORT,
+    CMD_LOWVOLT_TEST,     // bench: force the low-voltage alarm latch (POST /test/lowvolt)
 };
 
 // One flat record. Fields are NOT reused across command types — clarity over
