@@ -91,30 +91,12 @@
     background: var(--ink-2); /* shows when no image */
   }
 
-  /* HERO IMAGE — swap .hero-bg-ph for <img class="hero-bg" src="assets/hero.jpg" alt="..."> */
   .hero-bg {
     position: absolute; inset: 0; width: 100%; height: 100%;
     object-fit: cover; display: block; z-index: 0;
   }
-  .hero-bg-ph {
-    background-image: repeating-linear-gradient(180deg, rgba(255,255,255,.016) 0 1px, transparent 1px 80px);
-  }
-  /* raked stripe decoration shown in placeholder only */
-  .hero-bg-ph .raked { position: absolute; inset: 0; pointer-events: none; opacity: .7; }
-  .hero-bg-ph .raked b { position: absolute; top: -15%; height: 130%; transform: skewX(-26deg); }
-  .hero-bg-ph .raked .red { right: 20%; width: 78px; background: var(--cg-red); box-shadow: 0 0 60px rgba(228,0,43,.2); }
-  .hero-bg-ph .raked .blu { right: calc(20% - 50px); width: 34px; background: var(--cg-blue); }
-  .hero-bg-ph .glow {
-    position: absolute; right: -10%; top: -30%; width: 60vw; height: 80vh;
-    background: radial-gradient(closest-side, rgba(0,58,140,.2), transparent 70%);
-  }
-  .hero-bg-ph-label {
-    position: absolute; bottom: 50%; left: 50%; transform: translate(-50%, 50%);
-    font-family: var(--fs-mono); font-size: 11px; letter-spacing: .2em; text-transform: uppercase;
-    color: var(--haze-dim);
-  }
 
-  /* gradient so text always reads over photo or placeholder */
+  /* gradient so text always reads over the photo */
   .hero-overlay {
     position: absolute; inset: 0; z-index: 1;
     background: linear-gradient(175deg, rgba(18,22,27,.1) 0%, rgba(18,22,27,.5) 55%, var(--ink) 95%);
@@ -188,6 +170,20 @@
   .media::before { left: 12px; top: 12px; border-right: 0; border-bottom: 0; }
   .media::after  { right: 12px; bottom: 12px; border-left: 0; border-top: 0; }
   .media img, .media video { width: 100%; height: 100%; object-fit: cover; }
+  /* YouTube facade: styled poster + play button; the real iframe loads only on click. */
+  .yt-facade { position: relative; display: block; width: 100%; padding: 0; border: 0; cursor: pointer;
+    background-color: var(--ink-2); background-size: cover; background-position: center; }
+  .yt-facade::before { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(11,15,20,.12), rgba(11,15,20,.55)); }
+  .yt-facade .play { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    background: rgba(11,15,20,.35); transition: transform .15s ease, border-color .15s ease; }
+  .yt-facade:hover .play, .yt-facade:focus-visible .play { transform: translate(-50%,-50%) scale(1.06); border-color: var(--cg-red); }
+  .yt-facade:hover .play::after, .yt-facade:focus-visible .play::after { border-left-color: #fff; }
+  .yt-facade .cap { position: absolute; left: 16px; bottom: 14px; z-index: 1;
+    font-family: var(--fs-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--haze); text-shadow: 0 1px 6px rgba(0,0,0,.6); }
+  .yt-facade .play { z-index: 1; }
+  .media .yt-frame { width: 100%; height: 100%; border: 0; display: block; }
   figure.shot { margin: 0; }
   figure.shot figcaption {
     font-family: var(--fs-mono); font-size: 11.5px; letter-spacing: .1em;
@@ -376,13 +372,9 @@
 <!-- ====================== HERO ====================== -->
 <section class="hero" id="top" style="padding-block: 0;">
 
-  <!-- HERO IMAGE — when the shot is ready, replace the placeholder div below with:
-         <img class="hero-bg" src="assets/hero.jpg" alt="Legend Cutter underway" />
-       The .hero-overlay gradient and .hero-stripes (raked USCG stripes) already sit on top. -->
-  <div class="hero-bg hero-bg-ph" aria-hidden="true">
-    <div class="glow"></div>
-    <span class="hero-bg-ph-label">Hero image — coming soon</span>
-  </div>
+  <!-- HERO IMAGE — assets/hero.jpg. The .hero-overlay gradient and .hero-stripes
+       (raked USCG stripes) sit on top so the headline always reads. -->
+  <img class="hero-bg" src="assets/hero.jpg" alt="The 1:96 Legend-class cutter underway" />
   <div class="hero-overlay" aria-hidden="true"></div>
   <div class="hero-stripes" aria-hidden="true"><b class="red"></b><b class="blu"></b></div>
 
@@ -413,17 +405,14 @@
 <!-- ====================== HERO MEDIA / VIDEO ====================== -->
 <section style="padding-block: clamp(40px,6vw,72px); background: var(--ink);">
   <div class="wrap">
-    <!-- ADD MEDIA · slot: hero-video — a clip of an autonomous run.
-         Replace the .ph block with:
-         <video class="ar ar-16x9" controls poster="assets/run-poster.jpg">
-           <source src="assets/run.mp4" type="video/mp4"></video>  -->
+    <!-- slot: hero-video — YouTube facade; iframe loads only on click (no repo bloat, fast page). -->
     <div class="media" data-slot="hero-video">
-      <div class="ar ar-16x9"></div>
-      <div class="ph">
-        <div class="play" aria-hidden="true"></div>
-        <div class="cap">Add: autonomous run — video</div>
-        <div class="hint">Drop a clip in <code>assets/</code> (the boat under its own control is the headline).</div>
-      </div>
+      <button type="button" class="yt-facade ar ar-16x9" data-yt="-HWZEGjmy6g"
+              aria-label="Play video: the cutter underway on the Potomac"
+              style="background-image:url(https://i.ytimg.com/vi/-HWZEGjmy6g/maxresdefault.jpg)">
+        <span class="play" aria-hidden="true"></span>
+        <span class="cap">Autonomous run — Potomac</span>
+      </button>
     </div>
   </div>
 </section>
@@ -1280,6 +1269,24 @@
   else if (canvas) { requestAnimationFrame(function () { resize(); draw(); }); }
   setPlaying(!reduced);
 })();
+
+// YouTube facades: swap the poster for a privacy-mode iframe on first click.
+document.querySelectorAll('.yt-facade').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var id = btn.getAttribute('data-yt');
+    var frame = document.createElement('iframe');
+    frame.className = 'yt-frame';
+    frame.src = 'https://www.youtube-nocookie.com/embed/' + id +
+      '?autoplay=1&rel=0&modestbranding=1&playsinline=1';
+    frame.title = btn.getAttribute('aria-label') || 'Video';
+    frame.setAttribute('allow', 'accelerometer; autoplay; encrypted-media; picture-in-picture; fullscreen');
+    frame.setAttribute('allowfullscreen', '');
+    var wrap = document.createElement('div');
+    wrap.className = 'ar ar-16x9';
+    wrap.appendChild(frame);
+    btn.replaceWith(wrap);
+  });
+});
 </script>
 
 </body>
