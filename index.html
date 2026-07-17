@@ -386,11 +386,11 @@
         <span class="label">Autonomous surface vessel</span>
       </div>
 
-      <h1>Stands its<br>own <span class="em">watch.</span></h1>
+      <h1>It drives<br><span class="em">itself.</span></h1>
 
-      <p class="sub">A 1.3-meter scale cutter — roughly <b>220 PETG parts</b> — running a
-        <b>from-scratch autonomy stack on a single ESP32</b>. It captures
-        GPS waypoints, maps the bottom with sonar, and streams live telemetry to a phone.</p>
+      <p class="sub">A 1.3-meter scale model, about <b>220 printed parts</b>, running
+        <b>autonomy firmware I wrote from scratch</b> on a single ESP32. It follows GPS
+        waypoints on its own, logs depth with sonar, and streams telemetry to my phone.</p>
     </div><!-- .hero-text -->
 
     <div class="stats">
@@ -422,59 +422,50 @@
 <!-- ====================== CAPABILITIES ====================== -->
 <section class="caps" id="capabilities">
   <div class="wrap">
-    <div class="sec-head"><span class="no">01</span><h2>Capabilities</h2></div>
+    <div class="sec-head"><h2>Capabilities</h2></div>
 
     <div class="cap-grid">
       <div class="cap">
-        <div class="n">NAV / 01</div>
         <h3>GPS waypoint nav</h3>
         <p>Captures each waypoint within a set radius (~2–3 m), then advances to the next —
           running a self-driven route with no hand on the sticks.</p>
       </div>
       <div class="cap">
-        <div class="n">SONAR / 02</div>
         <h3>Bottom mapping</h3>
         <p>A hull-mounted transducer logs depth against position while underway, building a
           bathymetric picture of the bottom as it goes.</p>
       </div>
       <div class="cap">
-        <div class="n">IMU / 03</div>
         <h3>Compass heading</h3>
         <p>Magnetometer heading with gyro stabilization; the accelerometer logs roll, pitch,
           and wave motion through the run.</p>
       </div>
       <div class="cap">
-        <div class="n">LINK / 04</div>
         <h3>Live telemetry</h3>
         <p>Position, heading, depth, battery, and system state stream over WiFi to a companion
           iOS app — including gap backfill after a dropout.</p>
       </div>
       <div class="cap">
-        <div class="n">POWER / 05</div>
         <h3>Battery monitoring</h3>
         <p>INA219 current + voltage sense on the 4S pack. State logged continuously; low-voltage
           events visible in the telemetry stream.</p>
       </div>
       <div class="cap">
-        <div class="n">BILGE / 06</div>
         <h3>Bilge watch &amp; auto pump</h3>
         <p>Leak detection with an automatic bilge pump — the boat looks after its own hull
           while it works.</p>
       </div>
       <div class="cap">
-        <div class="n">FW / 07</div>
         <h3>OTA firmware</h3>
         <p>Updates go on over the air. The hull stays sealed and watertight — no cracking it
           open for USB access between runs.</p>
       </div>
       <div class="cap">
-        <div class="n">DECK / 08</div>
         <h3>Deck gun pan</h3>
         <p>Positional servo on the main gun driven by a dedicated knob channel — slews the
           turret independently of the helm.</p>
       </div>
       <div class="cap">
-        <div class="n">RADAR / 09</div>
         <h3>Rotating radar</h3>
         <p>Mast TRS-3D dish driven by a burst-mode PWM loop that simulates slow radar-sweep
           rotation from a high-speed motor.</p>
@@ -489,10 +480,10 @@
 <!-- ====================== NAV SIM ====================== -->
 <section class="sim" id="navsim">
   <div class="wrap">
-    <div class="sec-head"><span class="no">02</span><h2>How it holds a waypoint</h2></div>
-    <p class="lede">The boat steers toward a posted waypoint with its twin rudders and differential
-      thrust, captures it once inside a set radius, then advances to the next. Below is that logic,
-      simulated.</p>
+    <div class="sec-head"><h2>How it runs a route</h2></div>
+    <p class="lede">It works down a posted route of waypoints, steering toward each with its twin
+      rudders and differential thrust, capturing it once inside a set radius, then advancing to the
+      next. Here's that logic, simulated.</p>
 
     <div class="sim-wrap">
       <div class="plotter">
@@ -512,7 +503,6 @@
           <div class="row"><span class="k">Distance to WP</span><span class="v"><span id="r-dist">—</span><em>m</em></span></div>
           <div class="row"><span class="k">Captured</span><span class="v" id="r-cap">0</span></div>
         </div>
-        <div class="foot">Illustration of the capture-by-distance loop · figures synthetic</div>
       </div>
     </div>
   </div>
@@ -524,10 +514,10 @@
 <!-- ====================== DEPTH SIM ====================== -->
 <section class="sim depth" id="depthsim">
   <div class="wrap">
-    <div class="sec-head"><span class="no">03</span><h2>How it maps the bottom</h2></div>
-    <p class="lede">In AUTO the boat runs a grid of waypoints, and a hull-mounted echo sounder takes
-      one reading directly beneath it at each GPS fix — logged against position. The track itself
-      builds the area into a depth map. Below, that survey, simulated.</p>
+    <div class="sec-head"><h2>How it maps the bottom</h2></div>
+    <p class="lede">In AUTO it runs a grid of waypoints, and the hull sonar takes one reading
+      straight down at each GPS fix. Logged against position, the whole track fills in a depth
+      map of the area. Here's that survey, simulated.</p>
 
     <div class="sim-wrap">
       <div class="plotter">
@@ -547,7 +537,6 @@
           <div class="row"><span class="k">Coverage</span><span class="v"><span id="d-surv">—</span><em>%</em></span></div>
           <div class="row"><span class="k">Soundings</span><span class="v" id="d-samp">0</span></div>
         </div>
-        <div class="foot">Waypoint-driven echo-sounder survey · figures synthetic</div>
       </div>
     </div>
   </div>
@@ -559,15 +548,15 @@
 <section class="sim modes" id="modesim">
   <div class="wrap">
     <div class="sec-head">
-      <span class="no">04</span><h2>Who has control</h2>
+      <h2>Manual, auto, failsafe</h2>
       <button class="mode-toggle playing" id="m-toggle" aria-label="Pause auto-play" aria-pressed="false">
         <i class="ico"></i><span class="lbl">Pause</span>
       </button>
     </div>
-    <p class="lede">Three states, one rule — the transmitter sits at the top of the priority stack.
-      Flip the mode switch and the human takes over instantly; lose the RC link and the boat fails
-      safe on its own. Try it: tap <strong>SwA</strong> or <strong>SwD</strong> on the transmitter — or a
-      mode below — to drive the arbitration yourself, or let it loop.</p>
+    <p class="lede">There are three states, and the transmitter always wins. Flip the mode switch
+      and I take over instantly; if the RC link drops, it fails safe on its own. Try it: tap
+      <strong>SwA</strong> or <strong>SwD</strong> on the transmitter, or a mode below, to drive the
+      handoff yourself, or let it loop.</p>
 
     <div class="mode-demo">
       <button class="mode-arrow prev" id="m-prev" aria-label="Previous step">‹</button>
@@ -635,7 +624,7 @@
 <!-- ====================== HARDWARE ====================== -->
 <section class="hw" id="hardware">
   <div class="wrap">
-    <div class="sec-head"><span class="no">05</span><h2>Hardware stack</h2></div>
+    <div class="sec-head"><h2>Hardware stack</h2></div>
     <div class="spec">
       <div class="group">
         <span class="label">Compute &amp; control</span>
