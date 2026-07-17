@@ -189,6 +189,7 @@
     font-family: var(--fs-mono); font-size: 11.5px; letter-spacing: .1em;
     text-transform: uppercase; color: var(--haze); margin-top: 10px;
   }
+  .lede { max-width: 60ch; color: #C7CDD3; font-size: clamp(16px, 1.3vw, 18px); margin: -16px 0 0; }
 
   /* =====================  CAPABILITIES  ===================== */
   .caps { background: var(--ink-2); }
@@ -654,6 +655,84 @@
         <div class="line"><span class="role">Steering</span><span class="part">Twin rudders + differential thrust</span></div>
         <div class="line"><span class="role">Audio</span><span class="part">DFPlayer Pro · PAM8403</span></div>
       </div>
+    </div>
+  </div>
+</section>
+
+<div class="rule" role="presentation"></div>
+
+<!-- ====================== THE BUILD ====================== -->
+<section id="build" style="background: var(--ink-2);">
+  <div class="wrap">
+    <div class="sec-head"><h2>How it's built</h2></div>
+    <p class="lede">My second RC boat, after an Edmund Fitzgerald build, and a big step up: a
+      1:96 Legend-class hull printed in about twenty sections on a 22&times;22&nbsp;cm bed, then
+      assembled into a 1.3-meter ship of some 220 parts. The twin screws ride on grease-packed
+      brass stuffing tubes, with a bilge pump for the few drops that get past them. After fighting
+      the Fitz's tangled electronics bay, I laid this one out to actually be worked on.</p>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:18px; margin-top: 40px;">
+      <!-- ADD MEDIA · slot: build-print — print bed / raw or dry-fit parts -->
+      <figure class="shot">
+        <div class="media" data-slot="build-print">
+          <div class="ar ar-4x3"></div>
+          <div class="ph">
+            <div class="cap">Add: printing the hull</div>
+            <div class="hint">Print bed, raw parts, or the hull dry-fit before wiring.</div>
+          </div>
+        </div>
+        <figcaption>assets/build-print.jpg</figcaption>
+      </figure>
+      <!-- ADD MEDIA · slot: build-guts — electronics bay mid-assembly -->
+      <figure class="shot">
+        <div class="media" data-slot="build-guts">
+          <div class="ar ar-4x3"></div>
+          <div class="ph">
+            <div class="cap">Add: the wiring</div>
+            <div class="hint">Electronics bay mid-build — ESP32, ESCs, and the power wiring.</div>
+          </div>
+        </div>
+        <figcaption>assets/build-guts.jpg</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<div class="rule" role="presentation"></div>
+
+<!-- ====================== THE APP ====================== -->
+<section id="app" style="background: var(--ink);">
+  <div class="wrap">
+    <div class="sec-head"><h2>The helm app</h2></div>
+    <p class="lede">There's no screen on the boat, so my phone is the helm. It's an Expo /
+      React&nbsp;Native app, carried over from my last build and rebuilt for this one: it holds the
+      live map and waypoints, shows heading, depth, battery and mode as they stream over WiFi, and
+      takes manual control when I want it. Every run logs to the phone and exports as CSV so I can
+      pull the track apart afterward.</p>
+
+    <div style="display:grid; grid-template-columns: repeat(2, minmax(0, 240px)); gap:18px; justify-content:center; margin-top: 40px;">
+      <!-- ADD MEDIA · slot: app-map — screenshot: live map + waypoints -->
+      <figure class="shot">
+        <div class="media" data-slot="app-map">
+          <div class="ar" style="aspect-ratio: 9 / 19;"></div>
+          <div class="ph">
+            <div class="cap">Add: app — map</div>
+            <div class="hint">Live map with the boat and posted waypoints.</div>
+          </div>
+        </div>
+        <figcaption>assets/app-map.png</figcaption>
+      </figure>
+      <!-- ADD MEDIA · slot: app-telemetry — screenshot: telemetry readout -->
+      <figure class="shot">
+        <div class="media" data-slot="app-telemetry">
+          <div class="ar" style="aspect-ratio: 9 / 19;"></div>
+          <div class="ph">
+            <div class="cap">Add: app — telemetry</div>
+            <div class="hint">Heading, depth, battery, and mode.</div>
+          </div>
+        </div>
+        <figcaption>assets/app-telemetry.png</figcaption>
+      </figure>
     </div>
   </div>
 </section>
