@@ -1,12 +1,14 @@
 # Reconnect-stall investigation — final report
 
-**Date:** 2026-07-12 (updated 2026-07-13)
-**Status:** PROVISIONALLY CLOSED. Root cause of the multi-minute lockout found and
+**Date:** 2026-07-12 (updated 2026-07-13, closed 2026-07-18)
+**Status:** CLOSED (2026-07-18). Root cause of the multi-minute lockout found and
 reproduced on the real boat; fix `be07515d` (specifically its 6.2 half) confirmed on
-the bench. ONE field confirmation outstanding (see `docs/TASK_A_OPEN_ITEMS.md`).
-Project on hiatus ~2 weeks from 2026-07-13 (boat 4S pack over-discharged/scrapped;
-battery swap requires cutting the hull; no bench or field testing until then).
-**Pick-up point for whoever resumes: `docs/TASK_A_OPEN_ITEMS.md`.**
+the bench, and confirmed in the field 2026-07-18 — a valid awake run over a 9.3-min
+out-of-range excursion showed no lockout, no reboot, and a seamless backfill
+(`mission_logs/debug/2026-07-18T19-17-00.csv`). Closure rests on bench-proves-causality
++ field-confirms-behavior; the field never independently reproduced the jam (its trigger
+is hard to hit outside a loss proxy), which is not a gap in the fix.
+**Details + the void-first-attempt lesson: `docs/TASK_A_OPEN_ITEMS.md`.**
 **One line:** A large pending `/history` backfill backlog + a marginal link makes
 `pumpBackfills` retry a full multi-page pull every 5 s that never completes, churning
 connections that jam the boat's single-client server FOR EVERYONE — a self-sustaining
