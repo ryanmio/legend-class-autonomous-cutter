@@ -1,16 +1,18 @@
 // bilge.cpp
-// Duty-cycled bilge pump driven by the rear probe (only). Phase transitions:
+// Duty-cycled bilge pump driven by the rear probe (only).
 //
-//   OFF  --(rear wet & !stuck) OR (manual on)--> ON  (cycle=1, sequenceStart=now)
-//   ON   --PULSE_ON elapsed--> PAUSE
-//   PAUSE --PULSE_OFF elapsed:
-//             AUTO + still wet + (now-sequenceStart) < AUTO_MAX_MS  --> ON  (cycle++)
-//             AUTO + dry                                            --> OFF
-//             AUTO + still wet + cap reached                        --> OFF + stuck latch
-//             MANUAL                                                --> ON  (cycle++)
+// AUTO — bursts, then rests, forever (never gives up: a full bilge is the
+// normal steady state, not a fault):
+//   OFF      --rear wet--> ON (cycle=1)
+//   ON       --PULSE_ON elapsed--> PAUSE
+//   PAUSE    --PULSE_OFF elapsed--> ON (cycle++) while cycle < BURST_CYCLES,
+//                                   else COOLDOWN
+//   COOLDOWN --COOLDOWN_MS elapsed--> ON (cycle=1) if rear still wet, else OFF
+// The burst is committed once started (rides out probe flicker, primes the
+// pump, lets water settle); rear is only re-checked at the cooldown boundary.
 //
-// Operator stop (bilgeSetManual(false)) → OFF immediately.
-// A real dry reading clears the stuck latch (auto can re-engage next time).
+// MANUAL — operator-engaged, cycles ON/PAUSE forever (no burst cap, no
+// cooldown) until bilgeSetManual(false) stops it immediately.
 
 #include "bilge.h"
 #include "config.h"
@@ -20,9 +22,7 @@ static bool fwdWet = false, midWet = false, rearWet = false;
 static BilgePhase  phase    = BILGE_PHASE_OFF;
 static BilgeSource source   = BILGE_SRC_NONE;
 static uint8_t     cycleNum = 0;
-static uint32_t    phaseStartMs    = 0;
-static uint32_t    sequenceStartMs = 0;
-static bool        stuckLatch      = false;
+static uint32_t    phaseStartMs = 0;
 
 static void writePump(bool on) {
     digitalWrite(PIN_BILGE_PUMP, on ? HIGH : LOW);
@@ -55,49 +55,38 @@ void bilgeUpdate() {
     midWet  = (digitalRead(PIN_BILGE_MID_SENSOR)  == LOW);
     rearWet = (digitalRead(PIN_BILGE_REAR_SENSOR) == LOW);
 
-    // Real dry reading clears the stuck latch so auto can re-engage later.
-    if (!rearWet && stuckLatch) stuckLatch = false;
-
-    // Pick the source we want to be in right now.
-    BilgeSource want;
-    if (source == BILGE_SRC_MANUAL)        want = BILGE_SRC_MANUAL;
-    else if (rearWet && !stuckLatch)       want = BILGE_SRC_AUTO;
-    else                                   want = BILGE_SRC_NONE;
-
-    if (want == BILGE_SRC_NONE) {
-        if (phase != BILGE_PHASE_OFF) stopAll();
+    // MANUAL: operator override — cycle ON/PAUSE forever, no cap, no cooldown.
+    if (source == BILGE_SRC_MANUAL) {
+        uint32_t elapsed = now - phaseStartMs;
+        if      (phase == BILGE_PHASE_ON    && elapsed >= BILGE_PULSE_ON_MS)  enterPhase(BILGE_PHASE_PAUSE, now);
+        else if (phase == BILGE_PHASE_PAUSE && elapsed >= BILGE_PULSE_OFF_MS) { cycleNum++; enterPhase(BILGE_PHASE_ON, now); }
         return;
     }
 
-    // Starting a new sequence (transition from OFF, or source switching).
-    if (source != want) {
-        source          = want;
-        cycleNum        = 1;
-        sequenceStartMs = now;
-        enterPhase(BILGE_PHASE_ON, now);
-        return;
-    }
+    // AUTO burst/cooldown state machine.
+    uint32_t elapsed = now - phaseStartMs;
+    switch (phase) {
+      case BILGE_PHASE_OFF:
+        if (rearWet) { source = BILGE_SRC_AUTO; cycleNum = 1; enterPhase(BILGE_PHASE_ON, now); }
+        break;
 
-    // Mid-sequence: step the phase timer.
-    uint32_t phaseElapsed = now - phaseStartMs;
+      case BILGE_PHASE_ON:
+        if (elapsed >= BILGE_PULSE_ON_MS) enterPhase(BILGE_PHASE_PAUSE, now);
+        break;
 
-    if (phase == BILGE_PHASE_ON && phaseElapsed >= BILGE_PULSE_ON_MS) {
-        enterPhase(BILGE_PHASE_PAUSE, now);
-        return;
-    }
-
-    if (phase == BILGE_PHASE_PAUSE && phaseElapsed >= BILGE_PULSE_OFF_MS) {
-        if (source == BILGE_SRC_AUTO) {
-            if (!rearWet) { stopAll(); return; }
-            if ((now - sequenceStartMs) >= BILGE_AUTO_MAX_MS) {
-                stuckLatch = true;
-                stopAll();
-                return;
-            }
+      case BILGE_PHASE_PAUSE:
+        if (elapsed >= BILGE_PULSE_OFF_MS) {
+            if (cycleNum < BILGE_BURST_CYCLES) { cycleNum++; enterPhase(BILGE_PHASE_ON, now); }
+            else                                enterPhase(BILGE_PHASE_COOLDOWN, now);
         }
-        // MANUAL has no cap; AUTO continues.
-        cycleNum++;
-        enterPhase(BILGE_PHASE_ON, now);
+        break;
+
+      case BILGE_PHASE_COOLDOWN:
+        if (elapsed >= BILGE_COOLDOWN_MS) {
+            if (rearWet) { cycleNum = 1; enterPhase(BILGE_PHASE_ON, now); }   // still wet → another burst
+            else         stopAll();                                          // dry → idle until it wets again
+        }
+        break;
     }
 }
 
@@ -106,7 +95,6 @@ bool bilgeMidWet()      { return midWet; }
 bool bilgeRearWet()     { return rearWet; }
 bool bilgePumpOn()      { return phase == BILGE_PHASE_ON; }
 bool bilgePumpManual()  { return source == BILGE_SRC_MANUAL; }
-bool bilgeStuck()       { return stuckLatch; }
 
 BilgePhase  bilgePumpPhase()    { return phase; }
 BilgeSource bilgePumpSource()   { return source; }
@@ -116,10 +104,8 @@ uint32_t    bilgePumpPhaseMs()  { return phase == BILGE_PHASE_OFF ? 0 : (millis(
 void bilgeSetManual(bool on) {
     uint32_t now = millis();
     if (on) {
-        source          = BILGE_SRC_MANUAL;
-        cycleNum        = 1;
-        sequenceStartMs = now;
-        stuckLatch      = false;   // operator override
+        source   = BILGE_SRC_MANUAL;
+        cycleNum = 1;
         enterPhase(BILGE_PHASE_ON, now);
     } else {
         stopAll();

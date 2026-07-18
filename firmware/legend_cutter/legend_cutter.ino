@@ -276,6 +276,30 @@ void setup() {
     enableLoopWDT();
 }
 
+// Pump-run nav annunciation: a TRIPLE blink (three quick flashes per 1 s
+// cycle), distinct from the low-volt alarm's double blink and from steady
+// operator nav. Runs only while the pump MOSFET is energized (the ON pulses of
+// a burst) AND the low-volt alarm is not latched. MUST be called AFTER
+// lowVoltUpdate() so low-volt always wins the shared nav LED; on the pump-off
+// edge it restores the operator's logical nav state.
+static void pumpNavFlashUpdate() {
+    static const uint32_t CYCLE_MS = 1000;
+    static const uint32_t B1_END = 100, B2_BEG = 220, B2_END = 320, B3_BEG = 440, B3_END = 540;
+    static bool wasFlashing = false;
+
+    bool flashing = bilgePumpOn() && !lowVoltActive();
+    if (flashing) {
+        uint32_t phase = millis() % CYCLE_MS;
+        bool on = (phase < B1_END) ||
+                  (phase >= B2_BEG && phase < B2_END) ||
+                  (phase >= B3_BEG && phase < B3_END);
+        digitalWrite(PIN_NAV, on ? HIGH : LOW);
+    } else if (wasFlashing) {
+        lightsSet(LED_NAV, lightsState(LED_NAV));   // restore operator's logical nav on pump-off
+    }
+    wasFlashing = flashing;
+}
+
 void loop() {
     // Read inputs.
     ibusUpdate();
@@ -289,6 +313,7 @@ void loop() {
     imuUpdateCogTrim();
     cmdDrain();                // apply operator commands queued by the core-0 network task
     lowVoltUpdate();           // passive low-voltage alarm SM + nav-flash (after cmdDrain: alarm overrides manual nav)
+    pumpNavFlashUpdate();      // triple-blink nav while the bilge pump runs (after lowVoltUpdate: low-volt wins nav)
     histlogUpdate();           // rate-limited capture into the RAM history ring
 
     // Compute + apply.

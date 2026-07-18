@@ -93,21 +93,22 @@ export interface TelemetryData {
 
   // Bilge / damage-control. Three zones (fwd, mid, rear). Pump moved to
   // the REAR compartment 2026-05-27 — only `bilge_rear` drives auto-pump;
-  // fwd/mid are informational. The pump duty-cycles 6 s on / 6 s off:
-  //   pump_phase reports the current phase, pump_cycle the 1-based ON
-  //   pulse number within the current sequence, pump_phase_ms the time
-  //   elapsed in the current phase. AUTO sequence is capped at 60 s
-  //   total — past that, pump_stuck is set and the operator must engage
-  //   manually (manual cycles forever until stopped via POST /bilge {on:false}).
+  // fwd/mid are informational. The pump pulses 6 s on / 6 s off in bursts:
+  //   AUTO runs BILGE_BURST_CYCLES (3) pulses, then a `cooldown` rest, and
+  //   repeats forever (v0.11.0 — never gives up; the old 60 s cap + pump_stuck
+  //   were removed). pump_phase reports the current phase, pump_cycle the
+  //   1-based ON-pulse number within the current burst, pump_phase_ms the time
+  //   elapsed in the current phase. Manual cycles forever until stopped via
+  //   POST /bilge {on:false}.
   bilge_fwd?: boolean;
   bilge_mid?: boolean;
   bilge_rear?: boolean;
   bilge_aft?: boolean;        // legacy alias (pre-3-zone telemetry); unused going forward
   pump?: boolean;             // MOSFET state (HIGH during the ON phase only)
   pump_manual?: boolean;
-  pump_stuck?: boolean;
-  pump_phase?: 'off' | 'on' | 'pause';
-  pump_cycle?: number;        // 1-based ON-pulse count in current sequence; absent when off
+  pump_stuck?: boolean;       // deprecated (v0.11.0): auto no longer gives up — never sent by firmware
+  pump_phase?: 'off' | 'on' | 'pause' | 'cooldown';
+  pump_cycle?: number;        // 1-based ON-pulse count in current burst; absent when off
   pump_phase_ms?: number;     // ms since current phase began; absent when off
 
   // Depth sonar (RCWL-1655). Present from test_29 onward.

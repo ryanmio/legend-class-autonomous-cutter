@@ -239,10 +239,10 @@ static void handleTelemetry() {
     doc["bilge_rear"]   = bilgeRearWet();
     doc["pump"]         = bilgePumpOn();
     doc["pump_manual"]  = bilgePumpManual();
-    doc["pump_stuck"]   = bilgeStuck();
     BilgePhase phase    = bilgePumpPhase();
-    doc["pump_phase"]   = (phase == BILGE_PHASE_ON)    ? "on"
-                        : (phase == BILGE_PHASE_PAUSE) ? "pause"
+    doc["pump_phase"]   = (phase == BILGE_PHASE_ON)       ? "on"
+                        : (phase == BILGE_PHASE_PAUSE)    ? "pause"
+                        : (phase == BILGE_PHASE_COOLDOWN) ? "cooldown"
                         : "off";
     if (phase != BILGE_PHASE_OFF) {
         doc["pump_cycle"]    = bilgePumpCycle();

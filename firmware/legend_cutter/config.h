@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.10.0"
+#define FIRMWARE_VERSION "0.11.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -191,17 +191,21 @@ static const float    DEPTH_MIN_VALID_M     = 1.00f;  // below = near-field floo
 // pump; fwd/mid are informational.
 //   GPIO 5 is a strapping pin but only governs SDIO-slave boot mode (unused);
 //   safe as a sensor input for normal flash boot.
-// Pump can clear the rear compartment in ~5 s, so we duty-cycle:
-//   BILGE_PULSE_ON_MS ON, then BILGE_PULSE_OFF_MS pause, repeat. Auto mode
-//   gives up after BILGE_AUTO_MAX_MS total elapsed if the rear probe is still
-//   wet (operator must then engage manually; manual cycles forever).
+// Auto runs in BURSTS with a long rest, never gives up (a full bilge is the
+// normal steady state — the pump can only draw down to just below the probe):
+//   rear wet → [ON PULSE_ON, PAUSE PULSE_OFF] × BILGE_BURST_CYCLES → COOLDOWN.
+//   The burst is committed once started (rides out probe flicker / primes the
+//   pump / lets water settle); the rear probe is only re-checked at the END of
+//   each cooldown — still wet → another burst, dry → idle until it wets again.
+//   Manual has no burst cap and no cooldown — it cycles ON/PAUSE forever.
 static const uint8_t  PIN_BILGE_FWD_SENSOR    = 32;
 static const uint8_t  PIN_BILGE_MID_SENSOR    = 33;
 static const uint8_t  PIN_BILGE_REAR_SENSOR   = 5;
 static const uint8_t  PIN_BILGE_PUMP          = 13;
 static const uint32_t BILGE_PULSE_ON_MS       = 6000;
 static const uint32_t BILGE_PULSE_OFF_MS      = 6000;
-static const uint32_t BILGE_AUTO_MAX_MS       = 60000;
+static const uint8_t  BILGE_BURST_CYCLES      = 3;      // ON pulses per burst before a cooldown
+static const uint32_t BILGE_COOLDOWN_MS       = 60000;  // rest after a burst; raise toward 120000 if it still runs too often
 
 // ── Radar (mast dish, 2N2222 low-side PWM on GPIO 2) ───────────────────────
 // 1 kHz instead of "above audible": at 20 kHz the coil L/R doesn't let
