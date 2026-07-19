@@ -35,6 +35,7 @@
 #include "radar.h"
 #include "lights.h"
 #include "lowvolt.h"
+#include "floodalarm.h"
 #include "weapons.h"
 #include "telemetry.h"
 #include "histlog.h"
@@ -229,6 +230,7 @@ void setup() {
     lightsBegin();
     lowVoltBegin();
     bilgeBegin();
+    floodAlarmBegin();
     radarBegin();
     sonarBegin();
 
@@ -277,17 +279,18 @@ void setup() {
 }
 
 // Pump-run nav annunciation: a TRIPLE blink (three quick flashes per 1 s
-// cycle), distinct from the low-volt alarm's double blink and from steady
-// operator nav. Runs only while the pump MOSFET is energized (the ON pulses of
-// a burst) AND the low-volt alarm is not latched. MUST be called AFTER
-// lowVoltUpdate() so low-volt always wins the shared nav LED; on the pump-off
-// edge it restores the operator's logical nav state.
+// cycle), distinct from the low-volt alarm's double blink, the flood alarm's
+// strobe, and steady operator nav. Runs only while the pump MOSFET is energized
+// (the ON pulses of a burst) AND neither the low-volt nor the flood alarm is
+// latched. MUST be called AFTER lowVoltUpdate() and floodAlarmUpdate() so both
+// alarms win the shared nav LED; on the pump-off edge it restores the operator's
+// logical nav state.
 static void pumpNavFlashUpdate() {
     static const uint32_t CYCLE_MS = 1000;
     static const uint32_t B1_END = 100, B2_BEG = 220, B2_END = 320, B3_BEG = 440, B3_END = 540;
     static bool wasFlashing = false;
 
-    bool flashing = bilgePumpOn() && !lowVoltActive();
+    bool flashing = bilgePumpOn() && !lowVoltActive() && !floodAlarmActive();
     if (flashing) {
         uint32_t phase = millis() % CYCLE_MS;
         bool on = (phase < B1_END) ||
@@ -313,7 +316,8 @@ void loop() {
     imuUpdateCogTrim();
     cmdDrain();                // apply operator commands queued by the core-0 network task
     lowVoltUpdate();           // passive low-voltage alarm SM + nav-flash (after cmdDrain: alarm overrides manual nav)
-    pumpNavFlashUpdate();      // triple-blink nav while the bilge pump runs (after lowVoltUpdate: low-volt wins nav)
+    floodAlarmUpdate();        // fwd/mid flood alarm SM + nav-strobe (after lowVoltUpdate: low-volt wins; before pump-flash: flood outranks pump)
+    pumpNavFlashUpdate();      // triple-blink nav while the bilge pump runs (after lowVoltUpdate + floodAlarmUpdate: both alarms win nav)
     histlogUpdate();           // rate-limited capture into the RAM history ring
 
     // Compute + apply.

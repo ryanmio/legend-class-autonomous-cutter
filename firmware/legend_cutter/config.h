@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.11.0"
+#define FIRMWARE_VERSION "0.12.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -206,6 +206,17 @@ static const uint32_t BILGE_PULSE_ON_MS       = 6000;
 static const uint32_t BILGE_PULSE_OFF_MS      = 6000;
 static const uint8_t  BILGE_BURST_CYCLES      = 3;      // ON pulses per burst before a cooldown
 static const uint32_t BILGE_COOLDOWN_MS       = 60000;  // rest after a burst; raise toward 120000 if it still runs too often
+
+// ── Flood alarm (passive annunciation ONLY — never touches control) ──────────
+// The fwd/mid probes are otherwise telemetry-only; this latches a nav-light
+// strobe when either reads wet, annunciating a pooling-forward flood to an
+// operator who may be out of app range (floodalarm.cpp). Asymmetric debounce:
+// quick to trigger (reject probe chatter), slow to clear (one wave sloshing a
+// probe dry must not silence a real flood). Auto-clears on sustained dry — no
+// power cycle. TRIGGER is provisional pending field observation of probe chatter
+// in chop; kept a named constant, not buried in logic. Rear probe + pump unaffected.
+static const uint32_t FLOOD_TRIGGER_SUSTAIN_MS = 1500;   // fwd||mid wet this long → latch
+static const uint32_t FLOOD_CLEAR_SUSTAIN_MS   = 30000;  // both dry this long → clear
 
 // ── Radar (mast dish, 2N2222 low-side PWM on GPIO 2) ───────────────────────
 // 1 kHz instead of "above audible": at 20 kHz the coil L/R doesn't let

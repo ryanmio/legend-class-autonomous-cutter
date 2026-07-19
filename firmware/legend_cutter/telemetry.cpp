@@ -20,6 +20,7 @@
 #include "radar.h"
 #include "lights.h"
 #include "lowvolt.h"
+#include "floodalarm.h"
 #include "weapons.h"
 #include "histlog.h"
 #include "cmd.h"
@@ -275,6 +276,7 @@ static void handleTelemetry() {
         // batt_a dropped: shunt failed, reads a constant 0. Voltage still good.
     }
     doc["low_volt_alarm"] = lowVoltActive();
+    doc["flood_alarm"]    = floodAlarmActive();
 
     // Position
     doc["gps_fix"] = gpsValid();
