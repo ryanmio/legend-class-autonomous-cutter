@@ -135,7 +135,7 @@ export async function importBoatFlight(
   onProgress?: (p: ImportProgress) => void,
 ): Promise<FlightMeta> {
   const maxPages = Math.min(IMPORT_MAX_PAGES, Math.ceil(file.records / 100) + 2);
-  const { sessionId, records } = await pageSince(
+  const { sessionId, records, v } = await pageSince(
     (cursor) => fetchFlightPage(ip, file.name, cursor),
     0,
     maxPages,
@@ -150,9 +150,10 @@ export async function importBoatFlight(
     void seq;
     // Anchored: same conversion the /history backfill uses. No anchor: ts =
     // boat uptime_ms — epoch-1970 timestamps that read as T+h:mm:ss, flagged
-    // on the flight meta as relative time.
+    // on the flight meta as relative time. `v` (firmware ≥0.13.1) is the
+    // version that recorded the file; absent on older firmware → empty cell.
     const ts = anchor ? anchor.wallMs - (anchor.uptimeMs - uptime_ms) : uptime_ms;
-    return { ...fields, ts, uptime: Math.floor(uptime_ms / 1000) };
+    return { ...fields, ts, uptime: Math.floor(uptime_ms / 1000), ...(v ? { v } : {}) };
   });
 
   const meta = await saveImportedFlight(rows, {

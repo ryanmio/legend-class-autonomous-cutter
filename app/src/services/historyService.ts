@@ -19,6 +19,9 @@ export interface HistoryPage {
   session_id: number;
   more: boolean;
   records: HistoryRecord[];
+  // /flight only (firmware ≥0.13.1): version that RECORDED the file. Absent
+  // on /history pages — live rows already know the running version.
+  v?: string;
 }
 
 const TIMEOUT_MS = 5000;
@@ -54,13 +57,15 @@ export async function pageSince(
   sinceMs: number,
   maxPages: number,
   onPage?: (receivedSoFar: number) => void,
-): Promise<{ sessionId: number; records: HistoryRecord[] }> {
+): Promise<{ sessionId: number; records: HistoryRecord[]; v?: string }> {
   let cursor = sinceMs;
   let sessionId = 0;
+  let v: string | undefined;
   const out: HistoryRecord[] = [];
   for (let page = 0; page < maxPages; page++) {
     const p = await fetchPage(cursor);
     sessionId = p.session_id;
+    if (p.v) v = p.v;
     if (!p.records || p.records.length === 0) break;
     for (const r of p.records) {
       out.push(r);
@@ -69,7 +74,7 @@ export async function pageSince(
     onPage?.(out.length);   // page confirmed received; report cumulative count
     if (!p.more) break;
   }
-  return { sessionId, records: out };
+  return { sessionId, records: out, v };
 }
 
 // Page through every /history record newer than sinceMs. Returns the boat's
