@@ -37,9 +37,10 @@ export async function fetchHistoryPage(ip: string, sinceMs: number): Promise<His
   }
 }
 
-// Page through every record newer than sinceMs (firmware caps each page; we
-// follow the cursor until `more` is false). Returns the boat's session_id so
-// the caller can refuse to merge across a reboot.
+// The cursor pager, generic over the page fetcher so the flash-log import
+// (flightlogService, GET /flight) reuses the exact same loop as the /history
+// backfill: advance since_ms to each record's uptime_ms, stop on an empty
+// page, `more:false`, or the page cap.
 //
 // onPage (optional) reports progress: called after each page is confirmed
 // received (the fetch resolved and its records are in hand), with the running
@@ -48,17 +49,17 @@ export async function fetchHistoryPage(ip: string, sinceMs: number): Promise<His
 // watermark only after this whole call resolves and the records are merged. If
 // a page throws, this call rejects and the accumulated `out` is discarded, so
 // the reported progress for a failed call is provisional by design.
-export async function fetchHistorySince(
-  ip: string,
+export async function pageSince(
+  fetchPage: (sinceMs: number) => Promise<HistoryPage>,
   sinceMs: number,
-  maxPages = 50,
+  maxPages: number,
   onPage?: (receivedSoFar: number) => void,
 ): Promise<{ sessionId: number; records: HistoryRecord[] }> {
   let cursor = sinceMs;
   let sessionId = 0;
   const out: HistoryRecord[] = [];
   for (let page = 0; page < maxPages; page++) {
-    const p = await fetchHistoryPage(ip, cursor);
+    const p = await fetchPage(cursor);
     sessionId = p.session_id;
     if (!p.records || p.records.length === 0) break;
     for (const r of p.records) {
@@ -69,4 +70,15 @@ export async function fetchHistorySince(
     if (!p.more) break;
   }
   return { sessionId, records: out };
+}
+
+// Page through every /history record newer than sinceMs. Returns the boat's
+// session_id so the caller can refuse to merge across a reboot.
+export async function fetchHistorySince(
+  ip: string,
+  sinceMs: number,
+  maxPages = 50,
+  onPage?: (receivedSoFar: number) => void,
+): Promise<{ sessionId: number; records: HistoryRecord[] }> {
+  return pageSince((cursor) => fetchHistoryPage(ip, cursor), sinceMs, maxPages, onPage);
 }

@@ -1,5 +1,6 @@
-// FlightsScreen — lifetime totals at top, list of saved flights below.
-// Tap a row to open the detail screen; long-press (or trailing ×) deletes.
+// FlightsScreen — recoverable boat logs (when connected) and lifetime totals
+// at top, list of saved flights below. Tap a row to open the detail screen;
+// long-press (or trailing ×) deletes.
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -10,6 +11,8 @@ import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import Screen from '../components/Screen';
 import { FlightMeta, listFlights, deleteFlight } from '../services/telemetryLogger';
+import { BoatFlightFile, listRecoverable, importBoatFlight } from '../services/flightlogService';
+import { isConnected, getCurrentIP } from '../services/websocketService';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Flights'>;
 
@@ -71,13 +74,47 @@ export default function FlightsScreen({ navigation }: Props) {
   const [flights, setFlights]   = useState<FlightMeta[]>([]);
   const [refreshing, setRefresh] = useState(false);
   const [loading,    setLoading] = useState(true);
+  // Boat-side flash-log files not yet imported (empty when disconnected or
+  // pre-v0.13.0 firmware). `importing` is the file currently being pulled.
+  const [boatFiles, setBoatFiles] = useState<BoatFlightFile[]>([]);
+  const [importing, setImporting] = useState<string | null>(null);
+  const [importGot, setImportGot] = useState(0);
 
   const load = useCallback(async () => {
     const list = await listFlights();
     list.sort((a, b) => b.startTs - a.startTs);  // newest first
     setFlights(list);
     setLoading(false);
+    if (isConnected() && getCurrentIP()) {
+      try { setBoatFiles(await listRecoverable(getCurrentIP())); }
+      catch { setBoatFiles([]); }   // disconnected mid-fetch / old firmware
+    } else {
+      setBoatFiles([]);
+    }
   }, []);
+
+  const onImport = useCallback(async (file: BoatFlightFile) => {
+    const ip = getCurrentIP();
+    if (!ip) return;
+    setImporting(file.name);
+    setImportGot(0);
+    try {
+      const meta = await importBoatFlight(ip, file, (p) => setImportGot(p.received));
+      Alert.alert(
+        'Mission imported',
+        `${file.name}: ${meta.rowCount} records saved as a flight.` +
+        (meta.timeMode === 'relative'
+          ? '\n\nNo wall-clock anchor for that boot (app never connected to it) — timestamps are relative to boat power-on.'
+          : ''),
+      );
+    } catch (e: any) {
+      Alert.alert('Import failed', String(e?.message ?? e) + '\n\nThe boat copy is untouched — retry when the link is solid.');
+    } finally {
+      setImporting(null);
+      setImportGot(0);
+      await load();
+    }
+  }, [load]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -131,7 +168,17 @@ export default function FlightsScreen({ navigation }: Props) {
           data={flights}
           keyExtractor={(m) => m.id}
           ListHeaderComponent={
-            flights.length === 0 ? null : <LifetimeCard life={life} />
+            <>
+              {boatFiles.length > 0 && (
+                <BoatFilesCard
+                  files={boatFiles}
+                  importing={importing}
+                  importGot={importGot}
+                  onImport={onImport}
+                />
+              )}
+              {flights.length === 0 ? null : <LifetimeCard life={life} />}
+            </>
           }
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />
@@ -155,7 +202,11 @@ export default function FlightsScreen({ navigation }: Props) {
               onLongPress={() => onDelete(item)}
             >
               <View style={{ flex: 1 }}>
-                <Text style={styles.rowTimestamp}>{fmtTimestamp(item.startTs)}</Text>
+                <Text style={styles.rowTimestamp}>
+                  {item.timeMode === 'relative'
+                    ? `RELATIVE TIME · ${item.boatFile ?? 'import'}`
+                    : fmtTimestamp(item.startTs)}
+                </Text>
                 <Text style={styles.rowMeta}>
                   {fmtDuration(item.endTs - item.startTs)}
                   {item.distanceM != null && ` · ${fmtDistance(item.distanceM)}`}
@@ -171,6 +222,43 @@ export default function FlightsScreen({ navigation }: Props) {
         />
       </View>
     </Screen>
+  );
+}
+
+// ── Recoverable boat logs card ────────────────────────────────────────────
+// Missions still on the boat's flash (previous boots — a crash or field
+// power-off means they were never synced). Import pulls, saves, verifies,
+// then deletes the boat's copy.
+
+function BoatFilesCard({ files, importing, importGot, onImport }: {
+  files: BoatFlightFile[];
+  importing: string | null;
+  importGot: number;
+  onImport: (f: BoatFlightFile) => void;
+}) {
+  return (
+    <View style={styles.boatCard}>
+      <Text style={styles.boatTitle}>ON BOAT — NOT YET IMPORTED</Text>
+      {files.map((f) => (
+        <View key={`${f.name}:${f.session_id}`} style={styles.boatRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.boatName}>{f.name}</Text>
+            <Text style={styles.boatMeta}>
+              ~{fmtDuration(f.records * 1000)} · {f.records} rec · {Math.max(1, Math.round(f.bytes / 1024))} KB
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.importBtn, importing !== null && styles.importBtnDisabled]}
+            disabled={importing !== null}
+            onPress={() => onImport(f)}
+          >
+            <Text style={styles.importBtnText}>
+              {importing === f.name ? `${importGot}/${f.records}` : 'IMPORT'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -212,6 +300,16 @@ const styles = StyleSheet.create({
   pageTitle:     { flex: 1, textAlign: 'center', color: Colors.textPrimary, fontSize: 14, fontFamily: 'monospace', letterSpacing: 4, fontWeight: '800' },
   topBarRight:   { minWidth: 40, alignItems: 'flex-end' },
   countText:     { color: Colors.textSecondary, fontSize: 12, fontFamily: 'monospace', letterSpacing: 2 },
+
+  // Recoverable boat logs card
+  boatCard:          { backgroundColor: Colors.surface, borderRadius: 4, padding: 14, marginBottom: 16, borderLeftWidth: 2, borderLeftColor: Colors.accentOrange },
+  boatTitle:         { color: Colors.accentOrange, fontSize: 10, letterSpacing: 4, fontFamily: 'monospace', fontWeight: '800', marginBottom: 10 },
+  boatRow:           { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  boatName:          { color: Colors.textPrimary, fontSize: 14, fontFamily: 'monospace', fontWeight: '700' },
+  boatMeta:          { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace', marginTop: 2, letterSpacing: 1 },
+  importBtn:         { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 4, borderWidth: 1, borderColor: Colors.accentOrange },
+  importBtnDisabled: { opacity: 0.5 },
+  importBtnText:     { color: Colors.accentOrange, fontSize: 11, fontFamily: 'monospace', fontWeight: '800', letterSpacing: 2 },
 
   // Lifetime stats card
   lifetimeCard:   { backgroundColor: Colors.surface, borderRadius: 4, padding: 14, marginBottom: 16, borderLeftWidth: 2, borderLeftColor: Colors.accent },

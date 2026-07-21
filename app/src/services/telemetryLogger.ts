@@ -32,6 +32,7 @@ import { TelemetryData } from '../types';
 import { subscribe, getCurrentIP, drainFailCounts, isConnected } from './websocketService';
 import { startHeartbeat, drainFreeze, setBusy } from './jsHeartbeat';
 import { fetchHistorySince, HistoryRecord } from './historyService';
+import { noteAnchor } from './anchorRegistry';
 import { HISTORY_RING_CAPACITY } from '../constants';
 
 export interface LogRow extends TelemetryData {
@@ -58,6 +59,12 @@ export interface FlightMeta {
   gpsRowCount?: number;        // # rows with gps_fix and parseable lat/lon
 
   storage?: 'fs' | 'async';    // where the CSV body lives
+
+  // Flash-log imports (flightlogService). All absent on live-recorded flights.
+  source?: 'import';           // pulled from the boat's flash log, not recorded live
+  boatFile?: string;           // boat-side file it came from (e.g. "m17")
+  timeMode?: 'relative';       // no wall-clock anchor for that boot: ts = boat
+                               // uptime_ms (epoch-1970, reads as T+h:mm:ss)
 }
 
 const FLIGHTS_INDEX_KEY  = 'flights:index';
@@ -611,6 +618,57 @@ async function finalizeAndSave(): Promise<void> {
   await deleteDraft();   // the flight is now persisted properly
 }
 
+// ── Imported flights (boat flash log → standalone saved flight) ─────────────
+
+// Rows arrive fully formed (ts + telemetry-shaped fields) from
+// flightlogService; this persists them through the same CSV/stats/index
+// pipeline as a live flight. Never touches the in-memory recorder buffer, so
+// an import can run while a live flight is recording. Idempotent per source:
+// if the derived id already exists, the existing flight is returned unchanged.
+export interface ImportOpts {
+  relative: boolean;        // no wall-clock anchor: rows carry ts = boat uptime_ms
+  boatFile: string;         // boat-side file name (e.g. "m17")
+  boatSessionId: number;    // session of the boot that recorded it
+}
+
+export async function saveImportedFlight(
+  rowObjs: Array<Record<string, unknown>>,
+  opts: ImportOpts,
+): Promise<FlightMeta> {
+  if (rowObjs.length === 0) throw new Error('saveImportedFlight: no rows');
+  const sorted = [...rowObjs].sort((a, b) => tsMs(a.ts) - tsMs(b.ts)) as unknown as LogRow[];
+  const startTs = tsMs(sorted[0].ts);
+  const endTs   = tsMs(sorted[sorted.length - 1].ts);
+
+  // Anchored: the usual timestamp id (suffixed on the rare same-second
+  // collision with a flight the app recorded live). Relative: a session-keyed
+  // id — every never-polled boot starts near uptime 0, so timestamp ids from
+  // different boots would collide.
+  const index = await readIndex();
+  let id: string;
+  if (opts.relative) {
+    id = `import-${opts.boatFile}-${opts.boatSessionId}`;
+  } else {
+    id = new Date(startTs).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    if (index.some((m) => m.id === id && m.source !== 'import')) id += '_imp';
+  }
+  const existing = index.find((m) => m.id === id);
+  if (existing) return existing;
+
+  const csv   = rowsToCSV(sorted);
+  const stats = computeStats(sorted as unknown as StatsInput);
+  await writeFlightFile(id, csv);
+  const meta: FlightMeta = {
+    id, startTs, endTs, rowCount: sorted.length, storage: 'fs',
+    source: 'import', boatFile: opts.boatFile,
+    ...(opts.relative ? { timeMode: 'relative' as const } : {}),
+    ...stats,
+  };
+  index.push(meta);
+  await writeIndex(index);
+  return meta;
+}
+
 // ── Crash-safety draft (mirror in-progress flight to disk) ──────────────────
 
 // Best-effort mirror of the current buffer. Called on a timer while recording.
@@ -768,6 +826,13 @@ function autoOnFrame(data: TelemetryData) {
     autoLastSessionId = data.session_id;
   }
   if (rebooted) { autoPrevUptimeS = null; pendingGaps = []; }
+
+  // Persist the per-boot wall-clock anchor (throttled to ~1/min inside) so a
+  // mission recovered from the boat's flash log after a crash gets true
+  // timestamps even though this app process is long gone by then.
+  if (data.session_id != null && data.uptime != null) {
+    noteAnchor(data.session_id, data.uptime, now);
+  }
 
   // 2. Throttle-up detection — ESC commanded out of neutral for the
   //    debounce window. Uses the boat's commanded ESC µs (not raw CH3)

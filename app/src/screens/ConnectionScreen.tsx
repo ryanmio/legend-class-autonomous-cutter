@@ -8,6 +8,7 @@ import { RootStackParamList } from '../../App';
 import { Colors, DEFAULT_BOAT_IP, HTTP_PORT } from '../constants';
 import { checkStatus } from '../services/esp32Service';
 import { connect } from '../services/websocketService';
+import { promptRecoverable } from '../services/flightlogService';
 import { saveLastIP, loadLastIP } from '../services/storageService';
 import Screen from '../components/Screen';
 
@@ -110,6 +111,10 @@ export default function ConnectionScreen({ navigation }: Props) {
       await checkStatus(targetIP);
       await saveLastIP(targetIP);
       connect(targetIP);
+      // Fire-and-forget: if the boat's flash log holds missions from previous
+      // boots (crash / field power-off), surface a one-time pointer to the
+      // FLIGHT LOGS import flow. Never blocks or fails the connect.
+      void promptRecoverable(targetIP);
       navigation.replace('Helm', { ip: targetIP });
     } catch {
       setState('failed');
