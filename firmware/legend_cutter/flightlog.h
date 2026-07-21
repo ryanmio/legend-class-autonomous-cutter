@@ -50,6 +50,11 @@ struct FlightInfo {
 };
 uint8_t flightlogList(FlightInfo* out, uint8_t max);   // oldest-first; count returned
 
+// Header-only read: the file's session_id and recording firmware version
+// (from its 64 B header). Returns false if the file is missing/unreadable.
+// Core 0 only.
+bool flightlogFileInfo(const char* name, uint32_t* sessionOut, char* fwOut, size_t fwLen);
+
 // Read up to `max` records with uptimeMs > sinceMs from file `name`,
 // oldest-first — the same cursor contract as GET /history. Returns the count
 // filled, or -1 if the file is missing/unreadable. availOut (optional) gets

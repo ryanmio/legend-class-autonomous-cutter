@@ -1042,7 +1042,9 @@ static void handleFlights() {
 // GET /flight?name=mN&since_ms=<uptimeMs> → one page of a stored flight file.
 // Same shape and cursor contract as /history, but session_id is the FILE's
 // (the boot that recorded it), so the app rebuilds that mission as its own
-// flight; `more` says whether the file holds records beyond this page.
+// flight; `v` is the firmware version that RECORDED the file (from its
+// header — the records themselves don't carry it); `more` says whether the
+// file holds records beyond this page.
 static void handleFlightGet() {
     addCORS();
     char name[12] = "";
@@ -1050,9 +1052,15 @@ static void handleFlightGet() {
     uint32_t since = 0;
     if (server.hasArg("since_ms")) since = strtoul(server.arg("since_ms").c_str(), NULL, 10);
 
+    uint32_t fileSession = 0;
+    char     fileFw[16]  = "";
+    if (!flightlogFileInfo(name, &fileSession, fileFw, sizeof(fileFw))) {
+        server.send(404, "application/json", "{\"ok\":false,\"err\":\"no such flight\"}");
+        return;
+    }
     HistRecord chunk[10];
-    uint32_t   avail = 0, fileSession = 0;
-    int32_t    got = flightlogRead(name, since, chunk, 10, &avail, &fileSession);
+    uint32_t   avail = 0;
+    int32_t    got = flightlogRead(name, since, chunk, 10, &avail, NULL);
     if (got < 0) {
         server.send(404, "application/json", "{\"ok\":false,\"err\":\"no such flight\"}");
         return;
@@ -1060,9 +1068,9 @@ static void handleFlightGet() {
 
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "application/json", "");
-    char head[80];
-    snprintf(head, sizeof(head), "{\"session_id\":%lu,\"more\":%s,\"records\":[",
-             (unsigned long)fileSession, (avail > HISTLOG_PAGE_MAX) ? "true" : "false");
+    char head[96];
+    snprintf(head, sizeof(head), "{\"session_id\":%lu,\"v\":\"%s\",\"more\":%s,\"records\":[",
+             (unsigned long)fileSession, fileFw, (avail > HISTLOG_PAGE_MAX) ? "true" : "false");
     server.sendContent(head);
 
     String recsOut;

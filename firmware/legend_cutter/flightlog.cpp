@@ -226,6 +226,25 @@ uint8_t flightlogList(FlightInfo* out, uint8_t max) {
     return n;
 }
 
+bool flightlogFileInfo(const char* name, uint32_t* sessionOut, char* fwOut, size_t fwLen) {
+    if (!fsMounted || !name || !name[0]) return false;
+    char path[20];
+    snprintf(path, sizeof(path), "/%s.bin", name);
+    File f = LittleFS.open(path, FILE_READ);
+    if (!f) return false;
+    FlightHeader h;
+    bool ok = (f.read((uint8_t*)&h, sizeof(h)) == sizeof(h) &&
+               h.magic == FLIGHT_MAGIC && h.recSize == sizeof(HistRecord));
+    f.close();
+    if (!ok) return false;
+    if (sessionOut) *sessionOut = h.sessionId;
+    if (fwOut && fwLen) {
+        h.fwVersion[sizeof(h.fwVersion) - 1] = '\0';
+        strlcpy(fwOut, h.fwVersion, fwLen);
+    }
+    return true;
+}
+
 int32_t flightlogRead(const char* name, uint32_t sinceMs, HistRecord* out,
                       uint16_t max, uint32_t* availOut, uint32_t* sessionOut) {
     if (!fsMounted || !name || !name[0]) return -1;
