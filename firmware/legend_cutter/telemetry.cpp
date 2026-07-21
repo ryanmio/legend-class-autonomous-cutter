@@ -23,6 +23,7 @@
 #include "floodalarm.h"
 #include "weapons.h"
 #include "histlog.h"
+#include "flightlog.h"
 #include "cmd.h"
 
 #include <WiFi.h>
@@ -52,6 +53,14 @@ static volatile int8_t wifiRssiPub  = 0;    // dBm when associated, else 0
 // cross-core by histlog (core 1). Lock-free, expendable — same discipline as
 // the WiFi publishes above.
 static volatile uint32_t lastClientMs = 0;
+
+// Lazily generated so flightlogBegin() (which runs before telemetryBegin())
+// can stamp the boot's session into the flight-file header; telemetryBegin()
+// calls this too, so both always see the same value.
+uint32_t telemetrySessionId() {
+    while (sessionId == 0) sessionId = esp_random();
+    return sessionId;
+}
 
 uint16_t    telemetryCruiseUs()             { return cruiseUs; }
 void        telemetrySetCruiseUs(uint16_t us) { cruiseUs = us; }  // control loop only (cmdApply)
@@ -882,6 +891,43 @@ static void appendHistRecord(String& out, const HistRecord* r) {
     out += buf;
 }
 
+// One /history page served from the active flight file instead of the RAM
+// ring — the deep-serve path for dropouts longer than the ring window. Same
+// response shape, same cursor contract, live sessionId (same boot by
+// construction). `more` is constant true: this path only runs when the ring
+// holds records newer than anything the file can emit (the file trails live
+// capture by up to one flush window), so there is always a next page.
+static void serveHistoryPageFromFlash(uint32_t since) {
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+    char head[80];
+    snprintf(head, sizeof(head), "{\"session_id\":%lu,\"more\":true,\"records\":[",
+             (unsigned long)sessionId);
+    server.sendContent(head);
+
+    String recsOut;
+    recsOut.reserve(2048);
+    HistRecord chunk[10];
+    uint16_t emitted = 0;
+    uint32_t cursor  = since;
+    int32_t  got     = flightlogRead(flightlogActiveName(), cursor, chunk, 10, NULL, NULL);
+    while (got > 0 && emitted < HISTLOG_PAGE_MAX) {
+        for (int32_t i = 0; i < got && emitted < HISTLOG_PAGE_MAX; i++) {
+            if (emitted > 0) recsOut += ',';
+            appendHistRecord(recsOut, &chunk[i]);
+            cursor = chunk[i].uptimeMs;
+            emitted++;
+            if (recsOut.length() > 1536) { server.sendContent(recsOut); recsOut = ""; }
+        }
+        if (emitted < HISTLOG_PAGE_MAX) {
+            got = flightlogRead(flightlogActiveName(), cursor, chunk, 10, NULL, NULL);
+        }
+    }
+    if (recsOut.length()) server.sendContent(recsOut);
+    server.sendContent("]}");
+    server.sendContent("");
+}
+
 static void handleHistory() {
     addCORS();
     lastClientMs = millis();   // app is back; resets histlog cadence to 1 s
@@ -903,6 +949,24 @@ static void handleHistory() {
 
     uint32_t since = 0;
     if (server.hasArg("since_ms")) since = strtoul(server.arg("since_ms").c_str(), NULL, 10);
+
+    // Deep-serve: a cursor older than the ring's oldest record means the gap
+    // outran the RAM window. The active flight file holds the full 1 s record
+    // back to boot, so serve this page from flash; the ring takes over once
+    // the cursor reaches its window, and overlap seconds dedup app-side. The
+    // probe guards the flightlog-stopped case (file may end before the ring
+    // begins) — then the ring serves what it has, exactly as before.
+    if (flightlogEnabled()) {
+        const HistRecord* ringOldest = histlogAt(0);
+        if (ringOldest && since < ringOldest->uptimeMs) {
+            HistRecord probe;
+            if (flightlogRead(flightlogActiveName(), since, &probe, 1, NULL, NULL) == 1
+                && probe.uptimeMs < ringOldest->uptimeMs) {
+                serveHistoryPageFromFlash(since);
+                return;
+            }
+        }
+    }
 
     // Chunked send so we never build the whole page in one big buffer.
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -944,8 +1008,103 @@ static void handleHistory() {
     server.sendContent("");           // terminate chunked response
 }
 
+// ── /flights, /flight, /flight/delete (full-mission flash log) ──────────────
+// GET /flights → inventory of stored flight files plus flightlog health. After
+// a reboot the app uses this to find missions from previous boots (crash /
+// field power-off) and imports them via GET /flight.
+static void handleFlights() {
+    addCORS();
+    FlightInfo fi[FLIGHTLOG_MAX_FILES];
+    uint8_t n = flightlogList(fi, FLIGHTLOG_MAX_FILES);
+    String out;
+    out.reserve(512 + (size_t)n * 96);
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "{\"enabled\":%s,\"full\":%s,\"active\":\"%s\",\"free_bytes\":%lu,\"dropped\":%lu,\"files\":[",
+             flightlogEnabled() ? "true" : "false",
+             flightlogFull()    ? "true" : "false",
+             flightlogActiveName(),
+             (unsigned long)flightlogFreeBytes(),
+             (unsigned long)flightlogDropped());
+    out += buf;
+    for (uint8_t i = 0; i < n; i++) {
+        snprintf(buf, sizeof(buf),
+                 "%s{\"name\":\"%s\",\"session_id\":%lu,\"records\":%lu,\"bytes\":%lu,\"active\":%s}",
+                 i ? "," : "", fi[i].name, (unsigned long)fi[i].sessionId,
+                 (unsigned long)fi[i].records, (unsigned long)fi[i].bytes,
+                 fi[i].active ? "true" : "false");
+        out += buf;
+    }
+    out += "]}";
+    server.send(200, "application/json", out);
+}
+
+// GET /flight?name=mN&since_ms=<uptimeMs> → one page of a stored flight file.
+// Same shape and cursor contract as /history, but session_id is the FILE's
+// (the boot that recorded it), so the app rebuilds that mission as its own
+// flight; `more` says whether the file holds records beyond this page.
+static void handleFlightGet() {
+    addCORS();
+    char name[12] = "";
+    if (server.hasArg("name")) strlcpy(name, server.arg("name").c_str(), sizeof(name));
+    uint32_t since = 0;
+    if (server.hasArg("since_ms")) since = strtoul(server.arg("since_ms").c_str(), NULL, 10);
+
+    HistRecord chunk[10];
+    uint32_t   avail = 0, fileSession = 0;
+    int32_t    got = flightlogRead(name, since, chunk, 10, &avail, &fileSession);
+    if (got < 0) {
+        server.send(404, "application/json", "{\"ok\":false,\"err\":\"no such flight\"}");
+        return;
+    }
+
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+    char head[80];
+    snprintf(head, sizeof(head), "{\"session_id\":%lu,\"more\":%s,\"records\":[",
+             (unsigned long)fileSession, (avail > HISTLOG_PAGE_MAX) ? "true" : "false");
+    server.sendContent(head);
+
+    String recsOut;
+    recsOut.reserve(2048);
+    uint16_t emitted = 0;
+    uint32_t cursor  = since;
+    while (got > 0 && emitted < HISTLOG_PAGE_MAX) {
+        for (int32_t i = 0; i < got && emitted < HISTLOG_PAGE_MAX; i++) {
+            if (emitted > 0) recsOut += ',';
+            appendHistRecord(recsOut, &chunk[i]);
+            cursor = chunk[i].uptimeMs;
+            emitted++;
+            if (recsOut.length() > 1536) { server.sendContent(recsOut); recsOut = ""; }
+        }
+        if (emitted < HISTLOG_PAGE_MAX) got = flightlogRead(name, cursor, chunk, 10, NULL, NULL);
+    }
+    if (recsOut.length()) server.sendContent(recsOut);
+    server.sendContent("]}");
+    server.sendContent("");
+}
+
+// POST /flight/delete {"name":"mN"} — refuses the active file. The app calls
+// this after a verified import; boot-time pruning is the backstop if it never
+// does, so the partition can't silently fill.
+static void handleFlightDelete() {
+    addCORS();
+    StaticJsonDocument<64> req;
+    if (deserializeJson(req, server.arg("plain"))) { server.send(400, "text/plain", "Bad JSON"); return; }
+    const char* name = req["name"] | "";
+    if (name[0] && !strcmp(name, flightlogActiveName())) {
+        server.send(409, "application/json", "{\"ok\":false,\"err\":\"active\"}");
+        return;
+    }
+    if (!flightlogDelete(name)) {
+        server.send(404, "application/json", "{\"ok\":false,\"err\":\"no such flight\"}");
+        return;
+    }
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
 void telemetryBegin() {
-    sessionId = esp_random();   // app uses this to detect mid-flight reboots
+    telemetrySessionId();       // app uses this to detect mid-flight reboots
     wifiConnect();
 
     server.on("/status",    HTTP_GET,     handleStatus);
@@ -954,6 +1113,12 @@ void telemetryBegin() {
     server.on("/telemetry", HTTP_OPTIONS, handleOptions);
     server.on("/history",   HTTP_GET,     handleHistory);
     server.on("/history",   HTTP_OPTIONS, handleOptions);
+    server.on("/flights",       HTTP_GET,     handleFlights);
+    server.on("/flights",       HTTP_OPTIONS, handleOptions);
+    server.on("/flight",        HTTP_GET,     handleFlightGet);
+    server.on("/flight",        HTTP_OPTIONS, handleOptions);
+    server.on("/flight/delete", HTTP_POST,    handleFlightDelete);
+    server.on("/flight/delete", HTTP_OPTIONS, handleOptions);
     server.on("/cruise",    HTTP_POST,    handleCruise);
     server.on("/cruise",    HTTP_OPTIONS, handleOptions);
     server.on("/waypoint",  HTTP_POST,    handleWaypoint);
@@ -1001,6 +1166,7 @@ static void networkTask(void*) {
     for (;;) {
         server.handleClient();
         wifiMaintain();
+        flightlogService();     // commit queued mission records (open-append-close)
         // Sample link state ~2 Hz so histlog/telemetry can report it. Cheap local
         // driver reads, kept on core 0 — the control loop never calls WiFi.
         uint32_t now = millis();

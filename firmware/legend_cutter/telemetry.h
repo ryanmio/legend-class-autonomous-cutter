@@ -5,7 +5,11 @@
 // Endpoints (all CORS-enabled):
 //   GET  /status
 //   GET  /telemetry
-//   GET  /history           ?since_ms=<uptimeMs>  (store-and-sync gap backfill)
+//   GET  /history           ?since_ms=<uptimeMs>  (store-and-sync gap backfill;
+//                            deep-serves from the flight file past the ring window)
+//   GET  /flights           (flash mission-log inventory + health)
+//   GET  /flight            ?name=mN&since_ms=<uptimeMs>  (stored flight, /history shape)
+//   POST /flight/delete     {name}  (refuses the active file)
 //   POST /cruise            {us | pct}
 //   POST /waypoint          {lat,lon}  (lat:null,lon:null clears)
 //   POST /pid               {kp?, kd?}
@@ -22,6 +26,10 @@
 #include <Arduino.h>
 
 void telemetryBegin();   // brings up WiFi, registers handlers, starts the core-0 network task
+
+// The boot's session id, generated on first call (flightlogBegin() asks before
+// telemetryBegin() runs, so the flight-file header and /telemetry always agree).
+uint32_t telemetrySessionId();
 
 uint16_t   telemetryCruiseUs();         // current cruise target (read by the control loop)
 void       telemetrySetCruiseUs(uint16_t us);  // applied by the control loop via cmdApply

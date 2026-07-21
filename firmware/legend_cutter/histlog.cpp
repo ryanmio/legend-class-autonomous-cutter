@@ -11,6 +11,7 @@
 #include "bilge.h"
 #include "sonar.h"
 #include "telemetry.h"
+#include "flightlog.h"
 
 #include <string.h>
 #include <math.h>
@@ -154,6 +155,8 @@ void histlogUpdate() {
     ring[head] = r;
     head = (head + 1) % HISTLOG_CAPACITY;
     if (count < HISTLOG_CAPACITY) count++;
+
+    flightlogPush(r);   // second consumer: the full-mission flash log
 }
 
 uint16_t histlogCount() { return count; }

@@ -39,6 +39,7 @@
 #include "weapons.h"
 #include "telemetry.h"
 #include "histlog.h"
+#include "flightlog.h"
 #include "cmd.h"
 
 enum VesselMode { MODE_MANUAL, MODE_AUTO, MODE_FAILSAFE };
@@ -263,6 +264,8 @@ void setup() {
     if (audioBegin()) Serial.println("[AUDIO] DF1201S ready.");
     else              Serial.println("[AUDIO] WARN: DF1201S did not ACK — /audio disabled.");
 
+    flightlogBegin();   // before telemetryBegin: the only core-1 FS access runs
+                        // while no network task exists; core 0 owns the FS after
     telemetryBegin();
     histlogBegin();
 

@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.12.0"
+#define FIRMWARE_VERSION "0.13.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -289,7 +289,7 @@ static const uint16_t HTTP_PORT = 80;
 // never stall control. Operator commands cross core 0 → core 1 through a single
 // lock-free single-producer/single-consumer queue (cmd.h); telemetry crosses
 // core 1 → core 0 as lock-free, expendable reads.
-static const uint16_t NET_TASK_STACK = 8192;   // bytes: WebServer + ArduinoJson + /history String
+static const uint16_t NET_TASK_STACK = 10240;  // bytes: WebServer + ArduinoJson + /history String + LittleFS commits
 static const uint8_t  NET_TASK_CORE  = 0;      // WiFi/lwIP core; loop() runs on core 1
 static const uint8_t  CMD_QUEUE_LEN   = 8;     // SPSC ring depth (commands are human-paced)
 
@@ -316,3 +316,18 @@ static const uint16_t HISTLOG_PAGE_MAX    = 100;
 // 1200 records × 2 s ≈ 40 min. Set COARSE_MS to 3000 for ≈60 min at 3 s spacing.
 static const uint32_t HISTLOG_COARSE_MS       = 2000;             // coarse cadence (2 s → 40 min)
 static const uint32_t HISTLOG_COARSEN_AFTER_MS = 20UL * 60 * 1000; // app-absent before coarsening
+
+// ── Full-mission flash log (flightlog) ─────────────────────────────────────
+// Appends the same 48 B records the ring captures to a growing LittleFS file
+// in the "spiffs" partition — one file per boot, always on, ~8 h @ 1 Hz of
+// total storage (~9 fifty-minute missions). Records cross core 1 → core 0
+// through an SPSC ring and are committed open-append-close on the flush
+// cadence, so an unclean power-cut loses at most one flush window and can
+// never corrupt earlier files (LittleFS commits are atomic). PART_BYTES pins
+// the expected partition: on mismatch the module disables itself and never
+// formats — a format only ever initializes the verified region on first boot.
+static const uint32_t FLIGHTLOG_PART_BYTES     = 0x160000;      // "spiffs" size, default 4MB scheme
+static const uint32_t FLIGHTLOG_FLUSH_MS       = 15000;         // commit cadence = worst-case loss window
+static const uint32_t FLIGHTLOG_MIN_FREE_BYTES = 300UL * 1024;  // boot-prune floor (~1.7 h of records)
+static const uint16_t FLIGHTLOG_QUEUE_LEN      = 64;            // SPSC depth (~4 flush windows @ 1 Hz)
+static const uint8_t  FLIGHTLOG_MAX_FILES      = 24;            // /flights inventory cap
