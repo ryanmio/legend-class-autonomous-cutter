@@ -63,8 +63,17 @@ static const uint8_t HIST_F_FAILSAFE_ACK = 1 << 4;
 // one free flag bit — zero added bytes per record.
 static const uint8_t HIST_F_WIFI_ASSOC   = 1 << 5;
 
+// A reader's snapshot of the ring window. The control loop appends once a
+// second, which advances the window; a paged read must resolve every index
+// against ONE snapshot, or it skips a record per append once the ring is full.
+// Take a view at the start of a read pass and index only through it.
+struct HistView {
+    uint16_t oldest;   // ring slot holding logical index 0
+    uint16_t count;    // records visible in this view
+};
+
 void     histlogBegin();                  // reset the ring (call once in setup)
 void     histlogUpdate();                 // rate-limited capture (call every loop)
-uint16_t histlogCount();                  // valid records currently buffered
-const HistRecord* histlogAt(uint16_t i);  // i=0 oldest … count-1 newest; NULL if oob
+HistView histlogView();                   // snapshot the window for one read pass
+const HistRecord* histlogViewAt(const HistView& v, uint16_t i);  // i=0 oldest; NULL if oob
 bool     histlogCoarsening();             // true only during the one-time in-place thin

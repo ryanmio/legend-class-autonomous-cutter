@@ -956,8 +956,11 @@ static void handleHistory() {
     // the cursor reaches its window, and overlap seconds dedup app-side. The
     // probe guards the flightlog-stopped case (file may end before the ring
     // begins) — then the ring serves what it has, exactly as before.
+    // One window snapshot for the whole pass — see HistView in histlog.h.
+    HistView view = histlogView();
+
     if (flightlogEnabled()) {
-        const HistRecord* ringOldest = histlogAt(0);
+        const HistRecord* ringOldest = histlogViewAt(view, 0);
         if (ringOldest && since < ringOldest->uptimeMs) {
             HistRecord probe;
             if (flightlogRead(flightlogActiveName(), since, &probe, 1, NULL, NULL) == 1
@@ -975,7 +978,7 @@ static void handleHistory() {
     char head[80];
     snprintf(head, sizeof(head), "{\"session_id\":%lu,\"more\":", (unsigned long)sessionId);
 
-    uint16_t n = histlogCount();
+    uint16_t n = view.count;
     uint16_t sent = 0;
     bool     more = false;
     String   recsOut;                 // accumulates a few records, flushed in batches
@@ -984,7 +987,7 @@ static void handleHistory() {
     // Decide `more` up front so it can go in the header chunk: count how many
     // records qualify; if that exceeds the page cap, there's a next page.
     for (uint16_t i = 0; i < n; i++) {
-        const HistRecord* r = histlogAt(i);
+        const HistRecord* r = histlogViewAt(view, i);
         if (r && r->uptimeMs > since) {
             if (sent >= HISTLOG_PAGE_MAX) { more = true; break; }
             sent++;
@@ -994,10 +997,15 @@ static void handleHistory() {
     server.sendContent(head);
     server.sendContent(more ? "true,\"records\":[" : "false,\"records\":[");
 
-    uint16_t emitted = 0;
+    uint16_t emitted    = 0;
+    uint32_t lastUptime = since;
     for (uint16_t i = 0; i < n && emitted < HISTLOG_PAGE_MAX; i++) {
-        const HistRecord* r = histlogAt(i);
-        if (!r || r->uptimeMs <= since) continue;
+        const HistRecord* r = histlogViewAt(view, i);
+        // Strictly increasing: the producer can overwrite the view's oldest
+        // slot mid-pass, so a record may read back out of order. Skipping it
+        // keeps the app's cursor monotonic; the next page picks it up.
+        if (!r || r->uptimeMs <= lastUptime) continue;
+        lastUptime = r->uptimeMs;
         if (emitted > 0) recsOut += ',';
         appendHistRecord(recsOut, r);
         emitted++;

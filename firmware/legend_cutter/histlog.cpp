@@ -21,8 +21,8 @@ extern const char* vesselModeName();
 extern bool        vesselFailsafeAck();
 
 static HistRecord ring[HISTLOG_CAPACITY];   // ~58 KB static (.bss)
-static uint16_t   head          = 0;        // next write slot
-static uint16_t   count         = 0;        // valid records (≤ HISTLOG_CAPACITY)
+static volatile uint16_t head   = 0;        // next write slot; written core 1, read core 0
+static volatile uint16_t count  = 0;        // valid records (≤ HISTLOG_CAPACITY)
 static uint32_t   seqCounter    = 0;
 static uint32_t   lastCaptureMs = 0;
 
@@ -159,10 +159,19 @@ void histlogUpdate() {
     flightlogPush(r);   // second consumer: the full-mission flash log
 }
 
-uint16_t histlogCount() { return count; }
+// Read count BEFORE head: while the ring is still filling the two advance
+// together and either order derives the same oldest slot; once it is full,
+// count is pinned at capacity, so this order can never resolve outside the
+// live window.
+HistView histlogView() {
+    HistView v;
+    v.count      = count;
+    uint16_t h   = head;
+    v.oldest     = (uint16_t)((h + HISTLOG_CAPACITY - v.count) % HISTLOG_CAPACITY);
+    return v;
+}
 
-const HistRecord* histlogAt(uint16_t i) {
-    if (i >= count) return NULL;
-    uint16_t oldest = (head + HISTLOG_CAPACITY - count) % HISTLOG_CAPACITY;
-    return &ring[(oldest + i) % HISTLOG_CAPACITY];
+const HistRecord* histlogViewAt(const HistView& v, uint16_t i) {
+    if (i >= v.count) return NULL;
+    return &ring[(v.oldest + i) % HISTLOG_CAPACITY];
 }
