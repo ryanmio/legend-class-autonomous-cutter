@@ -191,15 +191,22 @@ void flightlogService() {
     f.close();                                       // atomic metadata commit
 }
 
+// Kept oldest-first and capped at `max`. The directory iterator yields files in
+// no useful order, so once there are more than `max` of them the cap has to be
+// applied by number, not by arrival: keep the HIGHEST numbers, which are the
+// newest missions and always include the active file. Truncating in arrival
+// order could drop the active file out of its own inventory.
 uint8_t flightlogList(FlightInfo* out, uint8_t max) {
     if (!fsMounted || max == 0) return 0;
     uint8_t n = 0;
     File root = LittleFS.open("/");
     if (!root) return 0;
-    for (File f = root.openNextFile(); f && n < max; f = root.openNextFile()) {
+    for (File f = root.openNextFile(); f; f = root.openNextFile()) {
         uint32_t num = parseNum(f.name());
         if (num == 0) continue;
-        FlightInfo& fi = out[n];
+        if (n == max && num < out[0].num) continue;   // older than everything kept
+
+        FlightInfo fi;
         snprintf(fi.name, sizeof(fi.name), "m%lu", (unsigned long)num);
         fi.num     = num;
         fi.bytes   = (uint32_t)f.size();
@@ -214,14 +221,17 @@ uint8_t flightlogList(FlightInfo* out, uint8_t max) {
         if (f.read((uint8_t*)&h, sizeof(h)) == sizeof(h) && h.magic == FLIGHT_MAGIC) {
             fi.sessionId = h.sessionId;
         }
-        n++;
-    }
-    // Oldest-first by number (insertion sort; the list is tiny).
-    for (uint8_t i = 1; i < n; i++) {
-        FlightInfo key = out[i];
-        int8_t j = (int8_t)(i - 1);
-        while (j >= 0 && out[j].num > key.num) { out[j + 1] = out[j]; j--; }
-        out[j + 1] = key;
+
+        // Insert into the ascending-by-number window, evicting the oldest once
+        // full (the list is tiny, so a shift per file is free).
+        uint8_t j;
+        if (n == max) {
+            for (j = 0; j + 1 < max && out[j + 1].num < num; j++) out[j] = out[j + 1];
+        } else {
+            for (j = n; j > 0 && out[j - 1].num > num; j--) out[j] = out[j - 1];
+            n++;
+        }
+        out[j] = fi;
     }
     return n;
 }
