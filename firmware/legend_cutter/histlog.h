@@ -64,6 +64,13 @@ static const uint8_t HIST_F_FAILSAFE_ACK = 1 << 4;
 // on it while only the app's socket died (assoc=1). Reuses the old struct pad +
 // one free flag bit — zero added bytes per record.
 static const uint8_t HIST_F_WIFI_ASSOC   = 1 << 5;
+// Forward + mid bilge probes — the two that feed the flood alarm and are
+// otherwise live-telemetry-only. Recorded so a mission flown out of WiFi range
+// still answers where water reached and when. The rear probe has no bit: it
+// gates the auto pump, so an ongoing burst pattern already reports it wet.
+// Files recorded before this read both bits clear, i.e. dry.
+static const uint8_t HIST_F_BILGE_FWD    = 1 << 6;
+static const uint8_t HIST_F_BILGE_MID    = 1 << 7;
 
 // A reader's snapshot of the ring window. The control loop appends once a
 // second, which advances the window; a paged read must resolve every index

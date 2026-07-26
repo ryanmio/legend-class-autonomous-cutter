@@ -150,6 +150,8 @@ void histlogUpdate() {
         r.wpDist10 = -1;
     }
     if (bilgePumpOn())       flags |= HIST_F_PUMP;
+    if (bilgeFwdWet())       flags |= HIST_F_BILGE_FWD;
+    if (bilgeMidWet())       flags |= HIST_F_BILGE_MID;
     if (vesselFailsafeAck()) flags |= HIST_F_FAILSAFE_ACK;
     // WiFi link state, published by the core-0 network task (getters below are
     // plain volatile reads — no network call on this core-1 path). rssiDbm stays

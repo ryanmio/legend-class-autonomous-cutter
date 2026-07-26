@@ -885,8 +885,11 @@ static void appendHistRecord(String& out, const HistRecord* r) {
     snprintf(buf, sizeof(buf), ",\"wifi_assoc\":%s,\"rssi\":%d",
              (r->flags & HIST_F_WIFI_ASSOC) ? "true" : "false", (int)r->rssiDbm);
     out += buf;
-    snprintf(buf, sizeof(buf), ",\"pump\":%s,\"failsafe_ack\":%s}",
+    snprintf(buf, sizeof(buf),
+             ",\"pump\":%s,\"bilge_fwd\":%s,\"bilge_mid\":%s,\"failsafe_ack\":%s}",
              (r->flags & HIST_F_PUMP)         ? "true" : "false",
+             (r->flags & HIST_F_BILGE_FWD)    ? "true" : "false",
+             (r->flags & HIST_F_BILGE_MID)    ? "true" : "false",
              (r->flags & HIST_F_FAILSAFE_ACK) ? "true" : "false");
     out += buf;
 }
