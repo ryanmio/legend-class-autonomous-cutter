@@ -5,6 +5,7 @@ import { RootStackParamList } from '../../App';
 import { Colors } from '../constants';
 import { BATT_LOW_V, BATT_CRIT_V } from '../types';
 import { useKeepAwake } from 'expo-keep-awake';
+import * as Updates from 'expo-updates';
 import { useTelemetry } from '../hooks/useTelemetry';
 import {
   getRowCount, subscribeCount, exportShare, clear as clearLogger,
@@ -214,6 +215,7 @@ export default function TelemetryScreen({ navigation, route }: Props) {
           ) : (
             <Text style={styles.empty}>Waiting for telemetry…</Text>
           )}
+          <BuildStamp />
         </ScrollView>
 
         {/* ── Log bar ───────────────────────────────────────────── */}
@@ -277,6 +279,29 @@ function Section({ label }: { label: string }) {
 const CONTACT_STALE_MS = 4_000;         // no frame in this long ⇒ out of contact
 const RING_WARN_MS     = 15 * 60_000;   // boat ring holds ~20 min; amber as it fills
 const RING_CRIT_MS     = 20 * 60_000;   // past the ring — oldest un-synced data overwriting
+
+// Which JS bundle is actually running. An OTA update applies on the NEXT launch,
+// so after a push there is otherwise no way to tell "it landed" from "I haven't
+// relaunched enough times" — a bad thing to be guessing at the ramp.
+// `embedded` = the bundle built into the installed app; an id = an update
+// replaced it. Long-press to copy the id when reporting a problem.
+function BuildStamp() {
+  if (!Updates.isEnabled) return <Text style={styles.buildStamp}>bundle · dev (metro)</Text>;
+
+  const embedded = Updates.isEmbeddedLaunch || !Updates.updateId;
+  if (embedded) return <Text style={styles.buildStamp}>bundle · embedded (as built)</Text>;
+
+  const id   = Updates.updateId!.replace(/-/g, '').slice(0, 7);
+  const when = Updates.createdAt
+    ? Updates.createdAt.toLocaleString(undefined,
+        { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : null;
+  return (
+    <Text style={styles.buildStamp} selectable>
+      {`bundle · ota ${id}${when ? ` · ${when}` : ''}`}
+    </Text>
+  );
+}
 
 function SyncStatus() {
   const [now, setNow] = useState(Date.now());
@@ -375,6 +400,7 @@ const styles = StyleSheet.create({
   value:         { color: Colors.textPrimary, fontSize: 13, fontWeight: '700', fontFamily: 'monospace' },
   empty:         { color: Colors.textSecondary, textAlign: 'center', marginTop: 24, fontStyle: 'italic', fontFamily: 'monospace', fontSize: 12 },
   sectionEmpty:  { color: Colors.textSecondary, fontStyle: 'italic', fontFamily: 'monospace', fontSize: 12, paddingVertical: 6 },
+  buildStamp:    { color: Colors.textSecondary, fontFamily: 'monospace', fontSize: 10, letterSpacing: 0.5, textAlign: 'center', opacity: 0.55, marginTop: 20, marginBottom: 6 },
 
   // Log bar
   logBar:           { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 10, marginTop: 4, borderTopWidth: 1, borderTopColor: Colors.surface },
