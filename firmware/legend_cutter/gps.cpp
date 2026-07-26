@@ -40,5 +40,13 @@ float gpsLon()          { return boatLon; }
 uint8_t gpsSats()       { return (uint8_t)tgps.satellites.value(); }
 bool  gpsSpeedValid()   { return tgps.speed.isValid(); }
 float gpsSpeedKnots()   { return tgps.speed.knots(); }
-bool  gpsCourseValid()  { return tgps.course.isValid(); }
+// TinyGPS++ ignores empty NMEA terms, so an RMC with no track angle leaves
+// course holding whatever it last parsed — observed latching the ddmmyy date
+// for a whole boot while isValid() stayed true. Range-check at the source so
+// every consumer (COG trim, histlog, /telemetry) sees it as absent instead.
+bool gpsCourseValid() {
+    if (!tgps.course.isValid()) return false;
+    float c = tgps.course.deg();
+    return c >= 0.0f && c < 360.0f;
+}
 float gpsCourseDeg()    { return tgps.course.deg(); }
