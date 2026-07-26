@@ -7,8 +7,10 @@
 // Uniform-rate retention: capture is 1 s, so any dropout of ≤20 min is recorded
 // entirely at 1 s. If the app has been gone longer than HISTLOG_COARSEN_AFTER_MS,
 // the ring coarsens ONCE — it retroactively thins the stored data to
-// HISTLOG_COARSE_MS spacing and continues capturing at that rate, so the whole
-// recording is a single uniform interval (2 s → ~40 min). This one-time thin
+// HISTLOG_COARSE_MS spacing and stores at that rate thereafter, so the whole
+// ring is a single uniform interval (2 s → ~40 min). Capture itself stays at
+// 1 s: the flash log (flightlog.h) is not RAM-bound and keeps every sample, so
+// ring records carry non-contiguous seq while coarsened. This one-time thin
 // runs on core 1 only while the app is absent (that is its trigger), so no
 // /history read races it; histlogCoarsening() gates the read as a backstop.
 //

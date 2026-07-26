@@ -26,10 +26,13 @@ static volatile uint16_t count  = 0;        // valid records (≤ HISTLOG_CAPACI
 static uint32_t   seqCounter    = 0;
 static uint32_t   lastCaptureMs = 0;
 
-// Uniform-rate retention state. intervalMs starts fine (1 s); after a >20 min
-// app absence it flips to coarse (2 s) for the rest of that dropout. `coarsened`
-// makes the one-time thin fire exactly once; `coarsening` is the read backstop.
-static uint32_t       intervalMs = HISTLOG_INTERVAL_MS;
+// Uniform-rate retention state — applies to the RAM ring ONLY. Capture always
+// runs at HISTLOG_INTERVAL_MS so the flash log keeps full resolution; after a
+// >20 min app absence the ring stores every ringStride-th capture instead.
+// `coarsened` makes the one-time thin fire exactly once; `coarsening` is the
+// read backstop.
+static uint16_t       ringStride = 1;       // ring keeps 1 of every N captures
+static uint16_t       ringPhase  = 0;
 static bool           coarsened  = false;
 static volatile bool  coarsening = false;   // read cross-core by /history (core 0)
 
@@ -38,7 +41,8 @@ void histlogBegin() {
     count = 0;
     seqCounter = 0;
     lastCaptureMs = 0;
-    intervalMs = HISTLOG_INTERVAL_MS;
+    ringStride = 1;
+    ringPhase = 0;
     coarsened = false;
     coarsening = false;
 }
@@ -65,8 +69,11 @@ static void coarsenRing(uint16_t stride) {
     }
     count         = kept;                                          // reduced count published last
     head          = (uint16_t)((oldest + kept) % HISTLOG_CAPACITY);
-    lastCaptureMs = ring[(oldest + kept - 1) % HISTLOG_CAPACITY].uptimeMs; // phase-anchor to newest kept
-    intervalMs    = HISTLOG_COARSE_MS;
+    // Capture cadence is untouched (flash keeps 1 Hz); only the ring thins.
+    // ringPhase 0 puts the next ring store exactly one stride past the newest
+    // kept record, so spacing stays uniform across the seam.
+    ringStride    = stride;
+    ringPhase     = 0;
     coarsened     = true;
     coarsening    = false;
 }
@@ -91,11 +98,12 @@ void histlogUpdate() {
     // dropout. Stored coarse data is untouched; the app's since_ms cursor bounds
     // future backfills, so recordings never mix rates.
     if (coarsened && (now - telemetryLastClientMs()) < (2u * HISTLOG_INTERVAL_MS)) {
-        intervalMs = HISTLOG_INTERVAL_MS;
+        ringStride = 1;
+        ringPhase  = 0;
         coarsened  = false;
     }
 
-    if (lastCaptureMs != 0 && (now - lastCaptureMs) < intervalMs) return;
+    if (lastCaptureMs != 0 && (now - lastCaptureMs) < HISTLOG_INTERVAL_MS) return;
     lastCaptureMs = now;
 
     HistRecord r;
@@ -152,11 +160,17 @@ void histlogUpdate() {
     }
     r.flags = flags;
 
-    ring[head] = r;
-    head = (head + 1) % HISTLOG_CAPACITY;
-    if (count < HISTLOG_CAPACITY) count++;
+    // Flash takes every capture — it has the room, and a half-resolution
+    // mission is exactly what the flight log exists to prevent. The ring is the
+    // constrained consumer, so coarsening thins only what it stores.
+    flightlogPush(r);
 
-    flightlogPush(r);   // second consumer: the full-mission flash log
+    if (++ringPhase >= ringStride) {
+        ringPhase  = 0;
+        ring[head] = r;
+        head = (head + 1) % HISTLOG_CAPACITY;
+        if (count < HISTLOG_CAPACITY) count++;
+    }
 }
 
 // Read count BEFORE head: while the ring is still filling the two advance
