@@ -9,6 +9,7 @@ firmware/tests/.DS_Store
 /node_modules
 app/node_modules/
 /package-lock.json
+app/dist/
 /package.json
 PLANNING_NOTES.md
 handoff prompt.md
