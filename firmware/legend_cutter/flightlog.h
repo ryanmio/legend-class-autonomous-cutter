@@ -34,9 +34,10 @@ void flightlogPush(const HistRecord& r);  // producer, core 1 (histlogUpdate); n
 void flightlogService();                  // consumer, core 0 (networkTask); commits on cadence
 
 bool        flightlogEnabled();           // FS mounted and this boot's file exists
-bool        flightlogFull();              // partition filled / write failed — logging stopped, boat unaffected
+bool        flightlogFull();              // write failed (out of space) — logging stopped, boat unaffected
 const char* flightlogActiveName();        // e.g. "m17"; "" if disabled
-uint32_t    flightlogFreeBytes();         // LittleFS free space (0 if not mounted)
+uint32_t    flightlogFreeBytes();         // live LittleFS free-space query (0 if not mounted)
+uint32_t    flightlogFreeBytesPub();      // last-commit snapshot; cheap for 1 Hz /telemetry
 uint32_t    flightlogDropped();           // records dropped on a full queue (expect 0)
 
 // One stored flight file, for GET /flights.

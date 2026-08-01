@@ -287,6 +287,13 @@ static void handleTelemetry() {
     doc["low_volt_alarm"] = lowVoltActive();
     doc["flood_alarm"]    = floodAlarmActive();
 
+    // Flight-log health, so the live screen can show mission logging died
+    // instead of leaving it to be discovered at import time.
+    doc["flight_log"]     = flightlogActiveName();   // "" = disabled at boot
+    doc["flight_full"]    = flightlogFull();
+    doc["flight_dropped"] = flightlogDropped();
+    doc["flight_free_kb"] = flightlogFreeBytesPub() / 1024;
+
     // Position
     doc["gps_fix"] = gpsValid();
     if (gpsValid()) {

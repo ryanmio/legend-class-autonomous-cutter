@@ -40,7 +40,9 @@ static volatile bool     logFull        = false;   // written core 0 (service), 
 static char              activeName[12] = "";
 static char              activePath[20] = "";      // "/m<N>.bin"
 static uint32_t          lastCommitMs   = 0;
+static bool              openFailed     = false;   // last commit's open failed; retry on cadence only
 static volatile uint32_t droppedCount   = 0;       // written core 1, read core 0 (diag)
+static volatile uint32_t freeBytesPub   = 0;       // snapshot at last commit; cheap for 1 Hz /telemetry
 
 // SPSC ring, core 1 → core 0.
 static HistRecord        queueRing[FLIGHTLOG_QUEUE_LEN];
@@ -56,6 +58,10 @@ uint32_t flightlogFreeBytes() {
     if (!fsMounted) return 0;
     return (uint32_t)(LittleFS.totalBytes() - LittleFS.usedBytes());
 }
+
+// usedBytes() traverses the filesystem, so /telemetry (1 Hz) reads this
+// snapshot instead — refreshed per commit, which is as fast as it can change.
+uint32_t flightlogFreeBytesPub() { return freeBytesPub; }
 
 // "m<N>.bin" (with or without a leading '/') → N, or 0 if not a flight file.
 static uint32_t parseNum(const char* fn) {
@@ -150,8 +156,9 @@ void flightlogBegin() {
     f.close();
 
     lastCommitMs = millis();
+    freeBytesPub = flightlogFreeBytes();
     Serial.printf("[FLIGHTLOG] %s @ 1 Hz, %lu KB free\n",
-                  activeName, (unsigned long)(flightlogFreeBytes() / 1024));
+                  activeName, (unsigned long)(freeBytesPub / 1024));
 }
 
 void flightlogPush(const HistRecord& r) {
@@ -172,16 +179,22 @@ void flightlogService() {
     uint16_t pending = (uint16_t)((h + FLIGHTLOG_QUEUE_LEN - qTail) % FLIGHTLOG_QUEUE_LEN);
     uint32_t now = millis();
     // Commit on cadence; early if the queue is half full (a stalled task must
-    // not cost records — they're the mission log).
-    if ((now - lastCommitMs) < FLIGHTLOG_FLUSH_MS && pending < FLIGHTLOG_QUEUE_LEN / 2) return;
+    // not cost records — they're the mission log). After a failed open, retry
+    // on cadence only — the half-full trigger would hammer a failing FS every pass.
+    if ((now - lastCommitMs) < FLIGHTLOG_FLUSH_MS &&
+        (openFailed || pending < FLIGHTLOG_QUEUE_LEN / 2)) return;
     lastCommitMs = now;
 
     File f = LittleFS.open(activePath, FILE_APPEND);
     if (!f) {
-        logFull = true;                              // open failure = stop logging; boat unaffected
-        Serial.println("[FLIGHTLOG] WARN: append failed — logging stopped");
+        // Possibly transient, so keep retrying — only a failed WRITE (out of
+        // space) latches logFull. Records wait in the queue meanwhile; if it
+        // overflows, droppedCount reports the loss in /telemetry.
+        openFailed = true;
+        Serial.println("[FLIGHTLOG] WARN: append open failed — retrying on cadence");
         return;
     }
+    openFailed = false;
     __sync_synchronize();                            // read payloads written before head publish
     while (qTail != h) {
         if (f.write((const uint8_t*)&queueRing[qTail], sizeof(HistRecord)) != sizeof(HistRecord)) {
@@ -192,6 +205,7 @@ void flightlogService() {
         qTail = (uint16_t)((qTail + 1) % FLIGHTLOG_QUEUE_LEN);
     }
     f.close();                                       // atomic metadata commit
+    freeBytesPub = flightlogFreeBytes();
 }
 
 // Kept oldest-first and capped at `max`. The directory iterator yields files in
