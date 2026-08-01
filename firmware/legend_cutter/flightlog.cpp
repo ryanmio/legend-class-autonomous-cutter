@@ -93,7 +93,10 @@ static void pruneToFloor() {
         if (lo == 0) break;                     // nothing left to prune
         char path[20];
         numToPath(lo, path, sizeof(path));
-        LittleFS.remove(path);
+        if (!LittleFS.remove(path)) {           // a failed remove would rescan the same file forever
+            Serial.printf("[FLIGHTLOG] WARN: prune %s failed — continuing low on space\n", path);
+            break;
+        }
         Serial.printf("[FLIGHTLOG] pruned %s (free floor)\n", path);
     }
 }
