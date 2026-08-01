@@ -119,6 +119,13 @@ export interface TelemetryData {
 
   sonar_ok?: boolean;           // aspirational — not in test_29
 
+  // Flight-log health (firmware ≥0.13.7). Absent on older firmware — render
+  // nothing rather than a false alarm.
+  flight_log?: string;        // active flash-log file, e.g. "m17"; "" = disabled at boot
+  flight_full?: boolean;      // logging stopped: write failed (out of space)
+  flight_dropped?: number;    // records dropped on a full queue (expect 0)
+  flight_free_kb?: number;    // partition free space at last commit
+
   nav_on?: boolean;
   bridge_on?: boolean;
   deck_on?: boolean;

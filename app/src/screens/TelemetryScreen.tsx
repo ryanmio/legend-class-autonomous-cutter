@@ -33,6 +33,22 @@ function modeColor(mode: string | undefined): string {
   }
 }
 
+// Mission flash-log health (firmware ≥0.13.7). The mission log dying mid-run
+// must be loud on the live screen, not discovered at import time; when healthy
+// the row doubles as pre-departure confirmation that recording is on and has
+// room for the whole run.
+function flightLogText(data: { flight_log?: string; flight_full?: boolean; flight_dropped?: number; flight_free_kb?: number }): string {
+  if (!data.flight_log) return '⚠ OFF — not recording';
+  if (data.flight_full) return `⚠ ${data.flight_log} STOPPED — flash full`;
+  const free    = data.flight_free_kb != null ? ` · ${(data.flight_free_kb / 1024).toFixed(1)} MB free` : '';
+  const dropped = data.flight_dropped ? ` · ⚠ ${data.flight_dropped} dropped` : '';
+  return `${data.flight_log}${free}${dropped}`;
+}
+
+function flightLogWarn(data: { flight_log?: string; flight_full?: boolean; flight_dropped?: number }): boolean {
+  return !data.flight_log || !!data.flight_full || (data.flight_dropped ?? 0) > 0;
+}
+
 function magRowText(data: { mag_uT?: string; mag_baseline_uT?: string; mag_calibrated?: boolean }): string {
   const live = data.mag_uT != null ? parseFloat(data.mag_uT) : NaN;
   const base = data.mag_baseline_uT != null ? parseFloat(data.mag_baseline_uT) : NaN;
@@ -158,6 +174,9 @@ export default function TelemetryScreen({ navigation, route }: Props) {
               )}
               {(data.mag_uT != null || data.mag_calibrated != null) && (
                 <Row label="Mag" value={magRowText(data)} warn={magRowWarn(data)} />
+              )}
+              {data.flight_log != null && (
+                <Row label="Flight log" value={flightLogText(data)} warn={flightLogWarn(data)} />
               )}
 
               <Section label="GPS" />
