@@ -916,7 +916,7 @@ async function pumpBackfills(): Promise<void> {
       syncSynced   = 0;
       syncTotalEst = g.totalEst;
       try {
-        const { sessionId, records } = await fetchHistorySince(
+        const { sessionId, records, capped } = await fetchHistorySince(
           ip, g.sinceMs, BACKFILL_MAX_PAGES,
           (received) => { syncSynced = Math.min(received, syncTotalEst); },
         );
@@ -932,6 +932,16 @@ async function pumpBackfills(): Promise<void> {
         }
         if (!unsubscribe) { pendingGaps = []; break; }  // flight ended mid-fetch
         mergeBackfill(records, g.anchorUptimeMs, g.anchorWallMs, g.version);
+        // Deep-serve (firmware ≥0.13.0) pages from flash back to boot, so a
+        // long gap can exhaust BACKFILL_MAX_PAGES with the boat still holding
+        // more. What arrived is merged; the gap stays queued with its cursor
+        // advanced so the next pass pulls the remainder instead of leaving a
+        // silent hole. Requires progress (records nonempty) so a boat that
+        // says more:true on an empty page can't spin this loop forever.
+        if (capped && records.length > 0) {
+          g.sinceMs = records[records.length - 1].uptime_ms;
+          continue;
+        }
         pendingGaps.shift();                            // filled — done with this gap
       } catch (e) {
         // Surface the REAL failure cause (timeout/abort/network) with the

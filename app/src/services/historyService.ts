@@ -45,6 +45,12 @@ export async function fetchHistoryPage(ip: string, sinceMs: number): Promise<His
 // backfill: advance since_ms to each record's uptime_ms, stop on an empty
 // page, `more:false`, or the page cap.
 //
+// `capped` is true when the loop ran out of pages while the boat still had
+// more (the last page said more:true) — the returned records are a PREFIX of
+// the range, not all of it. Deep-serve (firmware ≥0.13.0) pages from flash all
+// the way back to boot, so unlike the old ring-bounded /history this can
+// actually happen; callers must not treat a capped result as complete.
+//
 // onPage (optional) reports progress: called after each page is confirmed
 // received (the fetch resolved and its records are in hand), with the running
 // count of records received so far this call. It is display-only — it does not
@@ -57,15 +63,17 @@ export async function pageSince(
   sinceMs: number,
   maxPages: number,
   onPage?: (receivedSoFar: number) => void,
-): Promise<{ sessionId: number; records: HistoryRecord[]; v?: string }> {
+): Promise<{ sessionId: number; records: HistoryRecord[]; v?: string; capped: boolean }> {
   let cursor = sinceMs;
   let sessionId = 0;
   let v: string | undefined;
+  let more = false;
   const out: HistoryRecord[] = [];
   for (let page = 0; page < maxPages; page++) {
     const p = await fetchPage(cursor);
     sessionId = p.session_id;
     if (p.v) v = p.v;
+    more = p.more;
     if (!p.records || p.records.length === 0) break;
     for (const r of p.records) {
       out.push(r);
@@ -74,7 +82,7 @@ export async function pageSince(
     onPage?.(out.length);   // page confirmed received; report cumulative count
     if (!p.more) break;
   }
-  return { sessionId, records: out, v };
+  return { sessionId, records: out, v, capped: more };
 }
 
 // Page through every /history record newer than sinceMs. Returns the boat's
@@ -84,6 +92,6 @@ export async function fetchHistorySince(
   sinceMs: number,
   maxPages = 50,
   onPage?: (receivedSoFar: number) => void,
-): Promise<{ sessionId: number; records: HistoryRecord[] }> {
+): Promise<{ sessionId: number; records: HistoryRecord[]; capped: boolean }> {
   return pageSince((cursor) => fetchHistoryPage(ip, cursor), sinceMs, maxPages, onPage);
 }

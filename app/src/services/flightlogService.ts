@@ -135,13 +135,19 @@ export async function importBoatFlight(
   onProgress?: (p: ImportProgress) => void,
 ): Promise<FlightMeta> {
   const maxPages = Math.min(IMPORT_MAX_PAGES, Math.ceil(file.records / 100) + 2);
-  const { sessionId, records, v } = await pageSince(
+  const { sessionId, records, v, capped } = await pageSince(
     (cursor) => fetchFlightPage(ip, file.name, cursor),
     0,
     maxPages,
     (received) => onProgress?.({ received, total: file.records }),
   );
   if (records.length === 0) throw new Error(`${file.name}: no records returned`);
+  // The page budget has margin over the file's own record count, so a capped
+  // pull means something is off (miscounted inventory, misbehaving pager) —
+  // never save-and-delete a prefix of a mission.
+  if (capped) {
+    throw new Error(`${file.name}: page cap hit at ${records.length} records — incomplete, boat copy kept`);
+  }
 
   const sess = file.session_id || sessionId;
   const anchor = await getAnchor(sess);
