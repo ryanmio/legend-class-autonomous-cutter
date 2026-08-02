@@ -216,9 +216,9 @@ export default function TelemetryScreen({ navigation, route }: Props) {
               {(data.bilge_fwd != null || data.bilge_mid != null || data.bilge_rear != null) && (
                 <>
                   <Section label="BILGE" />
-                  {data.bilge_fwd  != null && <Row label="Fwd"   value={data.bilge_fwd  ? '⚠ WET' : 'dry'} warn={data.bilge_fwd}  />}
-                  {data.bilge_mid  != null && <Row label="Bilge" value={data.bilge_mid  ? '⚠ WET' : 'dry'} warn={data.bilge_mid}  />}
-                  {data.bilge_rear != null && <Row label="Rear"  value={data.bilge_rear ? '⚠ WET' : 'dry'} warn={data.bilge_rear} />}
+                  {data.bilge_fwd  != null && <Row label="Fwd"   value={probeValue(data.bilge_fwd,  data.bilge_fwd_hits,  data.bilge_fwd_duty)}  warn={data.bilge_fwd}  />}
+                  {data.bilge_mid  != null && <Row label="Bilge" value={probeValue(data.bilge_mid,  data.bilge_mid_hits,  data.bilge_mid_duty)}  warn={data.bilge_mid}  />}
+                  {data.bilge_rear != null && <Row label="Rear"  value={probeValue(data.bilge_rear, data.bilge_rear_hits, data.bilge_rear_duty)} warn={data.bilge_rear} />}
                   {data.pump_phase  != null && (
                     <Row label="Pump"
                          value={
@@ -272,6 +272,14 @@ export default function TelemetryScreen({ navigation, route }: Props) {
 }
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
+// Wet shows contact duty% (probe health: ~100 clean, single digits = film —
+// clean before the next run); hits = wet events since boot, so a blip the
+// 1 Hz poll straddled is still evident from the count moving.
+function probeValue(wet: boolean, hits?: number, duty?: number): string {
+  const base = wet ? `⚠ WET${duty != null ? ` · ${duty}%` : ''}` : 'dry';
+  return hits ? `${base} · ${hits} hit${hits === 1 ? '' : 's'}` : base;
+}
+
 function Row({ label, value, warn }: { label: string; value: string | number; warn?: boolean }) {
   return (
     <View style={styles.row}>

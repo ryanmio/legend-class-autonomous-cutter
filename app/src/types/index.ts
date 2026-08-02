@@ -100,9 +100,19 @@ export interface TelemetryData {
   //   1-based ON-pulse number within the current burst, pump_phase_ms the time
   //   elapsed in the current phase. Manual cycles forever until stopped via
   //   POST /bilge {on:false}.
+  // v0.14.0: bilge_* are LATCHED — any probe contact is stretched ~2.5 s so the
+  // 1 Hz poll can't miss it. *_hits counts wet events since boot; *_duty is the
+  // % of loop-rate reads low over the last second — probe contact quality
+  // (clean submerged ≈ 100, marginal/filmed ≈ single digits, 0 = dry).
   bilge_fwd?: boolean;
   bilge_mid?: boolean;
   bilge_rear?: boolean;
+  bilge_fwd_hits?: number;
+  bilge_mid_hits?: number;
+  bilge_rear_hits?: number;
+  bilge_fwd_duty?: number;
+  bilge_mid_duty?: number;
+  bilge_rear_duty?: number;
   bilge_aft?: boolean;        // legacy alias (pre-3-zone telemetry); unused going forward
   pump?: boolean;             // MOSFET state (HIGH during the ON phase only)
   pump_manual?: boolean;
