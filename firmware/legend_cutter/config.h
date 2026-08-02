@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 // ── Build identification ───────────────────────────────────────────────────
-#define FIRMWARE_VERSION "0.13.7"
+#define FIRMWARE_VERSION "0.14.0"
 #define VESSEL_NAME      "Legend Cutter"
 
 // ── I2C ────────────────────────────────────────────────────────────────────
@@ -206,6 +206,8 @@ static const uint32_t BILGE_PULSE_ON_MS       = 6000;
 static const uint32_t BILGE_PULSE_OFF_MS      = 6000;
 static const uint8_t  BILGE_BURST_CYCLES      = 3;      // ON pulses per burst before a cooldown
 static const uint32_t BILGE_COOLDOWN_MS       = 60000;  // rest after a burst; raise toward 120000 if it still runs too often
+static const uint32_t BILGE_LATCH_MS          = 2500;   // stretch a probe low so 1 Hz samplers can't miss it
+static const uint32_t BILGE_DUTY_WINDOW_MS    = 1000;   // window for the per-probe low-duty percentage
 
 // ── Flood alarm (passive annunciation ONLY — never touches control) ──────────
 // The fwd/mid probes are otherwise telemetry-only; this latches a nav-light

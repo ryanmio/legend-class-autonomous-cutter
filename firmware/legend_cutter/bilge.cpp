@@ -17,7 +17,19 @@
 #include "bilge.h"
 #include "config.h"
 
-static bool fwdWet = false, midWet = false, rearWet = false;
+// Raw reads are written on core 1 and read cross-core by the HTTP handlers on
+// core 0, hence volatile (aligned bool/uint32 loads are atomic on this target).
+static volatile bool fwdWet = false, midWet = false, rearWet = false;
+
+// Derived probe views, indexed 0=fwd 1=mid 2=rear — see bilge.h for the
+// latched/hits/duty contract. Control consumers keep the raw reads.
+static uint32_t          latchUntilMs[3] = {0, 0, 0};
+static volatile bool     latched[3]      = {false, false, false};
+static volatile uint32_t hits[3]         = {0, 0, 0};
+static volatile uint8_t  dutyPct[3]      = {0, 0, 0};
+static uint32_t          lowReads[3]     = {0, 0, 0};
+static uint32_t          totalReads      = 0;
+static uint32_t          dutyWindowMs    = 0;
 
 static BilgePhase  phase    = BILGE_PHASE_OFF;
 static BilgeSource source   = BILGE_SRC_NONE;
@@ -47,6 +59,18 @@ void bilgeBegin() {
     pinMode(PIN_BILGE_REAR_SENSOR, INPUT_PULLUP);
     pinMode(PIN_BILGE_PUMP, OUTPUT);
     digitalWrite(PIN_BILGE_PUMP, LOW);
+    dutyWindowMs = millis();
+}
+
+// Latch stretch, hit counting, and low-duty accumulation for one probe.
+static void probeDerive(uint8_t i, bool wet, uint32_t now) {
+    if (wet) {
+        latchUntilMs[i] = now + BILGE_LATCH_MS;
+        lowReads[i]++;
+    }
+    bool l = wet || (int32_t)(latchUntilMs[i] - now) > 0;
+    if (l && !latched[i]) hits[i] = hits[i] + 1;
+    latched[i] = l;
 }
 
 void bilgeUpdate() {
@@ -54,6 +78,19 @@ void bilgeUpdate() {
     fwdWet  = (digitalRead(PIN_BILGE_FWD_SENSOR)  == LOW);
     midWet  = (digitalRead(PIN_BILGE_MID_SENSOR)  == LOW);
     rearWet = (digitalRead(PIN_BILGE_REAR_SENSOR) == LOW);
+
+    probeDerive(0, fwdWet, now);
+    probeDerive(1, midWet, now);
+    probeDerive(2, rearWet, now);
+    totalReads++;
+    if (now - dutyWindowMs >= BILGE_DUTY_WINDOW_MS) {
+        for (uint8_t i = 0; i < 3; i++) {
+            dutyPct[i]  = (uint8_t)((100u * lowReads[i] + totalReads / 2) / totalReads);
+            lowReads[i] = 0;
+        }
+        totalReads   = 0;
+        dutyWindowMs = now;
+    }
 
     // MANUAL: operator override — cycle ON/PAUSE forever, no cap, no cooldown.
     if (source == BILGE_SRC_MANUAL) {
@@ -93,6 +130,18 @@ void bilgeUpdate() {
 bool bilgeFwdWet()      { return fwdWet; }
 bool bilgeMidWet()      { return midWet; }
 bool bilgeRearWet()     { return rearWet; }
+
+bool bilgeFwdWetLatched()  { return latched[0]; }
+bool bilgeMidWetLatched()  { return latched[1]; }
+bool bilgeRearWetLatched() { return latched[2]; }
+
+uint32_t bilgeFwdHits()  { return hits[0]; }
+uint32_t bilgeMidHits()  { return hits[1]; }
+uint32_t bilgeRearHits() { return hits[2]; }
+
+uint8_t bilgeFwdDutyPct()  { return dutyPct[0]; }
+uint8_t bilgeMidDutyPct()  { return dutyPct[1]; }
+uint8_t bilgeRearDutyPct() { return dutyPct[2]; }
 bool bilgePumpOn()      { return phase == BILGE_PHASE_ON; }
 bool bilgePumpManual()  { return source == BILGE_SRC_MANUAL; }
 

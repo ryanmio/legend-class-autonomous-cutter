@@ -244,9 +244,16 @@ static void handleTelemetry() {
     doc["bridge_on"]    = lightsState(LED_BRIDGE);
     doc["deck_on"]      = lightsState(LED_DECK);
     doc["audio_ok"]     = audioAvailable();
-    doc["bilge_fwd"]    = bilgeFwdWet();
-    doc["bilge_mid"]    = bilgeMidWet();
-    doc["bilge_rear"]   = bilgeRearWet();
+    // Latched probe views (bilge.h) — raw reads can miss sub-second contact.
+    doc["bilge_fwd"]        = bilgeFwdWetLatched();
+    doc["bilge_mid"]        = bilgeMidWetLatched();
+    doc["bilge_rear"]       = bilgeRearWetLatched();
+    doc["bilge_fwd_hits"]   = bilgeFwdHits();
+    doc["bilge_mid_hits"]   = bilgeMidHits();
+    doc["bilge_rear_hits"]  = bilgeRearHits();
+    doc["bilge_fwd_duty"]   = bilgeFwdDutyPct();
+    doc["bilge_mid_duty"]   = bilgeMidDutyPct();
+    doc["bilge_rear_duty"]  = bilgeRearDutyPct();
     doc["pump"]         = bilgePumpOn();
     doc["pump_manual"]  = bilgePumpManual();
     BilgePhase phase    = bilgePumpPhase();
@@ -841,9 +848,10 @@ static void handleDepth() {
 // into the same flight log; invalid fields are omitted, exactly as live.
 static void appendHistRecord(String& out, const HistRecord* r) {
     char buf[320];
-    const char* modeStr = (r->mode == 1) ? "MANUAL"
-                        : (r->mode == 2) ? "AUTO"
-                        : (r->mode == 3) ? "FAILSAFE" : "IDLE";
+    uint8_t modeCode = r->mode & HIST_MODE_MASK;
+    const char* modeStr = (modeCode == 1) ? "MANUAL"
+                        : (modeCode == 2) ? "AUTO"
+                        : (modeCode == 3) ? "FAILSAFE" : "IDLE";
     bool fix = r->flags & HIST_F_GPS_FIX;
     snprintf(buf, sizeof(buf),
         "{\"seq\":%lu,\"uptime_ms\":%lu,\"mode\":\"%s\","
@@ -893,11 +901,12 @@ static void appendHistRecord(String& out, const HistRecord* r) {
              (r->flags & HIST_F_WIFI_ASSOC) ? "true" : "false", (int)r->rssiDbm);
     out += buf;
     snprintf(buf, sizeof(buf),
-             ",\"pump\":%s,\"bilge_fwd\":%s,\"bilge_mid\":%s,\"failsafe_ack\":%s}",
-             (r->flags & HIST_F_PUMP)         ? "true" : "false",
-             (r->flags & HIST_F_BILGE_FWD)    ? "true" : "false",
-             (r->flags & HIST_F_BILGE_MID)    ? "true" : "false",
-             (r->flags & HIST_F_FAILSAFE_ACK) ? "true" : "false");
+             ",\"pump\":%s,\"bilge_fwd\":%s,\"bilge_mid\":%s,\"bilge_rear\":%s,\"failsafe_ack\":%s}",
+             (r->flags & HIST_F_PUMP)              ? "true" : "false",
+             (r->flags & HIST_F_BILGE_FWD)         ? "true" : "false",
+             (r->flags & HIST_F_BILGE_MID)         ? "true" : "false",
+             (r->mode  & HIST_MODE_F_BILGE_REAR)   ? "true" : "false",
+             (r->flags & HIST_F_FAILSAFE_ACK)      ? "true" : "false");
     out += buf;
 }
 

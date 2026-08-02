@@ -46,7 +46,8 @@ struct HistRecord {
     int16_t  battCa;       // amps × 100            (INT16_MIN = n/a)
     int16_t  depthCm;      // depth, cm             (-1 = no reading)
     int16_t  wpDist10;     // waypoint distance, m × 10 (-1 = n/a)
-    uint8_t  mode;         // 0 idle/unknown, 1 MANUAL, 2 AUTO, 3 FAILSAFE
+    uint8_t  mode;         // low nibble: 0 idle/unknown, 1 MANUAL, 2 AUTO, 3 FAILSAFE;
+                           // high bits pack HIST_MODE_F_* (flags byte is full)
     uint8_t  sats;
     uint8_t  flags;        // HIST_F_* bitfield
     uint8_t  wpIdx;        // active leg, 0-based (valid only if WP_SET flag)
@@ -64,13 +65,18 @@ static const uint8_t HIST_F_FAILSAFE_ACK = 1 << 4;
 // on it while only the app's socket died (assoc=1). Reuses the old struct pad +
 // one free flag bit — zero added bytes per record.
 static const uint8_t HIST_F_WIFI_ASSOC   = 1 << 5;
-// Forward + mid bilge probes — the two that feed the flood alarm and are
-// otherwise live-telemetry-only. Recorded so a mission flown out of WiFi range
-// still answers where water reached and when. The rear probe has no bit: it
-// gates the auto pump, so an ongoing burst pattern already reports it wet.
-// Files recorded before this read both bits clear, i.e. dry.
+// Forward + mid bilge probes, LATCHED reads (bilge.h) — a raw read can miss a
+// sub-second contact that the loop-rate pump FSM acts on. Recorded so a mission
+// flown out of WiFi range still answers where water reached and when. Files
+// recorded before this read both bits clear, i.e. dry.
 static const uint8_t HIST_F_BILGE_FWD    = 1 << 6;
 static const uint8_t HIST_F_BILGE_MID    = 1 << 7;
+
+// The flags byte is full, so extra bits pack into `mode`'s spare high bits —
+// recSize stays 48 and every existing flight file remains readable. Serializers
+// must mask with HIST_MODE_MASK before decoding the mode code.
+static const uint8_t HIST_MODE_MASK         = 0x0F;
+static const uint8_t HIST_MODE_F_BILGE_REAR = 1 << 7;   // rear probe latched wet
 
 // A reader's snapshot of the ring window. The control loop appends once a
 // second, which advances the window; a paged read must resolve every index
